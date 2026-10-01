@@ -987,6 +987,7 @@ dependencies = [
  "clap",
  "docket-client",
  "docket-core",
+ "docket-tui",
  "regex",
  "serde",
  "serde_json",

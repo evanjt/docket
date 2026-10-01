@@ -13,6 +13,7 @@ serde_json = { workspace = true }
 
 docket-client = { path = "../docket-client" }
 docket-core = { path = "../docket-core" }
+docket-tui = { path = "../docket-tui" }
 
 [lints]
 workspace = true

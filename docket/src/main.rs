@@ -9,6 +9,7 @@ mod local;
 mod py;
 mod row;
 
+use std::io::IsTerminal;
 use std::process::ExitCode;
 
 use clap::Parser;
@@ -17,8 +18,26 @@ use crate::args::{Cli, Cmd};
 use crate::ctx::Ctx;
 use crate::fail::Fail;
 
+/// The bare command on a terminal: the screen, opened on the project this directory resolves to.
+fn screen(cli: &Cli) -> ExitCode {
+    let config = match docket_client::Config::load() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("docket: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let project = Ctx::new(false, cli.project.clone(), cli.branch.clone())
+        .and_then(|mut ctx| ctx.project())
+        .ok();
+    docket_tui::run::main(config, project, "docket")
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    if cli.cmd.is_none() && !cli.json && !cli.plain && std::io::stdout().is_terminal() {
+        return screen(&cli);
+    }
     if let Some(Cmd::Link { words, .. }) = &cli.cmd
         && let Some(kind) = words.get(words.len().saturating_sub(2))
         && kind != "related"

@@ -74,6 +74,21 @@ docker run -v "$PWD/data:/data" -v "$PWD/keys:/etc/docket/keys:ro" -p 7878:7878 
 The database is `/data/docket.db`, and the directory must be writable by uid 10001 (SQLite keeps
 its `-wal` and `-shm` files beside it).
 
+## Docker Compose
+
+`compose.yaml` runs the server behind Traefik on `127.0.0.1:7878`. Point it at the database
+directory and the keys file from a `.env` file beside it:
+
+```bash
+DOCKET_DATA=/path/to/data
+DOCKET_KEYS_FILE=/path/to/keys
+DOCKET_UID=1000
+DOCKET_GID=1000
+```
+
+Then `docker compose up -d --build`. Set `DOCKET_READ_ONLY=1` to serve a database another program
+writes: reads and the change stream follow its commits, and every write is refused with `405`.
+
 ## Caveats
 
 - One server process owns the database. Run a single replica on local disk: SQLite's locks do not

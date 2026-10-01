@@ -2,8 +2,9 @@
 #   DOCKET_DATA       directory holding docket.db (default ./data)
 #   DOCKET_KEYS_FILE  the keys file, `host role key` lines (default ./keys)
 #   DOCKET_READ_ONLY  1 to serve a database another program writes, refusing every write
+#   DOCKET_HOST       hostname Traefik routes to the server (default docket.localhost)
 #   DOCKET_BIND       address Traefik listens on (default 127.0.0.1, this machine only)
-#   DOCKET_PORT       port Traefik listens on (default 7878)
+#   DOCKET_PORT       port Traefik listens on (default 80)
 #   DOCKET_UID/GID    the owner of DOCKET_DATA, so SQLite can use its -wal and -shm files
 services:
   traefik:
@@ -13,7 +14,7 @@ services:
       - --providers.docker.exposedbydefault=false
       - --entrypoints.web.address=:80
     ports:
-      - "${DOCKET_BIND:-127.0.0.1}:${DOCKET_PORT:-7878}:80"
+      - "${DOCKET_BIND:-127.0.0.1}:${DOCKET_PORT:-80}:80"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     restart: unless-stopped
@@ -32,7 +33,7 @@ services:
       - ${DOCKET_KEYS_FILE:-./keys}:/etc/docket/keys:ro
     labels:
       - traefik.enable=true
-      - traefik.http.routers.docket.rule=PathPrefix(`/`)
+      - traefik.http.routers.docket.rule=Host(`${DOCKET_HOST:-docket.localhost}`)
       - traefik.http.routers.docket.entrypoints=web
       - traefik.http.services.docket.loadbalancer.server.port=7878
     restart: unless-stopped

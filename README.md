@@ -76,7 +76,8 @@ its `-wal` and `-shm` files beside it).
 
 ## Docker Compose
 
-`compose.yaml` runs the server behind Traefik on `127.0.0.1:7878`. Point it at the database
+`compose.yaml` runs the server behind Traefik at `http://docket.localhost`, on port 80 of this
+machine only. Point it at the database
 directory and the keys file from a `.env` file beside it:
 
 ```bash

@@ -9,6 +9,7 @@ use docket_core::rows::{
     Derived, EventRow, ItemRow, KeySpec, Progress, ProjectRow, Row, Shown, Status,
 };
 use docket_core::word::Kind;
+use serde_json::Value;
 
 use crate::board::Board;
 use crate::source::{Result, Source};
@@ -120,6 +121,12 @@ fn body(id: &str) -> String {
 pub struct Fixture {
     pub items: Mutex<Vec<ItemRow>>,
     pub ties: Vec<Tie>,
+    /// Every write asked for, in order: the verb and its body.
+    pub posts: Mutex<Vec<(String, Value)>>,
+    /// The server's words for refusing every write, when set.
+    pub refuse: Mutex<Option<String>>,
+    /// The facts of o/p, which a `fact` write changes.
+    pub facts: Mutex<Vec<(String, String)>>,
 }
 
 impl Default for Fixture {
@@ -127,6 +134,9 @@ impl Default for Fixture {
         Self {
             items: Mutex::new(items()),
             ties: ties(),
+            posts: Mutex::new(Vec::new()),
+            refuse: Mutex::new(None),
+            facts: Mutex::new(Vec::new()),
         }
     }
 }
@@ -176,7 +186,34 @@ impl Fixture {
     }
 }
 
+impl Fixture {
+    /// The writes asked for so far.
+    pub fn sent(&self) -> Vec<(String, Value)> {
+        self.posts.lock().unwrap().clone()
+    }
+}
+
 impl Source for Fixture {
+    fn post(&self, verb: &str, body: &Value) -> Result<Value> {
+        self.posts
+            .lock()
+            .unwrap()
+            .push((verb.to_string(), body.clone()));
+        if let Some(why) = self.refuse.lock().unwrap().clone() {
+            return Err(why);
+        }
+        if verb == "fact" {
+            let key = body["key"].as_str().unwrap_or_default().to_string();
+            let value = body["value"].as_str().unwrap_or_default().to_string();
+            let mut facts = self.facts.lock().unwrap();
+            facts.retain(|(k, _)| *k != key);
+            if !value.is_empty() {
+                facts.push((key, value));
+            }
+        }
+        Ok(Value::Null)
+    }
+
     fn projects(&self) -> Result<Vec<ProjectRow>> {
         let run = [
             ("mode", "run"),
@@ -185,7 +222,12 @@ impl Source for Fixture {
             ("model_review", "m"),
             ("model_plan", "m"),
         ];
-        Ok(vec![project("o/p", &[]), project("o/q", &run)])
+        let facts = self.facts.lock().unwrap().clone();
+        let facts: Vec<(&str, &str)> = facts
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        Ok(vec![project("o/p", &facts), project("o/q", &run)])
     }
 
     fn status(&self, slug: &str) -> Result<Status> {

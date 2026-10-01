@@ -225,9 +225,14 @@ pub fn queue_doc(board: Option<&Board>, q: &Queue, width: usize) -> Doc {
         return d;
     };
     let mut d = Doc::default();
+    let marked = if q.marks.contains(&row.id) {
+        "  * marked"
+    } else {
+        ""
+    };
     d.line(vec![
         seg(
-            format!("YOURS  {} of {}", q.at + 1, q.rows.len()),
+            format!("YOURS  {} of {}{marked}", q.at + 1, q.rows.len()),
             style::bold(),
         ),
         seg(
@@ -235,6 +240,10 @@ pub fn queue_doc(board: Option<&Board>, q: &Queue, width: usize) -> Doc {
             style::dim(),
         ),
     ]);
+    d.plain(
+        "       a answers a question, r replies to a parked item, R retries it, : runs any verb on it",
+        style::dim(),
+    );
     d.blank();
     let detail = Detail {
         shown: Shown {

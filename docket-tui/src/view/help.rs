@@ -7,7 +7,8 @@ const HELP: &str = "What this screen shows
 
   docket is a work register: every project's tickets, questions, plans and packages, kept by one
   server. This screen reads it through the server and reads again whenever the server says the
-  database moved, so what it shows is current. It changes nothing.
+  database moved, so what it shows is current. Every write below is one request to the server, as
+  the command line makes it; a refusal shows at the foot, in the server's words, and nothing moves.
 
 Pages
 
@@ -24,11 +25,13 @@ Pages
               MOVES      every open, close, claim and decision, a row per minute, newest first
   Browser     a list beside the selected row in full: its facts, body, ties and log. Every id in it
               is a hot spot; opening one lists that item and everything tied to it.
-  Yours (o)   what waits on you, then the open questions, one at a time with its whole body.
+  Yours (o)   what waits on you, then the open questions, one at a time with its whole body:
+              a answers a question, r replies to a parked item, R retries what the loop parked.
   Plans (t)   plans, stories, packages, concepts and central ideas with their progress. Space opens
               one's children, and the side shows what comes next under the selected one.
   Settings (S) every fact of the project, its value and what it means; red where the loop needs a
-              fact the project lacks.
+              fact the project lacks. Tab or j/k picks a fact, Enter edits it in place, and an
+              empty value unsets it. A value the server refuses is named under the fact.
 
 State words, each in its colour
 
@@ -53,9 +56,26 @@ Keys
   Enter, l               open the one selected
   Esc, h, Left           back                         f, Right   forward again
   /                      search, the list following each key; Enter keeps it, Esc cancels
-  Space                  open or close a row's children in the plans
+  Space                  open or close a row's children in the plans; elsewhere, as x
   PgUp / PgDn            scroll
   g home   o yours   t plans   S settings   ? this page   . read everything again   q quit
+
+Writing
+
+  x                      mark or unmark the row; a move acts on the marked rows, else on the row
+  X                      clear the marks
+  a                      answer the question; on one an agent decided, answering again overturns it
+  r                      reply to a parked item: back to the agents with what happened
+  R                      retry: a fresh start for what the loop parked or sent back
+  p / d                  pull into the release / defer to later
+  !                      priority: then c critical, h high, n normal, l low
+  c                      complexity: then h high, m medium, l low
+  L                      link: then related ID or opened ID
+  F                      fold packages: then the package they go into
+  :                      any verb of the command line, as close T3 abc1234 or priority high; an
+                         id left out is the selected row's, ids left out are the marked rows
+  Enter                  sends a typed line; Ctrl-E opens it in $EDITOR, and saving sends it;
+                         Esc drops it
 
 The same from a terminal
 

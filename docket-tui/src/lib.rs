@@ -6,9 +6,12 @@ pub mod board;
 pub mod doc;
 pub mod load;
 pub mod page;
+pub mod palette;
+
 pub mod source;
 pub mod style;
 pub mod view;
+pub mod write;
 
 #[cfg(test)]
 #[path = "tests/fixture.rs"]

@@ -2,9 +2,10 @@
 
 use std::collections::HashSet;
 
-use docket_client::Api;
+use docket_client::{Api, Error};
 use docket_core::member::Tie;
 use docket_core::rows::{Derived, EventRow, ProjectRow, Row, Shown, Status};
+use serde_json::Value;
 
 use crate::board::Board;
 
@@ -70,6 +71,11 @@ pub trait Source: Sync {
     /// # Errors
     /// As `projects`.
     fn recent(&self, slug: &str) -> Result<Vec<EventRow>>;
+    /// A write verb, `POST /do/{verb}`, and the server's answer.
+    ///
+    /// # Errors
+    /// The server's refusal in its own words, or why it could not be reached.
+    fn post(&self, verb: &str, body: &Value) -> Result<Value>;
 }
 
 pub struct Http(pub Api);
@@ -119,6 +125,12 @@ impl Source for Http {
         self.0
             .recent(slug, &MOVE_KINDS, RECENT)
             .map_err(|e| e.to_string())
+    }
+
+    fn post(&self, verb: &str, body: &Value) -> Result<Value> {
+        self.0.post(verb, body).map_err(|e| match e {
+            Error::Refused(_, why) | Error::Failed(why) => why,
+        })
     }
 }
 

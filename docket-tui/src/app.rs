@@ -9,6 +9,7 @@ use crate::doc::{Cursor, Listing, Target};
 use crate::page::{Browser, Detail, Help, Home, Page, Plans, Project, Queue, Settings, Typing};
 use crate::source::Source;
 use crate::view;
+use crate::write::{Ask, Prompt};
 
 pub struct App<S: Source> {
     pub source: S,
@@ -23,6 +24,10 @@ pub struct App<S: Source> {
     pub quit: bool,
     /// The terminal's width and height at the last draw.
     pub size: (u16, u16),
+    /// The line being typed for a write.
+    pub prompt: Option<Prompt>,
+    /// Text for the runner to open in `$EDITOR`, handed back through `edited`.
+    pub editor: Option<String>,
 }
 
 impl<S: Source> App<S> {
@@ -39,6 +44,8 @@ impl<S: Source> App<S> {
             live: false,
             quit: false,
             size: (120, 40),
+            prompt: None,
+            editor: None,
         };
         app.load();
         app
@@ -123,7 +130,7 @@ impl<S: Source> App<S> {
             return;
         }
         self.flash = None;
-        if self.typed(k) {
+        if self.prompting(k) || self.typed(k) {
             return;
         }
         if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('c') {
@@ -141,18 +148,14 @@ impl<S: Source> App<S> {
             KeyCode::Char('q') => self.quit = true,
             KeyCode::Char('?') => self.go(Page::Help(Help::default())),
             KeyCode::Char('g') => self.go(Page::Home(Home::default())),
-            KeyCode::Char('S') => self.in_project(|slug| {
-                Page::Settings(Settings {
-                    slug,
-                    cursor: Cursor::default(),
-                })
-            }),
+            KeyCode::Char('S') => self.open_settings(),
             KeyCode::Char('o') => self.in_project(|slug| {
                 Page::Queue(Queue {
                     slug,
                     rows: Vec::new(),
                     at: 0,
                     cursor: Cursor::default(),
+                    marks: BTreeSet::new(),
                 })
             }),
             KeyCode::Char('t') => self.in_project(|slug| Page::Plans(Plans::new(slug))),
@@ -165,6 +168,29 @@ impl<S: Source> App<S> {
             _ => return false,
         }
         true
+    }
+
+    /// The project's settings, every fact editable in place.
+    pub fn open_settings(&mut self) {
+        self.in_project(|slug| {
+            Page::Settings(Settings {
+                slug,
+                cursor: Cursor::default(),
+                refused: None,
+            })
+        });
+    }
+
+    /// Enter on a fact: its value typed in place, starting from what is set.
+    fn edit_fact(&mut self, key: String) {
+        let slug = self.page.slug().unwrap_or_default().to_string();
+        let set = self
+            .boards
+            .get(&slug)
+            .and_then(|b| b.project.skills.get(&key))
+            .cloned()
+            .unwrap_or_default();
+        self.start_prompt(&format!("{key} = "), Ask::Fact(key), set);
     }
 
     /// Starts a search: in the browser it replaces the list, elsewhere it opens one.
@@ -223,6 +249,9 @@ impl<S: Source> App<S> {
 
     /// The keys whose meaning depends on the page.
     fn local(&mut self, code: KeyCode) {
+        if self.write_key(code) {
+            return;
+        }
         let height = self.body_height();
         match code {
             KeyCode::Tab => self.step_spot(true),
@@ -295,6 +324,10 @@ impl<S: Source> App<S> {
     /// Enter: the selected hot spot, or in a list the selected row when no spot is chosen.
     fn enter(&mut self) {
         let chosen = self.cursor().selected().cloned();
+        if let Some(Target::Fact(key)) = chosen {
+            self.edit_fact(key);
+            return;
+        }
         if let Some(t) = chosen {
             self.open(t);
             return;
@@ -370,6 +403,7 @@ impl Plans {
             shown: None,
             next: Vec::new(),
             cursor: Cursor::default(),
+            marks: BTreeSet::new(),
         }
     }
 

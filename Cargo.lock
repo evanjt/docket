@@ -1060,6 +1060,8 @@ dependencies = [
  "docket-client",
  "docket-core",
  "ratatui",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

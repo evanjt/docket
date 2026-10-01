@@ -17,7 +17,7 @@ use crate::view::browser::follow;
 use crate::view::project::bar;
 use crate::view::{doc as page_doc, list_width};
 
-fn row_line(r: &PlanRow, selected: bool, width: usize) -> Line<'static> {
+fn row_line(r: &PlanRow, selected: bool, marked: bool, width: usize) -> Line<'static> {
     if let Some(h) = &r.heading {
         return Line::from(Span::styled(format!(" {h}"), style::bold()));
     }
@@ -40,7 +40,7 @@ fn row_line(r: &PlanRow, selected: bool, width: usize) -> Line<'static> {
     let room = width.saturating_sub(indent.len() + 2 + 7 + progress.len() + 1);
     let title: String = r.title.chars().take(room).collect();
     Line::from(vec![
-        Span::raw(format!(" {indent}{fold}")),
+        Span::raw(format!("{}{indent}{fold}", if marked { "*" } else { " " })),
         Span::styled(
             format!("{:<7}", r.id),
             style::word(&r.word).add_modifier(mark | Modifier::BOLD),
@@ -69,7 +69,7 @@ pub fn draw<S: Source>(app: &mut App<S>, f: &mut Frame, area: Rect) {
         .enumerate()
         .skip(p.list_top)
         .take(height)
-        .map(|(i, r)| row_line(r, i == p.sel, width))
+        .map(|(i, r)| row_line(r, i == p.sel, p.marks.contains(&r.id), width))
         .collect();
     let block = Block::default()
         .borders(Borders::RIGHT)

@@ -24,16 +24,19 @@ pub fn follow(top: usize, sel: usize, height: usize) -> usize {
     }
 }
 
-/// One row: id in its word's colour, the word, the title, and under it why it stands there.
-fn entry_lines(e: &Entry, selected: bool, width: usize) -> Vec<Line<'static>> {
+/// One row: a star when marked, id in its word's colour, the word, the title, and under it why it
+/// stands there.
+fn entry_lines(e: &Entry, selected: bool, marked: bool, width: usize) -> Vec<Line<'static>> {
     let mark = if selected {
         Modifier::REVERSED
     } else {
         Modifier::empty()
     };
     let tone = style::word(&e.word).add_modifier(mark);
-    let title: String = e.title.chars().take(width.saturating_sub(17)).collect();
+    let title: String = e.title.chars().take(width.saturating_sub(18)).collect();
+    let star = if marked { "*" } else { " " };
     let mut out = vec![Line::from(vec![
+        Span::styled(star, style::bold()),
         Span::styled(format!("{:<7}", e.id), tone.add_modifier(Modifier::BOLD)),
         Span::styled(format!("{:<9}", e.word), tone),
         Span::styled(title, Style::default().add_modifier(mark)),
@@ -46,7 +49,7 @@ fn entry_lines(e: &Entry, selected: bool, width: usize) -> Vec<Line<'static>> {
             .take(width.saturating_sub(7))
             .collect();
         out.push(Line::from(Span::styled(
-            format!("       {note}"),
+            format!("        {note}"),
             style::dim(),
         )));
     }
@@ -70,7 +73,7 @@ pub fn draw<S: Source>(app: &mut App<S>, f: &mut Frame, area: Rect) {
     let mut lines = Vec::new();
     let rows = usize::from(left.height);
     for (i, e) in b.entries.iter().enumerate().skip(b.list_top).take(rows) {
-        lines.extend(entry_lines(e, i == b.sel, width));
+        lines.extend(entry_lines(e, i == b.sel, b.marks.contains(&e.id), width));
     }
     if b.entries.is_empty() {
         lines.push(Line::from(Span::styled(" nothing here", style::dim())));

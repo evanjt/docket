@@ -33,6 +33,26 @@ impl Page {
         }
     }
 
+    /// The rows marked on a list page, none on a page with no list.
+    #[must_use]
+    pub fn marks(&self) -> Option<&BTreeSet<String>> {
+        match self {
+            Page::Browser(b) => Some(&b.marks),
+            Page::Queue(q) => Some(&q.marks),
+            Page::Plans(p) => Some(&p.marks),
+            _ => None,
+        }
+    }
+
+    pub fn marks_mut(&mut self) -> Option<&mut BTreeSet<String>> {
+        match self {
+            Page::Browser(b) => Some(&mut b.marks),
+            Page::Queue(q) => Some(&mut q.marks),
+            Page::Plans(p) => Some(&mut p.marks),
+            _ => None,
+        }
+    }
+
     /// The project the page is in, none for home and help.
     #[must_use]
     pub fn slug(&self) -> Option<&str> {
@@ -178,6 +198,8 @@ pub struct Browser {
     pub detail: Option<Detail>,
     pub cursor: Cursor,
     pub typing: Option<Typing>,
+    /// The rows picked for a move on several at once.
+    pub marks: BTreeSet<String>,
 }
 
 impl Browser {
@@ -192,6 +214,7 @@ impl Browser {
             detail: None,
             cursor: Cursor::default(),
             typing: None,
+            marks: BTreeSet::new(),
         }
     }
 
@@ -206,6 +229,7 @@ pub struct Queue {
     pub rows: Vec<Row>,
     pub at: usize,
     pub cursor: Cursor,
+    pub marks: BTreeSet<String>,
 }
 
 /// One row of the plans tree: a section heading, or an item at a depth.
@@ -231,11 +255,14 @@ pub struct Plans {
     pub shown: Option<Shown>,
     pub next: Vec<Row>,
     pub cursor: Cursor,
+    pub marks: BTreeSet<String>,
 }
 
 pub struct Settings {
     pub slug: String,
     pub cursor: Cursor,
+    /// The fact whose last value the server refused, and its words.
+    pub refused: Option<(String, String)>,
 }
 
 #[derive(Default)]

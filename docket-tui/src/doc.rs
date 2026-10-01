@@ -82,6 +82,8 @@ pub enum Target {
     Item(String),
     List(Listing),
     Project(String),
+    /// A project fact on the settings page, which Enter edits.
+    Fact(String),
 }
 
 #[derive(Clone, Debug, PartialEq)]

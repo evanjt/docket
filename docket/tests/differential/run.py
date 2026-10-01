@@ -246,7 +246,8 @@ def reads(i):
            'dropped 3', 'dropped 2 --json', 'groups', 'groups --json', 'projects', 'projects --json',
            'graph', 'graph --dot', 'graph --no-files', 'check', 'check --json', 'audit --orphans',
            'audit --orphans --json', 'stale', 'show ZZ', 'show B999999', 'audit', 'next --under QQ',
-           'log not-an-id']
+           'log not-an-id', 'skills', 'skills show', 'skills owner', 'skills land', 'skills mode', 'skills poll',
+           'skills slug', 'skills root', 'skills last_tick', 'skills nosuch', 'skills set']
     for k in i.keys.get('work', [])[:1]:
         out += [f'next --key {k.lower()}', f'done 3 --key {k}']
     for item in [*i.work, i.done, i.dropped, i.package, i.concept, i.idea, i.audit, i.question, i.waiting]:
@@ -313,11 +314,14 @@ def writes(i):
         (f'reply {w} back', None), (f'manual {w} "by the other alias" --json', None), (f'reply {w} back', None),
         (f'start {w} --branch audit/h-3', None), (f'built {w} def5678 --branch audit/h-3', None),
         (f'reopen {w} "after built"', None),
-        (f'answer {w} "yes"', None), (f'drop {w2}', None), (f'drop {w2} "not needed"', None),
+        (f'answer {w} "yes"', None), (f'retry {w}', None), (f'retry {w} --json', None),
+        (f'ask {w} "stuck"', None), (f'retry {w}', None), (f'retry {w} "go again"', None),
+        (f'drop {w2}', None), (f'drop {w2} "not needed"', None), (f'retry {w2} x', None),
         (f'drop {w2} again', None), (f'show {w2} --json', None), ('key zz work "harness key"', None),
         ('key ZZ decision "changed"', None), ('key toolong work "x"', None), ('reindex', None),
         (f'fold {w} {w2}', None),
     ]
+    out += skills_writes()
     if i.question:
         q = i.question
         out += [(f'answer {q} "the harness choice"', None), (f'close {q}', None),
@@ -330,6 +334,16 @@ def writes(i):
                 (f'fold {new} {new}', None), (f'fold {pk} {new}', None), (f'show {pk}', None),
                 (f'audit {pk}', None), (f'start {pk}', None)]
     return out
+
+
+def skills_writes():
+    """The facts set, refused and unset, each followed by the reads that show it."""
+    return [(line, None) for line in (
+        'skills set owner "Harness Owner"', 'skills owner', 'skills mode go', 'skills mode drain', 'skills mode',
+        'skills set poll 0', 'skills set flow x', 'skills set nosuch x', 'skills set model_build "a b c"',
+        'skills brake_ratio half', 'skills pool local', 'skills set pool_max 3', 'skills pool "local=2 x=2"',
+        'skills pool "local=1 x=2"', 'skills set pool_max 2', 'skills set pool_max 4', 'skills set owner',
+        'skills owner', 'skills set land "make land BRANCH=$BRANCH"', 'skills land', 'skills', 'status')]
 
 
 def compare(pair, line, stdin=None, env=None, cwd=None):
@@ -365,7 +379,8 @@ def checkout_steps(pair, slug, item):
                 ['branch', 'audit/h-9']):
         sh(['git', *cmd], cwd=repo)
     steps = [('status --json', None, None, repo), ('bind', None, None, repo), ('next 2', None, None, repo),
-             (f'bind {slug} --root {repo}', None, None, None), ('stale --open-only', None, None, repo),
+             (f'bind {slug} --root {repo}', None, None, None), ('skills root', None, None, repo),
+             ('skills', None, None, repo), ('stale --open-only', None, None, repo),
              ('projects', None, None, None)]
     if item:
         steps += [(f'start {item} --branch audit/h-9', None, None, repo), (f'close {item}', None, None, repo),
@@ -378,6 +393,8 @@ def checkout_steps(pair, slug, item):
     steps += [('status --json', None, None, other), ('projects --json', None, None, None),
               ('-p no/such next', None, None, None),
               ("new T 'from a job'", None, {'DOCKET_JOB': 'job-7'}, None),
+              (f'-p {slug} skills set pool_max 9', None, {'DOCKET_JOB': 'job-7'}, None),
+              (f'-p {slug} skills set pool_max x', None, {'DOCKET_JOB': 'job-7'}, None),
               ('next 1', None, None, '/')]
     return steps
 

@@ -1,5 +1,7 @@
 //! Rows read by a raw query, shaped as `--json` prints them, with any extra columns the query selects.
 
+use std::collections::HashMap;
+
 use sea_orm::{ConnectionTrait, DatabaseConnection, DbErr, FromQueryResult};
 use serde_json::{Map, Value};
 
@@ -63,7 +65,8 @@ fn column(row: &sea_orm::QueryResult, name: &str) -> Value {
     }
 }
 
-/// The rows in the `--json` shape, each with its extra columns, in their given order.
+/// The rows in the `--json` shape, each with its extra columns, in their given order. A row of another
+/// project than the one asked about is read by its own project's keys.
 ///
 /// # Errors
 /// The database.
@@ -72,12 +75,22 @@ pub async fn shaped(
     project: &project::Model,
     rows: Vec<Extra>,
 ) -> Result<Vec<Value>, Failure> {
-    let kinds = Kinds::of(project);
-    let counts = open_members(db, &project.slug).await?;
+    let mut kinds: HashMap<String, Kinds> = HashMap::new();
+    let mut counts: HashMap<i64, u64> = HashMap::new();
+    kinds.insert(project.slug.clone(), Kinds::of(project));
+    counts.extend(open_members(db, &project.slug).await?);
+    for (row, _) in &rows {
+        if !kinds.contains_key(&row.project) {
+            let other = project_model(db, &row.project).await?;
+            kinds.insert(row.project.clone(), Kinds::of(&other));
+            counts.extend(open_members(db, &row.project).await?);
+        }
+    }
     let mut out = Vec::with_capacity(rows.len());
     for (row, extra) in rows {
         let open = counts.get(&row.rid).copied().unwrap_or(0);
-        let mut d = public(db, kinds.kind(&row.key), row, open, None).await?;
+        let kind = kinds[&row.project].kind(&row.key);
+        let mut d = public(db, kind, row, open, None).await?;
         d.extend(extra);
         out.push(Value::Object(d));
     }

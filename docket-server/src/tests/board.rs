@@ -50,6 +50,7 @@ INSERT INTO items_fts (rowid, id, title, body, files) VALUES
 
 struct Seeded {
     app: Router,
+    db: sea_orm::DatabaseConnection,
 }
 
 impl Seeded {
@@ -62,6 +63,7 @@ impl Seeded {
         let keys = Keys::parse("devbox owner ownerkey\nother agent agentkey").unwrap();
         Self {
             app: app(&db, keys),
+            db,
         }
     }
 
@@ -189,6 +191,27 @@ async fn test_deps_lists_each_tie_and_the_mentions() {
     assert!(d.get("waits_on").is_none());
     let w = s.ok("/deps/T6?project=o/p").await;
     assert_eq!(ids(&w["waits_on"]), ["T1"]);
+}
+
+#[tokio::test]
+async fn test_deps_words_another_projects_row_by_its_own_keys() {
+    let s = Seeded::new().await;
+    let seed = "INSERT INTO projects (slug, keys, created_at, updated_at) VALUES ('o/r', \
+                '[{\"key\":\"P\",\"kind\":\"package\"},{\"key\":\"T\",\"kind\":\"work\"}]', 'c', 'u'); \
+                INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, opened_at, updated_at) VALUES \
+                (20, 'o/r', 'P', 1, 'Other package', 'open', 'agent', '[]', '', 'o', 'u'), \
+                (21, 'o/r', 'T', 1, 'Other member', 'open', 'agent', '[]', '', 'o', 'u'); \
+                INSERT INTO links (rid, kind, to_rid) VALUES (21, 'opened', 20); \
+                INSERT INTO links (rid, kind, to_path) VALUES (20, 'cites_file', 'src/a.rs');";
+    s.db.execute_unprepared(seed).await.unwrap();
+    let d = s.ok("/deps/T1?project=o/p").await;
+    let other = d["same_files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == "P1")
+        .unwrap();
+    assert_eq!(other["word"], "building");
 }
 
 #[tokio::test]

@@ -324,3 +324,43 @@ fn test_key_messages_name_keys_added_or_changed() {
         strings(&["Key T", "Key B"])
     );
 }
+
+#[test]
+fn test_messages_split_a_burst_in_one_second_into_its_writes() {
+    let led = |kind: &str, item: &str, note: Option<&str>| {
+        let mut e = event(&format!("{kind}{item}"), "s", kind, Some(item), note);
+        e.branch = Some("main".into());
+        e
+    };
+    let side = |kind: &str, item: &str, note: &str| event("x", "s", kind, Some(item), Some(note));
+    let events = vec![
+        led("opened", "T1", Some("a")),
+        led("opened", "T2", Some("b")),
+        led("closed", "Q1", Some("opened T1")),
+        side("resumed", "T1", "Q1 closed"),
+        side("edited", "T1", "priority high"),
+        side("edited", "T2", "priority high"),
+        side("edited", "T1", "link opened A1"),
+        side(
+            "waited",
+            "A1",
+            "until: everything it opened is closed (1 open)",
+        ),
+        led("edited", "B3", Some("moved from PK2 to PK1")),
+        led("dropped", "PK2", Some("folded into PK1")),
+        led("edited", "PK1", Some("folded PK2")),
+        led("resumed", "T2", None),
+        led("claimed", "T2", None),
+    ];
+    let expected = [
+        "Open T1",
+        "Open T2",
+        "Close Q1",
+        "Prioritise 2 items",
+        "Link T1",
+        "Fold PK2 into PK1",
+        "Resume T2",
+        "Start T2",
+    ];
+    assert_eq!(messages(&events), strings(&expected));
+}

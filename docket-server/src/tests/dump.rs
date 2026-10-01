@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use docket_core::SCHEMA;
-use docket_core::dump::{DumpPage, commit_subject, files, page_messages};
+use docket_core::dump::{DumpPage, commit_subject, files, messages, page_messages};
 
 use crate::app;
 use crate::auth::Keys;
@@ -21,6 +21,7 @@ struct Dumped {
     app: Router,
     files: BTreeMap<String, String>,
     cursor: i64,
+    named: Vec<String>,
 }
 
 impl Dumped {
@@ -39,6 +40,7 @@ impl Dumped {
             app: app(&db, keys),
             files: BTreeMap::new(),
             cursor: 0,
+            named: Vec::new(),
         };
         d.take(0).await;
         d
@@ -187,6 +189,9 @@ async fn test_dump_after_the_cursor_is_empty_until_a_write() {
 async fn run(d: &mut Dumped, steps: Vec<(&str, Value, &str)>) {
     for (verb, body, subject) in steps {
         assert_eq!(d.write(verb, body.clone()).await, subject, "{verb} {body}");
+        if verb != "key" {
+            d.named.push(subject.to_string());
+        }
     }
 }
 
@@ -368,4 +373,5 @@ async fn test_dump_after_every_verb_equals_a_full_dump_and_names_the_write() {
     packages(&mut d).await;
     questions(&mut d).await;
     moves(&mut d).await;
+    assert_eq!(messages(&d.page(0).await.events), d.named);
 }

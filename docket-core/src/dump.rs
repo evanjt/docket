@@ -283,14 +283,51 @@ pub fn commit_subject(messages: &[String]) -> String {
     line
 }
 
-/// One message per write, as the command that made it names its commit. The events of one write
-/// share their moment, host and project.
+/// One message per write, as the command that made it names its commit.
 #[must_use]
 pub fn messages(events: &[EventDump]) -> Vec<String> {
-    events
-        .chunk_by(|a, b| a.at == b.at && a.host == b.host && a.project == b.project)
-        .filter_map(write_message)
-        .collect()
+    let mut out = Vec::new();
+    let mut start = 0;
+    for end in 1..=events.len() {
+        if end == events.len() || !follows(&events[start], &events[end]) {
+            out.extend(write_message(&events[start..end]));
+            start = end;
+        }
+    }
+    out
+}
+
+/// Whether an event belongs to the write `first` opened. A write's own events share its moment,
+/// host and project; what it releases or settles carries no branch; a write over several items
+/// repeats its note, and a fold names the package it folds into.
+fn follows(first: &EventDump, e: &EventDump) -> bool {
+    if (&first.at, &first.host, &first.project) != (&e.at, &e.host, &e.project) {
+        return false;
+    }
+    if e.branch.is_none() && matches!(e.kind.as_str(), "resumed" | "waited") {
+        return true;
+    }
+    if let Some(into) = fold_into(first) {
+        return fold_into(e) == Some(into);
+    }
+    let repeats = ["priority ", "link ", "unlink ", "to the "];
+    match (first.note.as_deref(), e.note.as_deref()) {
+        (Some(lead), Some(note)) if first.kind == "edited" && e.kind == "edited" => {
+            note == lead && repeats.iter().any(|p| lead.starts_with(p))
+        }
+        _ => false,
+    }
+}
+
+/// The package a fold's event names as the one folded into.
+fn fold_into(e: &EventDump) -> Option<&str> {
+    let note = e.note.as_deref()?;
+    match e.kind.as_str() {
+        "edited" if note.starts_with("moved from ") => note.rsplit(" to ").next(),
+        "edited" if note.starts_with("folded ") => e.item.as_deref(),
+        "dropped" => note.strip_prefix("folded into "),
+        _ => None,
+    }
 }
 
 fn write_message(write: &[EventDump]) -> Option<String> {

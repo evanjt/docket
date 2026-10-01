@@ -4,6 +4,7 @@ pub mod claim;
 pub mod fields;
 pub mod graph;
 pub mod open;
+pub mod project;
 pub mod turn;
 pub mod view;
 
@@ -179,6 +180,8 @@ pub fn router() -> Router<DatabaseConnection> {
         .route("/edit", post(fields::edit))
         .route("/link", post(fields::link))
         .route("/fold", post(fields::fold))
+        .route("/project", post(project::project))
+        .route("/reindex", post(project::reindex))
 }
 
 #[cfg(test)]

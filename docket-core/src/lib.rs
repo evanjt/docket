@@ -9,12 +9,14 @@ pub mod item;
 pub mod like;
 pub mod member;
 pub mod pace;
+pub mod project;
 pub mod pyjson;
 pub mod queue;
 pub mod rows;
 pub mod rules;
 pub mod search;
 pub mod text;
+pub mod touch;
 pub mod word;
 
 /// The database every docket server opens, created on an empty file.

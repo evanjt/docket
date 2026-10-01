@@ -153,3 +153,10 @@ fn test_py_repr_quotes_like_python() {
     assert_eq!(py_repr("a\\b\n"), "'a\\\\b\\n'");
     assert_eq!(py_repr("\u{1}"), "'\\x01'");
 }
+
+#[test]
+fn test_principle_refs_skip_a_longer_id() {
+    let text = "serves A1#2 and A1#10, not BA1#3 or A12#4; A1#2 again";
+    assert_eq!(principle_refs(text, "A1"), vec![2, 10]);
+    assert!(principle_refs("A1# none", "A1").is_empty());
+}

@@ -18,17 +18,17 @@ const STATES: [&str; 4] = ["open", "done", "dropped", "any"];
 
 /// What narrows a full-text query besides the words.
 #[derive(Default)]
-struct Narrow {
-    key: Option<String>,
-    state: Option<String>,
-    exclude: Option<i64>,
-    theme: Option<String>,
-    without_theme: Option<String>,
-    n: i64,
+pub(crate) struct Narrow {
+    pub key: Option<String>,
+    pub state: Option<String>,
+    pub exclude: Option<i64>,
+    pub theme: Option<String>,
+    pub without_theme: Option<String>,
+    pub n: i64,
 }
 
 /// Matches ranked by bm25 over id, title, body and files, each with a snippet of its body.
-async fn search_rows(
+pub(crate) async fn search_rows(
     db: &DatabaseConnection,
     slug: &str,
     query: &str,

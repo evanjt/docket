@@ -347,6 +347,22 @@ pub struct KeyRequest {
     pub turn: Option<String>,
 }
 
+/// The checkout a client stands in, for the project it belongs to.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ProjectRequest {
+    /// The slug the first origin URL names, if any does.
+    #[serde(default)]
+    pub candidate: Option<String>,
+    /// The origin URLs met from the checkout up to the outermost repository.
+    #[serde(default)]
+    pub remotes: Vec<String>,
+    /// The outermost repository's directory name.
+    pub basename: String,
+    /// Create the project when nothing matches.
+    #[serde(default)]
+    pub create: bool,
+}
+
 // ---- responses ----
 
 /// `new` and `add`.
@@ -430,6 +446,21 @@ pub struct KeySet {
     pub kind: String,
     pub meaning: String,
     pub turn: String,
+}
+
+/// The project a checkout matched or created; `how` is matched, created, ambiguous or none.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectResolved {
+    pub slug: Option<String>,
+    pub how: String,
+    /// The projects it could be, when it could be several.
+    pub matches: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Reindexed {
+    pub project: String,
+    pub items: usize,
 }
 
 /// A stored JSON column, passed through as it is.

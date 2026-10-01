@@ -1,0 +1,357 @@
+//! One item's surroundings: its events, its ties, what the text of `docket show` reads beside it.
+
+use axum::Json;
+use axum::extract::{Path, Query, State};
+use sea_orm::{DatabaseConnection, FromQueryResult};
+use serde::Deserialize;
+use serde_json::{Map, Value, json};
+
+use docket_core::pyjson::data_of;
+use docket_core::word::{Facts, Kind, PRIORITIES, priority, word};
+
+use crate::reads::public::{Kinds, sql};
+use crate::reads::rows::{Extra, project_model, rows_with, shaped};
+use crate::reads::search::{Narrow, search_rows};
+use crate::store::{self, to_item};
+use crate::verbs::Failure;
+use crate::verbs::graph::{
+    concepts_of, open_member_count, package_members, package_of, package_progress, packages_of,
+};
+
+#[derive(Deserialize)]
+pub struct InProject {
+    project: String,
+}
+
+#[derive(FromQueryResult)]
+struct EventRow {
+    seq: i64,
+    uid: String,
+    project: String,
+    rid: Option<i64>,
+    at: String,
+    host: String,
+    branch: Option<String>,
+    kind: String,
+    note: Option<String>,
+    data: Option<String>,
+}
+
+/// `docket log`: one item's events, oldest first, each with its data read.
+///
+/// # Errors
+/// 404 for an unknown project or item.
+pub async fn log(
+    State(db): State<DatabaseConnection>,
+    Path(id): Path<String>,
+    Query(q): Query<InProject>,
+) -> Result<Json<Value>, Failure> {
+    store::project(&db, &q.project).await?;
+    let r = store::item_of(&db, &q.project, &id).await?;
+    let events = EventRow::find_by_statement(sql(
+        "SELECT * FROM events WHERE rid=? ORDER BY at, seq",
+        vec![r.rid.into()],
+    ))
+    .all(&db)
+    .await?;
+    let out: Vec<Value> = events
+        .into_iter()
+        .map(|e| {
+            let data = data_of(e.data.as_deref());
+            json!({
+                "seq": e.seq, "uid": e.uid, "project": e.project, "rid": e.rid, "at": e.at,
+                "host": e.host, "branch": e.branch, "kind": e.kind, "note": e.note,
+                "data": if data.is_empty() { Value::Null } else { Value::Object(data) },
+            })
+        })
+        .collect();
+    Ok(Json(Value::Array(out)))
+}
+
+/// The queries `docket deps` reads, by the tie each names, in the order it prints them.
+const TIES: [(&str, &str); 7] = [
+    (
+        "holds",
+        "SELECT * FROM items WHERE wait_item=? AND state='open'",
+    ),
+    (
+        "related",
+        "SELECT i.* FROM links l JOIN items i ON i.rid=l.to_rid WHERE l.rid=? AND l.kind='related' \
+         UNION SELECT i.* FROM links l JOIN items i ON i.rid=l.rid WHERE l.to_rid=? AND l.kind='related'",
+    ),
+    (
+        "opened_by",
+        "SELECT i.* FROM links l JOIN items i ON i.rid=l.to_rid WHERE l.rid=? AND l.kind='opened'",
+    ),
+    (
+        "opened",
+        "SELECT i.* FROM links l JOIN items i ON i.rid=l.rid WHERE l.to_rid=? AND l.kind='opened'",
+    ),
+    ("supersedes", "SELECT * FROM items WHERE superseded_by=?"),
+    (
+        "same_files",
+        "SELECT i.*, COUNT(DISTINCT l2.to_path) AS shared FROM links l1 \
+         JOIN links l2 ON l2.to_path=l1.to_path AND l2.rid<>l1.rid \
+         JOIN items i ON i.rid=l2.rid WHERE l1.rid=? AND l1.kind IN ('cites_file','cites_test') \
+         GROUP BY i.rid ORDER BY shared DESC LIMIT 15",
+    ),
+    ("waits_on", "SELECT * FROM items WHERE rid=?"),
+];
+
+/// `docket deps`: everything an item is tied to, both ways, by the tie.
+///
+/// # Errors
+/// 404 for an unknown project or item.
+pub async fn deps(
+    State(db): State<DatabaseConnection>,
+    Path(id): Path<String>,
+    Query(q): Query<InProject>,
+) -> Result<Json<Value>, Failure> {
+    let project = project_model(&db, &q.project).await?;
+    let r = store::item_of(&db, &q.project, &id).await?;
+    let mut out = Map::new();
+    for (tie, text) in TIES {
+        let values: Vec<sea_orm::Value> = match tie {
+            "waits_on" => match r.wait_item {
+                Some(w) => vec![w.into()],
+                None => continue,
+            },
+            "related" => vec![r.rid.into(), r.rid.into()],
+            _ => vec![r.rid.into()],
+        };
+        let extras: &[&str] = if tie == "same_files" {
+            &["shared"]
+        } else {
+            &[]
+        };
+        let found = rows_with(&db, text, values, extras).await?;
+        out.insert(tie.into(), json!(shaped(&db, &project, found).await?));
+    }
+    if let Some(g) = &r.group_name {
+        let found = rows_with(
+            &db,
+            "SELECT * FROM items WHERE project=? AND group_name=? AND rid<>?",
+            vec![q.project.clone().into(), g.clone().into(), r.rid.into()],
+            &[],
+        )
+        .await?;
+        out.insert("group".into(), json!(shaped(&db, &project, found).await?));
+    }
+    if let Some(s) = r.superseded_by {
+        let found = rows_with(&db, "SELECT * FROM items WHERE rid=?", vec![s.into()], &[]).await?;
+        out.insert(
+            "superseded_by".into(),
+            json!(shaped(&db, &project, found).await?),
+        );
+    }
+    let narrow = Narrow {
+        exclude: Some(r.rid),
+        n: 15,
+        ..Narrow::default()
+    };
+    let mentions = search_rows(&db, &q.project, &format!("\"{}\"", r.id), &narrow)
+        .await
+        .unwrap_or_default();
+    let mentions: Vec<Extra> = mentions
+        .into_iter()
+        .map(|(m, score, snip)| {
+            let mut extra = Map::new();
+            extra.insert("score".into(), json!(score));
+            extra.insert("snip".into(), json!(snip));
+            (m, extra)
+        })
+        .collect();
+    out.insert(
+        "mentions".into(),
+        json!(shaped(&db, &project, mentions).await?),
+    );
+    Ok(Json(Value::Object(out)))
+}
+
+/// What `docket show` prints beside the row: the priority a package raised, a standing item's members
+/// by word, the package and its progress, a package's members, what waits on it, its concepts.
+///
+/// # Errors
+/// 404 for an unknown project or item.
+pub async fn context(
+    State(db): State<DatabaseConnection>,
+    Path(id): Path<String>,
+    Query(q): Query<InProject>,
+) -> Result<Json<Value>, Failure> {
+    let project = store::project(&db, &q.project).await?;
+    let model = project_model(&db, &q.project).await?;
+    let kinds = Kinds::of(&model);
+    let r = store::item_of(&db, &q.project, &id).await?;
+    let kind = kinds.kind(&r.key);
+    let (tier, raised_by) = raised(&db, &project, &r).await?;
+    let package = match package_of(&db, &project, r.rid).await? {
+        Some(p) => Some(json!({
+            "id": p.id, "title": p.title,
+            "progress": package_progress(&db, p.rid).await?,
+        })),
+        None => None,
+    };
+    let mut members = Vec::new();
+    if kind == Kind::Package {
+        for m in package_members(&db, r.rid, false).await? {
+            members.push(json!({ "id": m.id, "word": word_of(&db, &kinds, &m).await? }));
+        }
+    }
+    let holds: Vec<String> = store::column(
+        &db,
+        "SELECT id FROM items WHERE wait_item=? AND state='open'",
+        vec![r.rid.into()],
+    )
+    .await?;
+    let standing = if kind.is_standing() {
+        Some(member_words(&db, &q.project, &kinds, r.rid).await?)
+    } else {
+        None
+    };
+    Ok(Json(json!({
+        "priority": tier,
+        "raised_by": raised_by,
+        "standing": standing,
+        "package": package,
+        "members": members,
+        "holds": holds,
+        "concepts": concepts_of(&db, &project, r.rid).await?,
+        "no_concept": crate::verbs::graph::belongs_to_none(&db, &project, &r).await?,
+    })))
+}
+
+/// The tier the item is worked at, and the open package that raised it above its own, if one did.
+async fn raised(
+    db: &DatabaseConnection,
+    project: &store::ProjectRow,
+    r: &docket_core::item::Item,
+) -> Result<(&'static str, Option<String>), Failure> {
+    let own = priority(&r.tags);
+    let mut best = (PRIORITIES.iter().position(|p| *p == own).unwrap_or(2), None);
+    for p in packages_of(db, project, r.rid).await? {
+        let t = PRIORITIES
+            .iter()
+            .position(|x| *x == priority(&p.tags))
+            .unwrap_or(2);
+        if t < best.0 {
+            best = (t, Some(p.id));
+        }
+    }
+    Ok((PRIORITIES[best.0], best.1))
+}
+
+async fn word_of(
+    db: &DatabaseConnection,
+    kinds: &Kinds,
+    r: &docket_core::item::Item,
+) -> Result<String, Failure> {
+    let kind = kinds.kind(&r.key);
+    let open = if kind == Kind::Package && r.state == "open" {
+        open_member_count(db, r.rid).await?
+    } else {
+        0
+    };
+    let facts = Facts {
+        state: &r.state,
+        kind,
+        claimed: r.claim_branch.is_some(),
+        scope: r.scope.as_deref(),
+        waiting: r.wait_on.is_some(),
+        turn: r.turn.as_deref(),
+    };
+    Ok(word(&facts, open).to_string())
+}
+
+/// How many items belong to a concept or central idea, and how many of them stand at each word.
+async fn member_words(
+    db: &DatabaseConnection,
+    slug: &str,
+    kinds: &Kinds,
+    rid: i64,
+) -> Result<Value, Failure> {
+    let rids = crate::reads::audit::members(db, slug, kinds, rid).await?;
+    let mut counts = Map::new();
+    for m in crate::reads::audit::by_rid_chunks(db, &rids).await? {
+        let w = word_of(db, kinds, &to_item(m)).await?;
+        let n = counts.get(&w).and_then(Value::as_u64).unwrap_or(0);
+        counts.insert(w, json!(n + 1));
+    }
+    Ok(json!({ "total": rids.len(), "words": counts }))
+}
+
+#[derive(Deserialize)]
+pub struct FilesQuery {
+    project: String,
+    #[serde(default)]
+    prefix: String,
+    state: Option<String>,
+}
+
+/// `docket files`: items citing a path that starts with the prefix, by path, line and number.
+///
+/// # Errors
+/// 404 for an unknown project.
+pub async fn files(
+    State(db): State<DatabaseConnection>,
+    Query(q): Query<FilesQuery>,
+) -> Result<Json<Value>, Failure> {
+    let project = project_model(&db, &q.project).await?;
+    let mut text = "SELECT i.*, l.to_path AS path, l.to_line AS line FROM links l JOIN items i ON i.rid=l.rid \
+                    WHERE i.project=? AND l.kind IN ('cites_file','cites_test') AND l.to_path LIKE ?"
+        .to_string();
+    let mut values: Vec<sea_orm::Value> =
+        vec![q.project.clone().into(), format!("{}%", q.prefix).into()];
+    if let Some(state) = q.state.filter(|s| s != "any") {
+        text.push_str(" AND i.state=?");
+        values.push(state.into());
+    }
+    text.push_str(" ORDER BY l.to_path, l.to_line, i.num");
+    let found = rows_with(&db, &text, values, &["path", "line"]).await?;
+    Ok(Json(Value::Array(shaped(&db, &project, found).await?)))
+}
+
+#[derive(Deserialize)]
+pub struct CitationsQuery {
+    project: String,
+    #[serde(default)]
+    open_only: bool,
+}
+
+#[derive(FromQueryResult)]
+struct Citation {
+    id: String,
+    state: String,
+    to_path: String,
+}
+
+/// Every path an item of the project cites, once per item, for `docket stale` to resolve on its host.
+///
+/// # Errors
+/// 404 for an unknown project.
+pub async fn citations(
+    State(db): State<DatabaseConnection>,
+    Query(q): Query<CitationsQuery>,
+) -> Result<Json<Value>, Failure> {
+    project_model(&db, &q.project).await?;
+    let states = if q.open_only {
+        "'open'"
+    } else {
+        "'open','done','dropped'"
+    };
+    let found = Citation::find_by_statement(sql(
+        &format!(
+            "SELECT DISTINCT i.id, i.state, l.to_path FROM links l JOIN items i ON i.rid=l.rid \
+             WHERE i.project=? AND l.kind IN ('cites_file','cites_test') AND i.state IN ({states}) \
+             ORDER BY i.id, l.to_path"
+        ),
+        vec![q.project.into()],
+    ))
+    .all(&db)
+    .await?;
+    Ok(Json(json!(
+        found
+            .into_iter()
+            .map(|c| json!({ "id": c.id, "state": c.state, "path": c.to_path }))
+            .collect::<Vec<_>>()
+    )))
+}

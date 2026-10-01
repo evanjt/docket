@@ -227,6 +227,29 @@ pub fn mentioned_ids(text: &str, keys: &[&str]) -> Vec<String> {
     out
 }
 
+/// The principle numbers of `item_id` that the text cites as `A1#3`, each once, in order.
+#[must_use]
+pub fn principle_refs(text: &str, item_id: &str) -> Vec<u64> {
+    let mark = format!("{item_id}#");
+    let mut out: Vec<u64> = Vec::new();
+    for (at, _) in text.match_indices(&mark) {
+        let before = text[..at].chars().next_back();
+        if before.is_some_and(|c| c.is_ascii_uppercase() || c.is_ascii_digit()) {
+            continue;
+        }
+        let digits: String = text[at + mark.len()..]
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        if let Ok(n) = digits.parse::<u64>() {
+            out.push(n);
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
 #[cfg(test)]
 #[path = "tests/text.rs"]
 mod tests;

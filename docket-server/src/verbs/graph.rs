@@ -10,6 +10,7 @@ use docket_core::api::Progress;
 use docket_core::item::{Field, Item};
 use docket_core::rules::{GATE, kind_of};
 use docket_core::text::split_id;
+use docket_core::touch::{declared_files, fold_paths, same_file};
 use docket_core::word::Kind;
 
 use crate::store::{ProjectRow, Tx, by_rid, column, items, sql};
@@ -342,61 +343,9 @@ pub async fn belongs_to_none<C: ConnectionTrait>(
 
 // ---- the files a ticket touches ----
 
-static DECLARED_FILES: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)\*\*Touches\.\*\*\s*(.*)$").unwrap());
-static DECLARED_LINE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r":\d+(?:-\d+)?$").unwrap());
-static FILE_EXTENSION: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\.[A-Za-z][A-Za-z0-9_+-]*$").unwrap());
-
-/// One entry per file: a citation by bare name or short path folds into the longer path it ends.
-pub fn fold_paths(paths: impl IntoIterator<Item = String>) -> BTreeSet<String> {
-    let paths: BTreeSet<String> = paths.into_iter().collect();
-    paths
-        .iter()
-        .filter(|p| {
-            !paths
-                .iter()
-                .any(|q| q != *p && q.ends_with(&format!("/{p}")))
-        })
-        .cloned()
-        .collect()
-}
-
-/// Whether two citations name one file. A shorter one counts only when it carries a directory.
-pub fn same_file(a: &str, b: &str) -> bool {
-    if a == b {
-        return true;
-    }
-    let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
-    short.contains('/') && long.ends_with(&format!("/{short}"))
-}
-
-/// The paths a body's Touches line declares, folded and stripped of line numbers.
-pub fn declared_files(r: &Item) -> BTreeSet<String> {
-    let mut found = Vec::new();
-    for line in r.body.lines() {
-        let Some(m) = DECLARED_FILES.captures(line) else {
-            continue;
-        };
-        for part in m[1].split(',') {
-            let path = part.trim().trim_start_matches('`');
-            let path = path.trim_end_matches(['`', '.', ';', ',']);
-            let path = DECLARED_LINE.replace(path, "").to_string();
-            let lower = path.to_lowercase();
-            if lower == "none" || lower == "n/a" || path.chars().any(char::is_whitespace) {
-                continue;
-            }
-            if path.contains('/') || FILE_EXTENSION.is_match(&path) {
-                found.push(path);
-            }
-        }
-    }
-    fold_paths(found)
-}
-
 /// The files a ticket will change: its Touches line when it has one, else the files it cites.
 pub async fn work_paths<C: ConnectionTrait>(c: &C, r: &Item) -> Result<BTreeSet<String>, DbErr> {
-    let declared = declared_files(r);
+    let declared = declared_files(&r.body);
     if !declared.is_empty() {
         return Ok(declared);
     }

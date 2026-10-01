@@ -12,6 +12,7 @@ one place a claim is decided, so two machines never take the same item.
 |---|---|
 | `docket-core` | the rules: status words, claims, refusals, the queue order, the schema and the API types |
 | `docket-server` | axum and sea-orm over the database: read routes, the write verbs under `/do`, key auth |
+| `docket-dump` | the database written one way into a git checkout, and rebuilt from one |
 
 ## Quick Start
 
@@ -42,9 +43,26 @@ machine. An agent key cannot open items with `new` or `add`.
 | `GET /status` | the flow counts and the summary |
 | `GET /show/{id}`, `/search`, `/similar/{id}` | one item, full-text search over FTS5 |
 | `GET /projects`, `/items`, `/events`, `/links` | the stored rows, filtered and paged |
+| `GET /dump` | the rows changed after an event `seq` (`since=N`), or every row (`since=0`), for `docket-dump` |
 | `POST /do/{verb}` | `new`, `add`, `start`, `close`, `release`, `drop`, `reopen`, `wait`, `resume`, `ask`, `reply`, `answer`, `decide`, `priority`, `rate`, `edit`, `link`, `fold`, `key`, `pull`, `defer` |
 
 A refused write answers `409` with the reason, and nothing is written.
+
+## Dump
+
+`docket-dump` writes the database into a git checkout, one way: a file per item, and an event log
+and a project file per project. It reads the server and key from `DOCKET_SERVER` and `DOCKET_KEY`,
+or `~/.config/docket/client`.
+
+```bash
+docket-dump --repo ~/dump                          # the rows changed since the last pass, committed and pushed
+docket-dump --repo ~/dump --every 300              # a pass every five minutes
+docket-dump --repo ~/dump --full --no-push         # every row, committed only
+docket-dump --repo ~/dump --restore --db new.db    # an empty database rebuilt from the checkout
+```
+
+The checkout keeps its cursor (the last event it holds) in its own git config as
+`docket.dumpcursor`, never committed. A push that fails leaves its commits for the next pass.
 
 ## Docker
 

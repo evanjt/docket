@@ -4,6 +4,14 @@ use std::fmt::Write;
 
 use serde_json::{Map, Value};
 
+/// The `json.dumps` arguments that change the text: `sort_keys`, `ensure_ascii` and `indent`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Style {
+    pub sort_keys: bool,
+    pub ascii: bool,
+    pub indent: Option<usize>,
+}
+
 /// An event's structured fields, from the stored text or nothing.
 #[must_use]
 pub fn data_of(data: Option<&str>) -> Map<String, Value> {
@@ -16,47 +24,84 @@ pub fn data_of(data: Option<&str>) -> Map<String, Value> {
 /// The value with `, ` and `: ` separators and non-ASCII escaped, keys sorted when asked.
 #[must_use]
 pub fn dumps(value: &Value, sort_keys: bool) -> String {
+    dumps_styled(
+        value,
+        Style {
+            sort_keys,
+            ascii: true,
+            indent: None,
+        },
+    )
+}
+
+/// The value as `json.dumps` writes it with the given arguments.
+#[must_use]
+pub fn dumps_styled(value: &Value, style: Style) -> String {
     let mut out = String::new();
-    write(value, sort_keys, &mut out);
+    write(value, style, 0, &mut out);
     out
 }
 
-fn write(value: &Value, sort_keys: bool, out: &mut String) {
+fn write(value: &Value, style: Style, depth: usize, out: &mut String) {
     match value {
         Value::Null => out.push_str("null"),
         Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
         Value::Number(n) => out.push_str(&n.to_string()),
-        Value::String(s) => write_str(s, out),
+        Value::String(s) => write_str(s, style.ascii, out),
         Value::Array(items) => {
-            out.push('[');
-            for (i, item) in items.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(", ");
-                }
-                write(item, sort_keys, out);
-            }
-            out.push(']');
+            let parts: Vec<String> = items
+                .iter()
+                .map(|item| {
+                    let mut part = String::new();
+                    write(item, style, depth + 1, &mut part);
+                    part
+                })
+                .collect();
+            write_container(&parts, ('[', ']'), style, depth, out);
         }
         Value::Object(map) => {
             let mut entries: Vec<(&String, &Value)> = map.iter().collect();
-            if sort_keys {
+            if style.sort_keys {
                 entries.sort_by(|a, b| a.0.cmp(b.0));
             }
-            out.push('{');
-            for (i, (k, v)) in entries.into_iter().enumerate() {
-                if i > 0 {
-                    out.push_str(", ");
-                }
-                write_str(k, out);
-                out.push_str(": ");
-                write(v, sort_keys, out);
-            }
-            out.push('}');
+            let parts: Vec<String> = entries
+                .into_iter()
+                .map(|(k, v)| {
+                    let mut part = String::new();
+                    write_str(k, style.ascii, &mut part);
+                    part.push_str(": ");
+                    write(v, style, depth + 1, &mut part);
+                    part
+                })
+                .collect();
+            write_container(&parts, ('{', '}'), style, depth, out);
         }
     }
 }
 
-fn write_str(s: &str, out: &mut String) {
+/// Written parts between brackets: on one line, or one per line under `indent`.
+fn write_container(
+    parts: &[String],
+    (open, close): (char, char),
+    style: Style,
+    depth: usize,
+    out: &mut String,
+) {
+    out.push(open);
+    match style.indent {
+        Some(width) if !parts.is_empty() => {
+            let inner = format!("\n{}", " ".repeat(width * (depth + 1)));
+            out.push_str(&inner);
+            out.push_str(&parts.join(&format!(",{inner}")));
+            out.push('\n');
+            out.push_str(&" ".repeat(width * depth));
+        }
+        _ => out.push_str(&parts.join(", ")),
+    }
+    out.push(close);
+}
+
+fn write_str(s: &str, ascii: bool, out: &mut String) {
     out.push('"');
     for c in s.chars() {
         match c {
@@ -67,7 +112,7 @@ fn write_str(s: &str, out: &mut String) {
             '\t' => out.push_str("\\t"),
             '\u{8}' => out.push_str("\\b"),
             '\u{c}' => out.push_str("\\f"),
-            c if (c as u32) < 0x20 || (c as u32) > 0x7e => {
+            c if (c as u32) < 0x20 || (ascii && (c as u32) > 0x7e) => {
                 let mut units = [0u16; 2];
                 for unit in c.encode_utf16(&mut units) {
                     let _ = write!(out, "\\u{unit:04x}");

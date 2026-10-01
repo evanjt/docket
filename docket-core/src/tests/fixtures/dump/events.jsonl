@@ -1,0 +1,3 @@
+{"at": "2026-01-01T00:00:00Z", "branch": null, "host": "laptop", "item": "B1", "kind": "edited", "note": "priority high", "uid": "2026-01-01T00:00:00Z-laptop-aaaaaa"}
+{"at": "2026-01-01T00:00:00Z", "branch": null, "host": "laptop", "item": null, "kind": "queue", "note": null, "uid": "2026-01-01T00:00:00Z-laptop-bbbbbb"}
+{"at": "2026-01-02T00:00:00Z", "branch": "main", "data": {"gates": "passed: ok", "landed": "abc", "nested": {"a": [true, null], "z": 1}, "u": "é"}, "host": "devbox", "item": "T7", "kind": "closed", "note": "fixed é \"q\"", "uid": "2026-01-02T00:00:00Z-devbox-aaaaaa"}

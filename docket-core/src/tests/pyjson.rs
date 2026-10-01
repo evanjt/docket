@@ -25,6 +25,30 @@ fn test_dumps_spaces_separators_and_escapes_non_ascii() {
 }
 
 #[test]
+fn test_dumps_styled_keeps_non_ascii_when_not_ascii() {
+    let style = Style {
+        ascii: false,
+        ..Style::default()
+    };
+    assert_eq!(
+        dumps_styled(&json!("a\u{1}\u{7f}\u{e9}\u{1f600}\"\\"), style),
+        "\"a\\u0001\u{7f}\u{e9}\u{1f600}\\\"\\\\\""
+    );
+}
+
+#[test]
+fn test_dumps_styled_indents_as_python() {
+    let style = Style {
+        sort_keys: true,
+        ascii: false,
+        indent: Some(2),
+    };
+    let value = json!({"b": [], "a": {}, "c": [1, {"x": "\u{e9}"}]});
+    let expected = "{\n  \"a\": {},\n  \"b\": [],\n  \"c\": [\n    1,\n    {\n      \"x\": \"\u{e9}\"\n    }\n  ]\n}";
+    assert_eq!(dumps_styled(&value, style), expected);
+}
+
+#[test]
 fn test_data_of_reads_text_or_nothing() {
     assert_eq!(data_of(Some(r#"{"role": "review"}"#))["role"], "review");
     assert!(data_of(None).is_empty());

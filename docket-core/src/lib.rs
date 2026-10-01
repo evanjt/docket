@@ -2,6 +2,7 @@
 
 pub mod api;
 pub mod clock;
+pub mod dump;
 pub mod fact;
 pub mod flow;
 pub mod item;

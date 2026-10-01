@@ -30,6 +30,8 @@ AGENT_KEY = 'harness-agent-key'
 STAMP = re.compile(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ')
 DURATION = re.compile(r'\b\d+[smhd]( \d+[hm])?\b')
 BAR = re.compile(r'[#.]{10}')
+# bm25 from the SQLite the server bundles can differ from the system SQLite's in the last bits.
+SCORE = re.compile(r'("score": )(-?[0-9.e+-]+)')
 # This host's own rows in the Python's database, which the server has no equal of: the loop's clock,
 # the build hosts' stats, the chores, the roots and the dump not yet committed.
 LOCAL_ROWS = (
@@ -146,6 +148,7 @@ def normalise(args, out, err, code, python):
     """What may differ between two runs a second apart, what only the Python's own dump says, and the
     wording of an argument error, which argparse and clap each word their own way."""
     out, err = STAMP.sub('<T>', out), STAMP.sub('<T>', err)
+    out = SCORE.sub(lambda m: m.group(1) + f'{float(m.group(2)):.12g}', out)
     if code == 2:
         err = '<argument error>\n'
     if verb_of(args) in ('status', ''):
@@ -196,6 +199,9 @@ class Ids:
         self.audit = self.one("1=1", 'audit')
         self.question = self.one("state='open' AND decision IS NULL AND turn='user'", 'decision')
         self.waiting = self.one("state='open' AND wait_on='item'")
+        pk = self.keys.get('package', [None])[0]
+        top = self.db.execute('SELECT MAX(num) FROM items WHERE project=? AND key=?', (slug, pk)).fetchone()
+        self.new_package = f'{pk}{(top[0] or 0) + 1}' if pk else None
         self.group = self.value('group_name', "group_name IS NOT NULL")
         self.theme = self.value('theme', "theme IS NOT NULL AND state='open'")
         path = self.db.execute("SELECT l.to_path FROM links l JOIN items i ON i.rid=l.rid WHERE i.project=? "
@@ -226,16 +232,14 @@ class Ids:
             return []
         rows = self.db.execute(
             f"SELECT id FROM items i WHERE project=? AND {self.keyed('work')} AND state='open' AND turn='agent' "
-            "AND claim_branch IS NULL AND wait_on IS NULL AND scope IS NULL AND conflict=0 AND body<>'' "
-            "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.rid=i.rid AND l.kind='opened') "
-            "AND NOT EXISTS (SELECT 1 FROM items w WHERE w.wait_item=i.rid) "
+            "AND claim_branch IS NULL AND wait_on IS NULL AND scope IS NULL AND conflict=0 "
             "ORDER BY rid DESC LIMIT ?", (self.slug, n)).fetchall()
         return [r[0] for r in rows]
 
 
 def reads(i):
     """Every read, with and without --json where it takes it, and the refusals a read can give."""
-    out = ['status', 'status --json', 'next', 'next 3 --json', 'next --all', 'next --priority high',
+    out = ['', '--json', 'status', 'status --json', 'next', 'next 3 --json', 'next --all', 'next --priority high',
            'next --scope inbox', 'next --scope later --json', 'complex', 'complex 3 --json', 'todo', 'todo --json',
            'wip', 'wip --json', 'waiting', 'waiting --json', 'blocked --on condition', 'questions', 'q --json',
            'research', 'research --json', 'derived', 'derived 5 --json', 'done 5', 'done 3 --json',
@@ -305,6 +309,10 @@ def writes(i):
         (f'link {w} related {w2} --remove', None), (f'link {w} opened {w2}', None), (f'deps {w}', None),
         (f'link {w} opened {w2} --remove', None), (f'link {w} sideways {w2}', None),
         (f'decide {w} "use the queue" --basis "CID1, the queue owns order"', None), ('derived 3', None),
+        (f'block {w} --until "the alias"', None), (f'resume {w}', None), (f'park {w} "by alias"', None),
+        (f'reply {w} back', None), (f'manual {w} "by the other alias" --json', None), (f'reply {w} back', None),
+        (f'start {w} --branch audit/h-3', None), (f'built {w} def5678 --branch audit/h-3', None),
+        (f'reopen {w} "after built"', None),
         (f'answer {w} "yes"', None), (f'drop {w2}', None), (f'drop {w2} "not needed"', None),
         (f'drop {w2} again', None), (f'show {w2} --json', None), ('key zz work "harness key"', None),
         ('key ZZ decision "changed"', None), ('key toolong work "x"', None), ('reindex', None),
@@ -315,9 +323,12 @@ def writes(i):
         out += [(f'answer {q} "the harness choice"', None), (f'close {q}', None),
                 (f'answer {q} "again" --derived "a prior"', None), (f'close {q} "opened {w}" --json', None),
                 (f'show {q}', None)]
-    if i.package:
-        out += [("new PK 'harness package'", None), (f'link {w} opened {i.package}', None),
-                (f'show {i.package}', None), (f'start {i.package}', None)]
+    if i.package and i.new_package:
+        pk, new = i.package, i.new_package
+        out += [(f"new {new.rstrip('0123456789')} 'harness package'", None), (f'link {w} opened {new}', None),
+                (f'link {w} opened {pk}', None), (f'show {new}', None), (f'start {new}', None),
+                (f'fold {new} {new}', None), (f'fold {pk} {new}', None), (f'show {pk}', None),
+                (f'audit {pk}', None), (f'start {pk}', None)]
     return out
 
 
@@ -398,6 +409,7 @@ def main():
         pair.prepare(a.live, a.projects[0])
     pair.start()
     total = same = 0
+    exits = {}
     try:
         for slug in a.projects:
             db = sqlite3.connect(os.path.join(a.work, 'b.db'))
@@ -415,11 +427,13 @@ def main():
                 ok, x, y = compare(pair, line, stdin, env, cwd)
                 total += 1
                 same += ok
+                exits[x[2]] = exits.get(x[2], 0) + 1
                 if not ok:
                     show_diff(line, x, y)
     finally:
         pair.stop()
     print(f'\n{same} of {total} command lines gave the same stdout, stderr and exit code')
+    print('by the Python\'s exit code: ' + ', '.join(f'{n} exited {c}' for c, n in sorted(exits.items())))
     return 0 if same == total else 1
 
 

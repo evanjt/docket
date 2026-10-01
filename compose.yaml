@@ -1,11 +1,12 @@
-# docket-server behind Traefik. Settings come from the environment or a .env file beside this one:
-#   DOCKET_DATA       directory holding docket.db (default ./data)
-#   DOCKET_KEYS_FILE  the keys file, `host role key` lines (default ./keys)
-#   DOCKET_READ_ONLY  1 to serve a database another program writes, refusing every write
-#   DOCKET_HOST       hostname Traefik routes to the server (default docket.localhost)
-#   DOCKET_BIND       address Traefik listens on (default 127.0.0.1, this machine only)
-#   DOCKET_PORT       port Traefik listens on (default 80)
-#   DOCKET_UID/GID    the owner of DOCKET_DATA, so SQLite can use its -wal and -shm files
+# docket-server and its Postgres behind Traefik. Settings come from the environment or a .env file beside
+# this one:
+#   POSTGRES_PASSWORD  the docket database user's password, letters and digits only (required)
+#   DOCKET_KEYS_FILE   the keys file, `host role key` lines (default ./keys)
+#   DOCKET_HOST        hostname Traefik routes to the server (default docket.localhost)
+#   DOCKET_BIND        address Traefik listens on (default 127.0.0.1, this machine only)
+#   DOCKET_PORT        port Traefik listens on (default 80)
+#   DOCKET_UID/GID     the user the server runs as, which must be able to read the keys file
+# Postgres keeps its data in the named volume `postgres` and is reached by the server only.
 services:
   traefik:
     image: traefik:v3.7
@@ -19,21 +20,40 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     restart: unless-stopped
 
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: docket
+      POSTGRES_DB: docket
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U docket -d docket"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
   docket-server:
     build: .
     image: docket-server:local
     user: "${DOCKET_UID:-10001}:${DOCKET_GID:-10001}"
     environment:
-      DOCKET_DB: /data/docket.db
+      DATABASE_URL: postgres://docket:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/docket
       DOCKET_KEYS: /etc/docket/keys
       DOCKET_LISTEN: 0.0.0.0:7878
-      DOCKET_READ_ONLY: ${DOCKET_READ_ONLY:-}
     volumes:
-      - ${DOCKET_DATA:-./data}:/data
       - ${DOCKET_KEYS_FILE:-./keys}:/etc/docket/keys:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
     labels:
       - traefik.enable=true
       - traefik.http.routers.docket.rule=Host(`${DOCKET_HOST:-docket.localhost}`)
       - traefik.http.routers.docket.entrypoints=web
       - traefik.http.services.docket.loadbalancer.server.port=7878
     restart: unless-stopped
+
+volumes:
+  postgres:

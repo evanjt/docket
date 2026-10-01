@@ -7,7 +7,7 @@
 # Cargo.toml is copied, or cargo refuses to load the workspace.
 FROM rust:1.98-alpine AS cacher
 WORKDIR /build
-# musl-dev and gcc are for the bundled sqlite and for ring, which rustls pulls in.
+# musl-dev and gcc are for the bundled sqlite, which the import reads, and for ring, which rustls pulls in.
 RUN apk --no-cache upgrade && \
     apk add --no-cache musl-dev gcc make perl
 COPY Cargo.toml Cargo.lock ./
@@ -15,21 +15,26 @@ COPY docket/Cargo.toml docket/Cargo.toml
 COPY docket-client/Cargo.toml docket-client/Cargo.toml
 COPY docket-core/Cargo.toml docket-core/Cargo.toml
 COPY docket-dump/Cargo.toml docket-dump/Cargo.toml
+COPY docket-migration/Cargo.toml docket-migration/Cargo.toml
 COPY docket-server/Cargo.toml docket-server/Cargo.toml
 COPY docket-tui/Cargo.toml docket-tui/Cargo.toml
-RUN mkdir -p docket/src docket-client/src docket-core/src docket-dump/src docket-server/src docket-tui/src && \
+RUN mkdir -p docket/src docket-client/src docket-core/src docket-dump/src docket-migration/src \
+             docket-server/src docket-tui/src && \
     echo 'fn main() {}' > docket/src/main.rs && \
     : > docket-client/src/lib.rs && \
     : > docket-core/src/lib.rs && \
     echo 'fn main() {}' > docket-dump/src/main.rs && \
+    : > docket-migration/src/lib.rs && \
     : > docket-tui/src/lib.rs && \
     echo 'fn main() {}' > docket-tui/src/main.rs && \
     : > docket-server/src/lib.rs && \
     echo 'fn main() {}' > docket-server/src/main.rs && \
     cargo build --release --locked -p docket-server && \
     rm -rf target/release/deps/*docket_core* \
+           target/release/deps/*docket_migration* \
            target/release/deps/*docket_server* \
            target/release/.fingerprint/docket-core-* \
+           target/release/.fingerprint/docket-migration-* \
            target/release/.fingerprint/docket-server-* \
            target/release/docket-server
 
@@ -45,6 +50,7 @@ COPY docket docket
 COPY docket-client docket-client
 COPY docket-core docket-core
 COPY docket-dump docket-dump
+COPY docket-migration docket-migration
 COPY docket-server docket-server
 COPY docket-tui docket-tui
 RUN cargo build --release --locked -p docket-server
@@ -54,13 +60,11 @@ FROM alpine:3.21
 RUN apk --no-cache upgrade && \
     apk add --no-cache ca-certificates tzdata libgcc && \
     adduser -D -u 10001 docket && \
-    install -d -o docket -g docket /data /etc/docket
+    install -d -o docket -g docket /etc/docket
 COPY --from=builder /build/target/release/docket-server /usr/local/bin/docket-server
-# The database lives on a volume at /data, the keys file is mounted at /etc/docket.
-ENV DOCKET_DB=/data/docket.db \
-    DOCKET_KEYS=/etc/docket/keys \
+# The database is the Postgres DATABASE_URL names; the keys file is mounted at /etc/docket.
+ENV DOCKET_KEYS=/etc/docket/keys \
     DOCKET_LISTEN=0.0.0.0:7878
-VOLUME /data
 USER 10001
 EXPOSE 7878
 ENTRYPOINT ["/usr/local/bin/docket-server"]

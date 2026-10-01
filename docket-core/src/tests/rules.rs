@@ -477,3 +477,36 @@ fn test_apply_reads_back_as_the_row_after_the_update() {
     assert_eq!(row.claim_branch, None);
     assert_eq!(row.resolution.as_deref(), Some("abc1234"));
 }
+
+#[test]
+fn test_retry_hands_a_parked_item_back_to_the_agents() {
+    let mut row = open("B3");
+    row.turn = Some("user".into());
+    assert_eq!(
+        retry(&row, Some("go again")).unwrap(),
+        [
+            Field::Turn(Some("agent".into())),
+            Field::TurnNote(Some("go again".into()))
+        ]
+    );
+    assert_eq!(
+        refusal(retry(&row, None)),
+        "reply needs a note saying what happened."
+    );
+}
+
+#[test]
+fn test_retry_on_the_agents_turn_changes_no_column() {
+    assert!(retry(&open("B3"), None).unwrap().is_empty());
+}
+
+#[test]
+fn test_retry_refuses_a_held_or_closed_item() {
+    assert_eq!(
+        refusal(retry(&held_elsewhere("B3"), Some("x"))),
+        "B3 is held by audit/other-2: docket kill B3 first if its job is stuck."
+    );
+    assert!(
+        refusal(retry(&done("B3"), Some("x"))).starts_with("B3 is done (abc1234); retry needs")
+    );
+}

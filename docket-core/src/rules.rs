@@ -484,6 +484,25 @@ pub fn set_tags(tags: &[String], value: &str) -> Vec<String> {
     new
 }
 
+/// An item the loop parked or sent back, given a fresh start: back to the agents when it is the owner's
+/// turn, else only recorded.
+///
+/// # Errors
+/// Refused when the item is not open, is held, or is the owner's turn with no note.
+pub fn retry(row: &Item, note: Option<&str>) -> Result<Vec<Field>, Refused> {
+    require_open(row, "retry")?;
+    if let Some(branch) = &row.claim_branch {
+        return Err(Refused(format!(
+            "{} is held by {branch}: docket kill {} first if its job is stuck.",
+            row.id, row.id
+        )));
+    }
+    if row.turn.as_deref() == Some("user") {
+        return reply(row, note);
+    }
+    Ok(Vec::new())
+}
+
 #[cfg(test)]
 #[path = "tests/rules.rs"]
 mod tests;

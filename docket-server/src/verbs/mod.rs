@@ -5,6 +5,7 @@ pub mod fields;
 pub mod graph;
 pub mod open;
 pub mod project;
+pub mod retry;
 pub mod turn;
 pub mod view;
 
@@ -173,6 +174,7 @@ pub fn router() -> Router<DatabaseConnection> {
         .route("/ask", post(turn::ask))
         .route("/park", post(turn::ask))
         .route("/reply", post(turn::reply))
+        .route("/retry", post(retry::retry))
         .route("/answer", post(turn::answer))
         .route("/decide", post(turn::decide))
         .route("/priority", post(fields::priority))

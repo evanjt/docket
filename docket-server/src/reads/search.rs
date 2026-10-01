@@ -1,8 +1,10 @@
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use sea_orm::sea_query::NullOrdering;
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, FromQueryResult, QueryFilter,
+    ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, FromQueryResult, Order,
+    QueryFilter, QueryOrder,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -27,18 +29,22 @@ pub(crate) struct Narrow {
     pub n: i64,
 }
 
-/// Matches ranked by bm25 over id, title, body and files, each with a snippet of its body.
-pub(crate) async fn search_rows(
-    db: &DatabaseConnection,
-    slug: &str,
-    query: &str,
-    narrow: &Narrow,
-) -> Result<Vec<(item::Model, f64, String)>, Failure> {
-    let mut text = "SELECT i.*, bm25(items_fts, 4.0, 8.0, 1.0, 2.0) AS score, \
-                    snippet(items_fts, 2, '[', ']', ' ... ', 12) AS snip \
-                    FROM items_fts CROSS JOIN items i ON i.rid = items_fts.rowid \
-                    WHERE items_fts MATCH ? AND i.project=?"
-        .to_string();
+/// The weights of the body, files, id and title, as `ts_rank` takes them (D, C, B, A).
+const WEIGHTS: &str = "'{0.125, 0.25, 0.5, 1}'";
+
+/// How `ts_headline` cuts a body: one fragment of up to twelve words, matches in brackets.
+const SNIPPET: &str =
+    "'StartSel=[, StopSel=], MaxWords=12, MinWords=4, MaxFragments=1, FragmentDelimiter=\" ... \"'";
+
+/// The items of a project matching a `websearch_to_tsquery` text, best first, as `i.*` with the
+/// matched body, the query and the score. The query's separators are read as the index reads them.
+/// The score is the rank negated: lower is closer.
+pub(crate) fn ranked(slug: &str, query: &str, narrow: &Narrow) -> (String, Vec<sea_orm::Value>) {
+    let mut text = format!(
+        "SELECT i.*, s.body AS matched, q, (-ts_rank({WEIGHTS}, s.doc, q))::float8 AS score \
+         FROM search s JOIN items i ON i.rid = s.rid, websearch_to_tsquery('simple', translate(?, '/:<>@?=&#%~+', '            ')) q \
+         WHERE s.doc @@ q AND i.project=?"
+    );
     let mut values: Vec<sea_orm::Value> = vec![query.into(), slug.into()];
     if let Some(key) = &narrow.key {
         text.push_str(" AND i.key=?");
@@ -53,21 +59,34 @@ pub(crate) async fn search_rows(
         values.push(rid.into());
     }
     if let Some(theme) = &narrow.theme {
-        text.push_str(" AND i.theme LIKE ?");
+        text.push_str(" AND i.theme ILIKE ? ESCAPE ''");
         values.push(format!("%{theme}%").into());
     }
     if let Some(theme) = &narrow.without_theme {
-        text.push_str(" AND (i.theme IS NULL OR i.theme NOT LIKE ?)");
+        text.push_str(" AND (i.theme IS NULL OR i.theme NOT ILIKE ? ESCAPE '')");
         values.push(format!("%{theme}%").into());
     }
-    text.push_str(" ORDER BY score LIMIT ?");
+    text.push_str(" ORDER BY score, i.rid LIMIT ?");
     values.push(narrow.n.into());
-    let rows = db.query_all_raw(sql(&text, values)).await.map_err(|e| {
-        failure(
-            StatusCode::BAD_REQUEST,
-            &format!("search could not parse {query:?}: {e}"),
-        )
-    })?;
+    (text, values)
+}
+
+/// Matches ranked over title, id, files and body, each with a snippet of its body.
+pub(crate) async fn search_rows(
+    db: &DatabaseConnection,
+    slug: &str,
+    query: &str,
+    narrow: &Narrow,
+) -> Result<Vec<(item::Model, f64, String)>, Failure> {
+    let (inner, values) = ranked(slug, query, narrow);
+    let text = format!(
+        "SELECT m.*, ts_headline('simple', m.matched, m.q, {SNIPPET}) AS snip FROM ({inner}) m \
+         ORDER BY m.score, m.rid"
+    );
+    let rows = db
+        .query_all_raw(sql(&text, values))
+        .await
+        .map_err(|e| internal(&e))?;
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
         let model = item::Model::from_query_result(&row, "").map_err(|e| internal(&e))?;
@@ -124,10 +143,11 @@ fn twenty() -> i64 {
     20
 }
 
-/// `docket search`: full-text search, ranked, with a snippet. `raw` passes the FTS5 query through.
+/// `docket search`: full-text search, ranked, with a snippet. `raw` passes the query through as
+/// `websearch_to_tsquery` reads it: quoted phrases, `or`, and `-` before a word to leave it out.
 ///
 /// # Errors
-/// 400 without words or for a query FTS5 refuses, 404 for an unknown project.
+/// 400 without words, 404 for an unknown project.
 pub async fn search(
     State(db): State<DatabaseConnection>,
     Query(q): Query<SearchQuery>,
@@ -177,6 +197,11 @@ pub async fn similar(
     let row = item_of(&db, &q.project, &id).await?;
     let cited: Vec<String> = link::Entity::find()
         .filter(link::Column::Rid.eq(row.rid))
+        .order_by_asc(link::Column::Kind)
+        .order_by_with_nulls(link::Column::ToRid, Order::Asc, NullOrdering::First)
+        .order_by_with_nulls(link::Column::ToPath, Order::Asc, NullOrdering::First)
+        .order_by_with_nulls(link::Column::ToLine, Order::Asc, NullOrdering::First)
+        .order_by_asc(link::Column::Id)
         .all(&db)
         .await
         .map_err(|e| internal(&e))?

@@ -13,8 +13,10 @@ tokio = { workspace = true }
 
 docket-client = { path = "../docket-client" }
 docket-core = { path = "../docket-core" }
+docket-migration = { path = "../docket-migration" }
 
 [dev-dependencies]
+docket-migration = { path = "../docket-migration", features = ["scratch"] }
 axum = { workspace = true }
 docket-server = { path = "../docket-server" }
 tempfile = "3"

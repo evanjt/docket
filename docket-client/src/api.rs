@@ -335,7 +335,7 @@ impl Api {
             out.extend(self.all::<LinkRow>(
                 "/links",
                 &json!({ "rid": chunk, "kind": kind }),
-                "[\"rowid\",\"ASC\"]",
+                "[\"id\",\"ASC\"]",
             )?);
         }
         Ok(out)
@@ -351,7 +351,7 @@ impl Api {
             out.extend(self.all::<LinkRow>(
                 "/links",
                 &json!({ "to_rid": chunk, "kind": kind }),
-                "[\"rowid\",\"ASC\"]",
+                "[\"id\",\"ASC\"]",
             )?);
         }
         Ok(out)

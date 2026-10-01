@@ -1,20 +1,22 @@
 //! `GET /dump`: the rows the dump repository needs after a cursor, read in one snapshot.
 //!
-//! The cursor is the last event `seq` written. An item a write changes without an event of its own
-//! links to or waits on one with an event in that write, so the items after a cursor are those with
-//! an event and their neighbours. Every project is sent, since setting a key logs no event.
+//! The cursor is the last event `seq` written. Writes commit one at a time (`Tx::begin`), so no event
+//! below the cursor becomes visible after a page is read. An item a write changes without an event of
+//! its own links to or waits on one with an event in that write, so the items after a cursor are those
+//! with an event and their neighbours. Every project is sent, since setting a key logs no event.
 
 use std::collections::HashMap;
 
 use axum::Json;
 use axum::extract::{Query, State};
 use sea_orm::{
-    AccessMode, ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbBackend, DbErr,
-    EntityTrait, FromQueryResult, IsolationLevel, QueryOrder, TransactionTrait, Value,
+    AccessMode, ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbErr, EntityTrait,
+    FromQueryResult, IsolationLevel, QueryOrder, TransactionTrait, Value,
 };
 use serde::Deserialize;
 
 use docket_core::dump::{DumpPage, EventDump, ItemDump, ProjectDump};
+use docket_core::pyjson;
 
 use crate::entities::{item, project};
 use crate::reads::public::{Failure, internal, sql};
@@ -43,7 +45,7 @@ struct EventRow {
     kind: String,
     note: Option<String>,
     item: Option<String>,
-    data: Option<String>,
+    data: Option<serde_json::Value>,
 }
 
 #[derive(FromQueryResult)]
@@ -104,16 +106,11 @@ async fn page(db: &DatabaseConnection, since: i64) -> Result<DumpPage, DbErr> {
     Ok(page)
 }
 
-/// A read transaction that sees one snapshot for all its queries. SQLite gives that to every
-/// transaction; Postgres needs it asked for.
+/// A read transaction that sees one snapshot for all its queries.
 async fn snapshot(db: &DatabaseConnection) -> Result<DatabaseTransaction, DbErr> {
-    if db.get_database_backend() == DbBackend::Postgres {
-        let level = Some(IsolationLevel::RepeatableRead);
-        return db
-            .begin_with_config(level, Some(AccessMode::ReadOnly))
-            .await;
-    }
-    db.begin().await
+    let level = Some(IsolationLevel::RepeatableRead);
+    db.begin_with_config(level, Some(AccessMode::ReadOnly))
+        .await
 }
 
 async fn projects(tx: &DatabaseTransaction) -> Result<Vec<ProjectDump>, DbErr> {
@@ -167,7 +164,7 @@ async fn links(
 ) -> Result<HashMap<i64, (Vec<String>, Vec<String>)>, DbErr> {
     let text = format!(
         "SELECT l.rid, l.kind, t.id FROM links l JOIN items t ON t.rid = l.to_rid \
-         WHERE l.kind IN ('related', 'opened') AND l.rid IN ({rids})"
+         WHERE l.kind IN ('related', 'opened') AND l.rid IN ({rids}) ORDER BY l.rid, l.kind, l.to_rid"
     );
     let rows = LinkRow::find_by_statement(sql(&text, values))
         .all(tx)
@@ -244,7 +241,7 @@ async fn events(tx: &DatabaseTransaction, scope: &Scope) -> Result<Vec<EventDump
             kind: e.kind,
             note: e.note,
             item: e.item,
-            data: e.data,
+            data: e.data.map(|d| pyjson::dumps(&d, true)),
         })
         .collect())
 }

@@ -6,7 +6,6 @@ use sea_orm::{DatabaseConnection, FromQueryResult};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use docket_core::pyjson::data_of;
 use docket_core::word::{Facts, Kind, PRIORITIES, priority, word};
 
 use crate::reads::public::{Kinds, sql};
@@ -34,7 +33,7 @@ struct EventRow {
     branch: Option<String>,
     kind: String,
     note: Option<String>,
-    data: Option<String>,
+    data: Option<Value>,
 }
 
 /// `docket log`: one item's events, oldest first, each with its data read.
@@ -57,43 +56,52 @@ pub async fn log(
     let out: Vec<Value> = events
         .into_iter()
         .map(|e| {
-            let data = data_of(e.data.as_deref());
+            let data = e
+                .data
+                .filter(|d| d.as_object().is_some_and(|m| !m.is_empty()));
             json!({
                 "seq": e.seq, "uid": e.uid, "project": e.project, "rid": e.rid, "at": e.at,
                 "host": e.host, "branch": e.branch, "kind": e.kind, "note": e.note,
-                "data": if data.is_empty() { Value::Null } else { Value::Object(data) },
+                "data": data,
             })
         })
         .collect();
     Ok(Json(Value::Array(out)))
 }
 
-/// The queries `docket deps` reads, by the tie each names, in the order it prints them.
+/// The queries `docket deps` reads, by the tie each names, in the order it prints them. Each list
+/// comes in a fixed order: by rid, by link, or by the link's target.
 const TIES: [(&str, &str); 7] = [
     (
         "holds",
-        "SELECT * FROM items WHERE wait_item=? AND state='open'",
+        "SELECT * FROM items WHERE wait_item=? AND state='open' ORDER BY rid",
     ),
     (
         "related",
         "SELECT i.* FROM links l JOIN items i ON i.rid=l.to_rid WHERE l.rid=? AND l.kind='related' \
-         UNION SELECT i.* FROM links l JOIN items i ON i.rid=l.rid WHERE l.to_rid=? AND l.kind='related'",
+         UNION SELECT i.* FROM links l JOIN items i ON i.rid=l.rid WHERE l.to_rid=? AND l.kind='related' \
+         ORDER BY rid",
     ),
     (
         "opened_by",
-        "SELECT i.* FROM links l JOIN items i ON i.rid=l.to_rid WHERE l.rid=? AND l.kind='opened'",
+        "SELECT i.* FROM links l JOIN items i ON i.rid=l.to_rid WHERE l.rid=? AND l.kind='opened' \
+         ORDER BY l.to_rid",
     ),
     (
         "opened",
-        "SELECT i.* FROM links l JOIN items i ON i.rid=l.rid WHERE l.to_rid=? AND l.kind='opened'",
+        "SELECT i.* FROM links l JOIN items i ON i.rid=l.rid WHERE l.to_rid=? AND l.kind='opened' \
+         ORDER BY l.id",
     ),
-    ("supersedes", "SELECT * FROM items WHERE superseded_by=?"),
+    (
+        "supersedes",
+        "SELECT * FROM items WHERE superseded_by=? ORDER BY rid",
+    ),
     (
         "same_files",
         "SELECT i.*, COUNT(DISTINCT l2.to_path) AS shared FROM links l1 \
          JOIN links l2 ON l2.to_path=l1.to_path AND l2.rid<>l1.rid \
          JOIN items i ON i.rid=l2.rid WHERE l1.rid=? AND l1.kind IN ('cites_file','cites_test') \
-         GROUP BY i.rid ORDER BY shared DESC LIMIT 15",
+         GROUP BY i.rid ORDER BY shared DESC, i.rid DESC LIMIT 15",
     ),
     ("waits_on", "SELECT * FROM items WHERE rid=?"),
 ];
@@ -130,7 +138,7 @@ pub async fn deps(
     if let Some(g) = &r.group_name {
         let found = rows_with(
             &db,
-            "SELECT * FROM items WHERE project=? AND group_name=? AND rid<>?",
+            "SELECT * FROM items WHERE project=? AND group_name=? AND rid<>? ORDER BY state, rid",
             vec![q.project.clone().into(), g.clone().into(), r.rid.into()],
             &[],
         )
@@ -199,7 +207,7 @@ pub async fn context(
     }
     let holds: Vec<String> = store::column(
         &db,
-        "SELECT id FROM items WHERE wait_item=? AND state='open'",
+        "SELECT id FROM items WHERE wait_item=? AND state='open' ORDER BY rid",
         vec![r.rid.into()],
     )
     .await?;
@@ -297,7 +305,7 @@ pub async fn files(
 ) -> Result<Json<Value>, Failure> {
     let project = project_model(&db, &q.project).await?;
     let mut text = "SELECT i.*, l.to_path AS path, l.to_line AS line FROM links l JOIN items i ON i.rid=l.rid \
-                    WHERE i.project=? AND l.kind IN ('cites_file','cites_test') AND l.to_path LIKE ?"
+                    WHERE i.project=? AND l.kind IN ('cites_file','cites_test') AND l.to_path ILIKE ? ESCAPE ''"
         .to_string();
     let mut values: Vec<sea_orm::Value> =
         vec![q.project.clone().into(), format!("{}%", q.prefix).into()];
@@ -305,7 +313,7 @@ pub async fn files(
         text.push_str(" AND i.state=?");
         values.push(state.into());
     }
-    text.push_str(" ORDER BY l.to_path, l.to_line, i.num");
+    text.push_str(" ORDER BY l.to_path, l.to_line NULLS FIRST, i.num, i.state, i.rid");
     let found = rows_with(&db, &text, values, &["path", "line"]).await?;
     Ok(Json(Value::Array(shaped(&db, &project, found).await?)))
 }

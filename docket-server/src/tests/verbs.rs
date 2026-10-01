@@ -1,14 +1,13 @@
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode, header::AUTHORIZATION};
-use sea_orm::{ConnectOptions, ConnectionTrait, Database};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use crate::app;
 use crate::auth::Keys;
 
-use docket_core::SCHEMA;
+use docket_migration::scratch::Scratch as Database;
 const KEYS: &str = r#"[{"key": "T", "kind": "work", "meaning": "tasks", "turn": "agent"}, {"key": "B", "kind": "work", "meaning": "bugs", "turn": "agent"}, {"key": "Q", "kind": "decision", "meaning": "questions", "turn": "user"}, {"key": "I", "kind": "research", "meaning": "investigations", "turn": "agent"}, {"key": "A", "kind": "audit", "meaning": "audits", "turn": "agent"}, {"key": "STY", "kind": "story", "meaning": "stories", "turn": "agent"}, {"key": "CON", "kind": "concept", "meaning": "concepts", "turn": "agent"}, {"key": "CID", "kind": "idea", "meaning": "central ideas", "turn": "agent"}, {"key": "PK", "kind": "package", "meaning": "packages", "turn": "agent"}]"#;
 const SLUG: &str = "test/proj";
 const GATE: &str = "everything it opened is closed";
@@ -16,22 +15,20 @@ const GATE: &str = "everything it opened is closed";
 /// A scratch database and project, every call made as the owner on one branch unless told otherwise.
 struct Scratch {
     app: Router,
+    _db: Database,
 }
 
 impl Scratch {
     async fn new() -> Self {
-        let mut options = ConnectOptions::new("sqlite::memory:");
-        options.max_connections(1);
-        let db = Database::connect(options).await.unwrap();
-        db.execute_unprepared(SCHEMA).await.unwrap();
-        db.execute_unprepared(&format!(
+        let db = Database::new(2).await;
+        db.seed(&format!(
             "INSERT INTO projects (slug, keys, created_at, updated_at) VALUES ('{SLUG}', '{KEYS}', 'c', 'u')"
         ))
-        .await
-        .unwrap();
+        .await;
         let keys = Keys::parse("testbox owner ownerkey\nbuildbox agent agentkey").unwrap();
         Self {
-            app: app(&db, keys),
+            app: app(&db.db, keys),
+            _db: db,
         }
     }
 
@@ -621,7 +618,7 @@ async fn test_start_records_the_runner_and_job() {
         .unwrap();
     assert_eq!(
         claimed["data"],
-        r#"{"model": "gpt-5.4", "role": "build", "runner": "codex"}"#
+        json!({"model": "gpt-5.4", "role": "build", "runner": "codex"})
     );
     s.ok("release", json!({ "id": "B1" })).await;
     assert_eq!(s.item("B1").await["claim_on"], Value::Null);
@@ -751,7 +748,7 @@ async fn test_a_package_whose_members_all_closed_is_ready_for_its_review() {
         .into_iter()
         .find(|e| e["kind"] == "claimed")
         .unwrap();
-    assert_eq!(claimed["data"], r#"{"role": "review"}"#);
+    assert_eq!(claimed["data"], json!({"role": "review"}));
     s.ok(
         "close",
         json!({ "id": "PK1", "resolution": "def5678", "branch": "audit/pk1-r1" }),
@@ -801,7 +798,7 @@ async fn test_a_close_records_its_gates_and_refuses_a_bad_one() {
         .unwrap();
     assert_eq!(
         closed["data"],
-        r#"{"gates": "passed", "model": "gpt-5.4", "runner": "codex"}"#
+        json!({"gates": "passed", "model": "gpt-5.4", "runner": "codex"})
     );
     assert_eq!(closed["note"], "abc1234");
     assert_eq!(closed["branch"], "audit/t-1");
@@ -1342,7 +1339,7 @@ async fn test_add_files_to_the_inbox_outside_next() {
         .into_iter()
         .find(|e| e["kind"] == "opened")
         .unwrap();
-    assert_eq!(opened["data"], r#"{"observed_by": "b1-x"}"#);
+    assert_eq!(opened["data"], json!({"observed_by": "b1-x"}));
 }
 
 #[tokio::test]
@@ -1483,5 +1480,5 @@ async fn test_decide_appends_the_choice_and_its_basis() {
         .find(|e| e["kind"] == "decided")
         .unwrap();
     assert_eq!(decided["note"], "Keep one owner.");
-    assert_eq!(decided["data"], r#"{"derived": "CID1"}"#);
+    assert_eq!(decided["data"], json!({"derived": "CID1"}));
 }

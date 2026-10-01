@@ -479,7 +479,7 @@ async fn fold_one(call: &mut Call, into: &Item, p: &Item) -> Result<(), Failure>
     }
     let plans: Vec<i64> = column(
         &call.tx.conn,
-        "SELECT to_rid FROM links WHERE rid=? AND kind='opened' AND to_rid IS NOT NULL",
+        "SELECT to_rid FROM links WHERE rid=? AND kind='opened' AND to_rid IS NOT NULL ORDER BY to_rid",
         vec![p.rid.into()],
     )
     .await?;
@@ -488,7 +488,7 @@ async fn fold_one(call: &mut Call, into: &Item, p: &Item) -> Result<(), Failure>
     }
     let related: Vec<i64> = column(
         &call.tx.conn,
-        "SELECT to_rid FROM links WHERE rid=? AND kind='related' AND to_rid IS NOT NULL",
+        "SELECT to_rid FROM links WHERE rid=? AND kind='related' AND to_rid IS NOT NULL ORDER BY to_rid",
         vec![p.rid.into()],
     )
     .await?;
@@ -500,7 +500,7 @@ async fn fold_one(call: &mut Call, into: &Item, p: &Item) -> Result<(), Failure>
     }
     let waiters: Vec<i64> = column(
         &call.tx.conn,
-        "SELECT rid FROM items WHERE wait_item=? AND state='open'",
+        "SELECT rid FROM items WHERE wait_item=? AND state='open' ORDER BY rid",
         vec![p.rid.into()],
     )
     .await?;

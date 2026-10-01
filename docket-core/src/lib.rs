@@ -18,6 +18,3 @@ pub mod search;
 pub mod text;
 pub mod touch;
 pub mod word;
-
-/// The database every docket server opens, created on an empty file.
-pub const SCHEMA: &str = include_str!("../schema.sql");

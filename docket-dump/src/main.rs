@@ -42,11 +42,11 @@ struct Args {
     #[arg(long)]
     full: bool,
     /// Rebuild an empty database from the checkout, for disaster recovery only.
-    #[arg(long, requires = "db", conflicts_with_all = ["once", "every", "no_push", "full"])]
+    #[arg(long, conflicts_with_all = ["once", "every", "no_push", "full"])]
     restore: bool,
-    /// The database file a restore fills; created when missing.
-    #[arg(long, requires = "restore")]
-    db: Option<PathBuf>,
+    /// The Postgres database a restore fills, migrated first; `DATABASE_URL` when not given.
+    #[arg(long, requires = "restore", value_name = "URL")]
+    database_url: Option<String>,
 }
 
 fn main() -> ExitCode {
@@ -99,19 +99,20 @@ fn once(source: &impl Source, args: &Args, full: bool, host: &str) -> Result<(),
 }
 
 fn restore(args: &Args) -> Result<(), String> {
-    let db = args.db.as_ref().ok_or("--restore needs --db FILE")?;
+    let url = args
+        .database_url
+        .clone()
+        .or_else(|| env::var("DATABASE_URL").ok())
+        .ok_or("--restore needs --database-url URL or DATABASE_URL")?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|e| e.to_string())?;
-    let counts = runtime.block_on(restore::restore(&args.repo, db))?;
+    let counts = runtime.block_on(restore::restore(&args.repo, &url))?;
     git::forget_cursor(&args.repo)?;
     println!(
-        "restored {} projects, {} items and {} events into {}; the checkout's cursor is cleared, so its next pass writes every row",
-        counts.projects,
-        counts.items,
-        counts.events,
-        db.display()
+        "restored {} projects, {} items and {} events; the checkout's cursor is cleared, so its next pass writes every row",
+        counts.projects, counts.items, counts.events
     );
     Ok(())
 }

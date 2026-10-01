@@ -7,7 +7,6 @@ use serde_json::{Value, json};
 
 use docket_core::api::{AddRequest, Decided, KeyRequest, KeySet, NewRequest, Opened};
 use docket_core::item::Field;
-use docket_core::pyjson;
 use docket_core::rules::{COMPLEXITIES, default_turn, key_spec, prioritise};
 use docket_core::text::py_repr;
 use docket_core::word::{Kind, PRIORITIES};
@@ -207,7 +206,7 @@ pub async fn key(
         .execute(
             "UPDATE projects SET keys=?, updated_at=? WHERE slug=?",
             vec![
-                pyjson::dumps(&Value::Array(keys), false).into(),
+                crate::store::json(Value::Array(keys)),
                 call.ctx.now.clone().into(),
                 call.slug.clone().into(),
             ],

@@ -1,12 +1,12 @@
 use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode, header::AUTHORIZATION};
-use sea_orm::{ConnectOptions, ConnectionTrait, Database};
 use serde_json::Value;
 use tower::ServiceExt;
 
+use docket_migration::scratch::Scratch;
+
 use super::*;
 
-use docket_core::SCHEMA;
 const SEED: &str = r#"
 INSERT INTO projects (slug, keys, created_at, updated_at) VALUES ('o/p',
   '[{"key":"T","kind":"work"},{"key":"PK","kind":"package"},{"key":"CON","kind":"concept"}]', 'c', 'u');
@@ -21,16 +21,15 @@ INSERT INTO links (rid, kind, to_path, to_line) VALUES (1, 'cites_file', 'src/a.
 INSERT INTO events (uid, project, rid, at, host, kind) VALUES ('e1', 'o/p', 1, 'o1', 'devbox', 'opened');
 "#;
 
-async fn seeded() -> Router {
-    let mut options = ConnectOptions::new("sqlite::memory:");
-    options.max_connections(1);
-    let db = Database::connect(options).await.unwrap();
-    db.execute_unprepared(SCHEMA).await.unwrap();
-    db.execute_unprepared(SEED).await.unwrap();
-    app(&db, Keys::parse("devbox agent secret").unwrap())
+async fn seeded() -> (Router, Scratch) {
+    let s = Scratch::new(2).await;
+    s.seed(SEED).await;
+    (app(&s.db, Keys::parse("devbox agent secret").unwrap()), s)
 }
 
-async fn send(app: Router, method: Method, uri: &str, key: Option<&str>) -> (StatusCode, Value) {
+/// One request to a server over a freshly seeded database.
+async fn send(method: Method, uri: &str, key: Option<&str>) -> (StatusCode, Value) {
+    let (app, _db) = seeded().await;
     let mut req = Request::builder().method(method).uri(uri);
     if let Some(key) = key {
         req = req.header(AUTHORIZATION, format!("Bearer {key}"));
@@ -45,14 +44,14 @@ async fn send(app: Router, method: Method, uri: &str, key: Option<&str>) -> (Sta
 }
 
 async fn get(uri: &str) -> (StatusCode, Value) {
-    send(seeded().await, Method::GET, uri, Some("secret")).await
+    send(Method::GET, uri, Some("secret")).await
 }
 
 #[tokio::test]
 async fn test_request_without_known_key_is_401() {
     for key in [None, Some("wrong"), Some("")] {
         for uri in ["/items", "/show/T1?project=o/p", "/projects"] {
-            let (status, _) = send(seeded().await, Method::GET, uri, key).await;
+            let (status, _) = send(Method::GET, uri, key).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{uri} with {key:?}");
         }
     }
@@ -61,10 +60,10 @@ async fn test_request_without_known_key_is_401() {
 #[tokio::test]
 async fn test_health_answers_without_a_key() {
     for key in [None, Some("wrong"), Some("secret")] {
-        let (status, _) = send(seeded().await, Method::GET, "/health", key).await;
+        let (status, _) = send(Method::GET, "/health", key).await;
         assert_eq!(status, StatusCode::OK, "with {key:?}");
     }
-    let (status, _) = send(seeded().await, Method::POST, "/health", None).await;
+    let (status, _) = send(Method::POST, "/health", None).await;
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
 }
 
@@ -143,7 +142,7 @@ async fn test_no_route_accepts_a_write() {
             "/projects",
             "/show/T1?project=o/p",
         ] {
-            let (status, _) = send(seeded().await, method.clone(), uri, Some("secret")).await;
+            let (status, _) = send(method.clone(), uri, Some("secret")).await;
             assert!(
                 status == StatusCode::METHOD_NOT_ALLOWED || status == StatusCode::NOT_FOUND,
                 "{method} {uri} gave {status}"

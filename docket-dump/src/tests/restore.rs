@@ -3,12 +3,12 @@ use std::collections::BTreeMap;
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode, header::AUTHORIZATION};
-use sea_orm::ConnectOptions;
 use tower::ServiceExt;
 
 use docket_core::dump::{DumpPage, files};
+use docket_migration::scratch::Scratch;
+use docket_server::app;
 use docket_server::auth::Keys;
-use docket_server::{app, connect};
 
 use super::*;
 
@@ -41,18 +41,14 @@ async fn full_page(app: &Router) -> DumpPage {
 }
 
 /// A database with waits, links, a replacement, citations, event data and non-ASCII text.
-async fn seeded() -> Router {
-    let mut options = ConnectOptions::new("sqlite::memory:");
-    options.max_connections(1);
-    let db = Database::connect(options).await.unwrap();
-    db.execute_unprepared(SCHEMA).await.unwrap();
-    db.execute_unprepared(&format!(
+async fn seeded() -> (Router, Scratch) {
+    let db = Scratch::new(2).await;
+    db.seed(&format!(
         "INSERT INTO projects (slug, keys, skills, remotes, created_at, updated_at) VALUES \
          ('o/p', '{KEYS}', '{{\"merge\": \"r\u{e9}base\"}}', '[\"git@example.com:o/p.git\"]', 'c', 'u')"
     ))
-    .await
-    .unwrap();
-    let app = app(&db, Keys::parse("box owner k").unwrap());
+    .await;
+    let app = app(&db.db, Keys::parse("box owner k").unwrap());
     let steps = [
         (
             "new",
@@ -85,7 +81,7 @@ async fn seeded() -> Router {
         body["project"] = json!("o/p");
         call(&app, Method::POST, &format!("/do/{verb}"), Some(body)).await;
     }
-    app
+    (app, db)
 }
 
 fn write_all(repo: &Path, page: &DumpPage) {
@@ -100,11 +96,11 @@ fn as_map(page: &DumpPage) -> BTreeMap<String, String> {
 
 #[tokio::test]
 async fn test_restore_round_trips_a_full_dump() {
-    let before = full_page(&seeded().await).await;
+    let before = full_page(&seeded().await.0).await;
     let dir = tempfile::tempdir().unwrap();
     write_all(dir.path(), &before);
-    let db = dir.path().join("restored.db");
-    let counts = restore(dir.path(), &db).await.unwrap();
+    let db = Scratch::bare(2).await;
+    let counts = restore(dir.path(), &db.url()).await.unwrap();
     assert_eq!(
         counts,
         Restored {
@@ -113,11 +109,10 @@ async fn test_restore_round_trips_a_full_dump() {
             events: before.events.len()
         }
     );
-    let conn = connect(db.to_str().unwrap()).await.unwrap();
-    let after = full_page(&app(&conn, Keys::parse("box owner k").unwrap())).await;
+    let after = full_page(&app(&db.db, Keys::parse("box owner k").unwrap())).await;
     assert_eq!(as_map(&before), as_map(&after));
     let cites: i64 = scalar(
-        &conn,
+        &db.db,
         "SELECT COUNT(*) FROM links WHERE kind LIKE 'cites_%'",
         vec![],
     )
@@ -128,24 +123,23 @@ async fn test_restore_round_trips_a_full_dump() {
 
 #[tokio::test]
 async fn test_restore_refuses_a_database_that_holds_items() {
-    let page = full_page(&seeded().await).await;
+    let page = full_page(&seeded().await.0).await;
     let dir = tempfile::tempdir().unwrap();
     write_all(dir.path(), &page);
-    let db = dir.path().join("restored.db");
-    restore(dir.path(), &db).await.unwrap();
-    let refused = restore(dir.path(), &db).await.unwrap_err();
+    let db = Scratch::bare(2).await;
+    restore(dir.path(), &db.url()).await.unwrap();
+    let refused = restore(dir.path(), &db.url()).await.unwrap_err();
     assert!(refused.contains("already holds 6 items"), "{refused}");
 }
 
 #[tokio::test]
 async fn test_restore_refuses_a_reference_the_checkout_does_not_hold() {
-    let mut page = full_page(&seeded().await).await;
+    let mut page = full_page(&seeded().await.0).await;
     page.items.retain(|i| i.id != "PK1");
     let dir = tempfile::tempdir().unwrap();
     write_all(dir.path(), &page);
-    let refused = restore(dir.path(), &dir.path().join("r.db"))
-        .await
-        .unwrap_err();
+    let db = Scratch::bare(2).await;
+    let refused = restore(dir.path(), &db.url()).await.unwrap_err();
     assert!(
         refused.contains("PK1, which is not in the tree"),
         "{refused}"

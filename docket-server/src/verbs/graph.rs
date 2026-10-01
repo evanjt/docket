@@ -16,13 +16,7 @@ use docket_core::word::Kind;
 use crate::store::{ProjectRow, Tx, by_rid, column, items, sql};
 use crate::verbs::Failure;
 
-fn marks(n: usize) -> String {
-    if n == 0 {
-        "''".to_string()
-    } else {
-        vec!["?"; n].join(",")
-    }
-}
+use crate::reads::public::marks;
 
 /// The keys of the project whose kind is one of those given.
 pub fn keys_of(p: &ProjectRow, kinds: &[Kind]) -> Vec<String> {
@@ -162,7 +156,7 @@ pub async fn audits_over<C: ConnectionTrait>(
         }
         let parents: Vec<i64> = column(
             c,
-            "SELECT to_rid FROM links WHERE kind='opened' AND rid=? AND to_rid IS NOT NULL",
+            "SELECT to_rid FROM links WHERE kind='opened' AND rid=? AND to_rid IS NOT NULL ORDER BY to_rid",
             vec![rid.into()],
         )
         .await?;
@@ -250,7 +244,7 @@ pub async fn release_waiters(
     let mut out = Vec::new();
     let waiting = tx
         .items(
-            "SELECT * FROM items WHERE wait_item=? AND state=?",
+            "SELECT * FROM items WHERE wait_item=? AND state=? ORDER BY rid",
             vec![target.rid.into(), "open".into()],
         )
         .await?;
@@ -410,7 +404,8 @@ async fn similar_terms<C: ConnectionTrait>(c: &C, r: &Item) -> Result<Vec<String
     }
     let cited: Vec<String> = column(
         c,
-        "SELECT to_path FROM links WHERE rid=? AND kind IN ('cites_file', 'cites_test')",
+        "SELECT to_path FROM links WHERE rid=? AND kind IN ('cites_file', 'cites_test') \
+         ORDER BY kind, to_path, to_line NULLS FIRST, id",
         vec![r.rid.into()],
     )
     .await?;
@@ -449,28 +444,15 @@ pub async fn similar_rows<C: ConnectionTrait>(
     if terms.is_empty() {
         return Ok(Vec::new());
     }
-    let q = terms
-        .iter()
-        .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
-        .collect::<Vec<_>>()
-        .join(" OR ");
-    let mut text = "SELECT i.* FROM items_fts CROSS JOIN items i ON i.rid = items_fts.rowid \
-                    WHERE items_fts MATCH ? AND i.project=?"
-        .to_string();
-    let mut values: Vec<Value> = vec![q.clone().into(), slug.into()];
-    if let Some(state) = state {
-        text.push_str(" AND i.state=?");
-        values.push(state.into());
-    }
-    text.push_str(" AND i.rid<>? ORDER BY bm25(items_fts, 4.0, 8.0, 1.0, 2.0) LIMIT ?");
-    values.push(r.rid.into());
-    values.push(n.into());
-    items(c, &text, values).await.map_err(|e| {
-        Failure::Refused(format!(
-            "search could not parse {}: {e}",
-            docket_core::text::py_repr(&q)
-        ))
-    })
+    let q = docket_core::search::any_of(&terms);
+    let narrow = crate::reads::search::Narrow {
+        state: state.map(str::to_string),
+        exclude: Some(r.rid),
+        n,
+        ..crate::reads::search::Narrow::default()
+    };
+    let (text, values) = crate::reads::search::ranked(slug, &q, &narrow);
+    Ok(items(c, &text, values).await?)
 }
 
 /// Questions already decided, open or done, closest to r: the prior decisions an agent derives from.

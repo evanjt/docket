@@ -1,14 +1,14 @@
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header::AUTHORIZATION};
-use sea_orm::{ConnectOptions, ConnectionTrait, Database};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use crate::app;
 use crate::auth::Keys;
 
-use docket_core::SCHEMA;
+use docket_migration::scratch::Scratch;
+
 const SEED: &str = r#"
 INSERT INTO projects (slug, keys, themes, skills, created_at, updated_at) VALUES ('o/p',
   '[{"key":"T","kind":"work"},{"key":"Q","kind":"decision"},{"key":"A","kind":"audit"},
@@ -42,19 +42,16 @@ INSERT INTO links (rid, kind, to_rid) VALUES
 INSERT INTO links (rid, kind, to_path, to_line) VALUES (17, 'cites_file', 'src/sync.py', 3);
 INSERT INTO events (uid, project, rid, at, host, kind, note, data) VALUES
   ('e1', 'o/p', 1, 'e01', 'devbox', 'decided', 'chose X', '{"derived": "CID2"}');
-INSERT INTO items_fts (rowid, id, title, body, files) VALUES
+INSERT INTO search (rid, id, title, body, files) VALUES
   (1, 'T1', 'Plain fix thing', '', ''),
   (13, 'T9', 'Held theme', 'sync', ''),
   (17, 'T11', 'Synced thing', 'the sync queue body', 'src/sync.py');
 "#;
 
-async fn seeded() -> Router {
-    let mut options = ConnectOptions::new("sqlite::memory:");
-    options.max_connections(1);
-    let db = Database::connect(options).await.unwrap();
-    db.execute_unprepared(SCHEMA).await.unwrap();
-    db.execute_unprepared(SEED).await.unwrap();
-    app(&db, Keys::parse("devbox agent secret").unwrap())
+async fn seeded() -> (Router, Scratch) {
+    let s = Scratch::new(2).await;
+    s.seed(SEED).await;
+    (app(&s.db, Keys::parse("devbox agent secret").unwrap()), s)
 }
 
 async fn get(path: &str) -> (StatusCode, Value) {
@@ -68,7 +65,8 @@ async fn get(path: &str) -> (StatusCode, Value) {
         .header(AUTHORIZATION, "Bearer secret")
         .body(Body::empty())
         .unwrap();
-    let resp = seeded().await.oneshot(req).await.unwrap();
+    let (app, _db) = seeded().await;
+    let resp = app.oneshot(req).await.unwrap();
     let status = resp.status();
     let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     (
@@ -216,8 +214,8 @@ async fn test_search_ranks_with_snippets_and_refuses_bad_queries() {
     );
     assert_eq!(get("/search?q=%20").await.0, StatusCode::BAD_REQUEST);
     assert_eq!(
-        get("/search?q=(((&raw=true").await.0,
-        StatusCode::BAD_REQUEST
+        get("/search?q=(((&raw=true").await,
+        (StatusCode::OK, json!([]))
     );
     assert_eq!(
         get("/search?q=a&state=closed").await.0,
@@ -235,4 +233,41 @@ async fn test_similar_matches_title_words_and_cited_files_and_skips_itself() {
     let (_, rows) = get("/similar/T11").await;
     assert!(rows[0].get("snippet").is_none());
     assert!(rows[0]["snip"].is_string());
+}
+
+#[tokio::test]
+async fn test_search_finds_each_part_of_a_path_a_hyphenated_word_and_text_in_brackets() {
+    let (app, db) = seeded().await;
+    db.seed(
+        "INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, opened_at, updated_at) \
+         VALUES (30, 'o/p', 'T', 30, 'Parts', 'open', 'agent', '[]', 'x', 'o30', 'u30'); \
+         INSERT INTO search (rid, id, title, body, files) VALUES (30, 'T30', 'Parts', \
+         'Reads `web/src/a.rs:4`, the Content-Range header and <b>bold words</b> at user@host.', 'web/src/a.rs')",
+    )
+    .await;
+    for q in [
+        "a.rs",
+        "web/src",
+        "src/a.rs:4",
+        "range",
+        "bold",
+        "words",
+        "host",
+    ] {
+        let req = Request::builder()
+            .uri(format!("/search?project=o/p&q={q}"))
+            .header(AUTHORIZATION, "Bearer secret")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let found: Value = serde_json::from_slice(&bytes).unwrap();
+        let ids: Vec<&str> = found
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|r| r["id"].as_str())
+            .collect();
+        assert!(ids.contains(&"T30"), "{q}: {found}");
+    }
 }

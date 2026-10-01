@@ -1,14 +1,12 @@
 use std::net::SocketAddr;
 use std::sync::mpsc;
 
-use sea_orm::{ConnectOptions, ConnectionTrait, Database};
-
+use docket_migration::scratch::Scratch;
 use docket_server::app;
 use docket_server::auth::Keys;
 
 use super::*;
 
-use docket_core::SCHEMA;
 const SEED: &str = r#"
 INSERT INTO projects (slug, keys, themes, skills, created_at, updated_at) VALUES ('o/p',
   '[{"key":"T","kind":"work","meaning":"tasks","turn":"agent"},{"key":"Q","kind":"decision"},
@@ -24,32 +22,66 @@ INSERT INTO events (uid, project, rid, at, host, kind, note) VALUES
   ('e1', 'o/p', 1, '2026-01-01T00:00:00Z', 'devbox', 'opened', NULL),
   ('e2', 'o/p', 1, '2026-01-01T00:01:00Z', 'devbox', 'edited', 'title'),
   ('e3', 'o/p', 3, '2026-01-01T00:02:00Z', 'devbox', 'asked', 'pick one');
-INSERT INTO items_fts (rowid, id, title, body, files) VALUES (1, 'T1', 'Fix the sync', 'Body naming PK1', '');
+INSERT INTO search (rid, id, title, body, files) VALUES (1, 'T1', 'Fix the sync', 'Body naming PK1', '');
 "#;
 
-/// A server on a free port over a seeded in-memory database, alive for the rest of the test run.
-fn served() -> Api {
+/// A server on a free port over a seeded database of its own. Dropping it stops the server and
+/// drops the database.
+struct Served {
+    api: Api,
+    stop: Option<tokio::sync::oneshot::Sender<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl std::ops::Deref for Served {
+    type Target = Api;
+
+    fn deref(&self) -> &Api {
+        &self.api
+    }
+}
+
+impl Drop for Served {
+    fn drop(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            stop.send(()).ok();
+        }
+        if let Some(thread) = self.thread.take() {
+            thread.join().ok();
+        }
+    }
+}
+
+fn served() -> Served {
     let (tx, rx) = mpsc::channel::<SocketAddr>();
-    std::thread::spawn(move || {
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let thread = std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            let mut options = ConnectOptions::new("sqlite::memory:");
-            options.max_connections(1);
-            let db = Database::connect(options).await.unwrap();
-            db.execute_unprepared(SCHEMA).await.unwrap();
-            db.execute_unprepared(SEED).await.unwrap();
+            let db = Scratch::new(2).await;
+            db.seed(SEED).await;
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             tx.send(listener.local_addr().unwrap()).unwrap();
-            let routes = app(&db, Keys::parse("devbox owner secret").unwrap());
-            axum::serve(listener, routes).await.unwrap();
+            let routes = app(&db.db, Keys::parse("devbox owner secret").unwrap());
+            axum::serve(listener, routes)
+                .with_graceful_shutdown(async {
+                    stopped.await.ok();
+                })
+                .await
+                .unwrap();
         });
     });
     let addr = rx.recv().unwrap();
-    Api::new(&Config {
+    let api = Api::new(&Config {
         server: format!("http://{addr}"),
         key: "secret".into(),
     })
-    .unwrap()
+    .unwrap();
+    Served {
+        api,
+        stop: Some(stop),
+        thread: Some(thread),
+    }
 }
 
 #[test]

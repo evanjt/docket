@@ -117,7 +117,7 @@ async fn claim_row(
         req.on.clone().into(),
         call.ctx.now.clone().into(),
         r.rid.into(),
-        i64::from(call.ctx.force).into(),
+        call.ctx.force.into(),
     ];
     let rows = call
         .tx
@@ -156,7 +156,7 @@ async fn started(call: &Call, row: &Item, review: bool) -> Result<Started, Failu
         match &row.group_name {
             Some(g) => crate::store::column(
                 c,
-                "SELECT id FROM items WHERE project=? AND group_name=? AND rid<>? AND state='open'",
+                "SELECT id FROM items WHERE project=? AND group_name=? AND rid<>? AND state='open' ORDER BY rid",
                 vec![call.slug.clone().into(), g.clone().into(), row.rid.into()],
             )
             .await?,

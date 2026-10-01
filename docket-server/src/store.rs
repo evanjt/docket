@@ -3,8 +3,8 @@
 use std::collections::BTreeSet;
 
 use sea_orm::{
-    ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbBackend, DbErr, FromQueryResult,
-    SqliteTransactionMode, Statement, TransactionOptions, TransactionTrait, Value,
+    ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbErr, FromQueryResult, Statement,
+    TransactionTrait, Value,
 };
 use serde_json::Value as Json;
 
@@ -13,6 +13,7 @@ use docket_core::item::{Field, Item, KeySpec, Project, Refused};
 use docket_core::pyjson;
 use docket_core::text::{citations, split_id};
 
+use crate::changes::CHANNEL;
 use crate::entities::{item, project};
 use crate::verbs::Failure;
 
@@ -81,8 +82,18 @@ pub fn project_row(m: project::Model) -> ProjectRow {
     }
 }
 
+/// The advisory lock every write transaction holds, so writes commit one at a time and their events
+/// become visible in `seq` order.
+const WRITES: i64 = 0x0064_6f63_6b65_7401;
+
+/// A statement for text written with `?` marks.
 pub fn sql(text: &str, values: Vec<Value>) -> Statement {
-    Statement::from_sql_and_values(DbBackend::Sqlite, text, values)
+    docket_migration::statement(text, values)
+}
+
+/// A JSON value to bind to a `jsonb` column.
+pub fn json(value: Json) -> Value {
+    Value::Json(Some(Box::new(value)))
 }
 
 /// Item rows for a query, each as the rules read it.
@@ -199,15 +210,10 @@ fn column_of(f: &Field) -> (&'static str, Value) {
         Field::GroupName(v) => ("group_name", v.into()),
         Field::Theme(v) => ("theme", v.into()),
         Field::Rank(v) => ("rank", v.into()),
-        Field::Tags(v) => ("tags", tags_text(&v).into()),
+        Field::Tags(v) => ("tags", json(serde_json::json!(v))),
         Field::Body(v) => ("body", v.into()),
         Field::Conflict(v) => ("conflict", v.into()),
     }
-}
-
-/// Tags as the Python writer stores them.
-pub fn tags_text(tags: &[String]) -> String {
-    pyjson::dumps(&serde_json::json!(tags), false)
 }
 
 /// The columns a new item is inserted with.
@@ -226,7 +232,7 @@ pub struct NewItem {
     pub tags: Vec<String>,
 }
 
-/// One command's transaction: BEGIN IMMEDIATE, the writes, the dump marks, COMMIT.
+/// One command's transaction: the write lock, the writes, the dump marks, the change notice, COMMIT.
 pub struct Tx {
     pub conn: DatabaseTransaction,
     pub host: String,
@@ -237,11 +243,8 @@ pub struct Tx {
 
 impl Tx {
     pub async fn begin(db: &DatabaseConnection, host: &str) -> Result<Self, DbErr> {
-        let tx = db
-            .begin_with_options(TransactionOptions {
-                sqlite_transaction_mode: Some(SqliteTransactionMode::Immediate),
-                ..TransactionOptions::default()
-            })
+        let tx = db.begin().await?;
+        tx.execute_unprepared(&format!("SELECT pg_advisory_xact_lock({WRITES})"))
             .await?;
         Ok(Self {
             conn: tx,
@@ -256,8 +259,16 @@ impl Tx {
         project(&self.conn, slug).await
     }
 
+    /// An item by id, its row locked until the transaction ends.
     pub async fn item(&self, slug: &str, id: &str) -> Result<Item, Failure> {
-        item_of(&self.conn, slug, id).await
+        let (key, num) = split_id(id)?;
+        item_row(
+            &self.conn,
+            "SELECT * FROM items WHERE project=? AND key=? AND num=? FOR UPDATE",
+            vec![slug.into(), key.clone().into(), num.into()],
+        )
+        .await?
+        .ok_or_else(|| Failure::NotFound(format!("no item {key}{num} in {slug}")))
     }
 
     pub async fn by_rid(&self, rid: i64) -> Result<Option<Item>, DbErr> {
@@ -329,7 +340,7 @@ impl Tx {
             cols.theme.into(),
             cols.group_name.into(),
             cols.scope.into(),
-            tags_text(&cols.tags).into(),
+            json(serde_json::json!(cols.tags)),
             self.now.clone().into(),
             self.now.clone().into(),
         ];
@@ -341,7 +352,13 @@ impl Tx {
         Ok(row)
     }
 
+    /// The next number under a key, the key locked until the transaction ends.
     pub async fn next_num(&self, slug: &str, key: &str) -> Result<i64, DbErr> {
+        self.execute(
+            "SELECT pg_advisory_xact_lock(hashtext(?), hashtext(?))",
+            vec![slug.into(), key.into()],
+        )
+        .await?;
         Ok(scalar::<_, i64>(
             &self.conn,
             "SELECT COALESCE(MAX(num), 0) + 1 FROM items WHERE project=? AND key=?",
@@ -362,7 +379,7 @@ impl Tx {
         let cites = citations(&r.body);
         for c in &cites {
             self.execute(
-                "INSERT OR IGNORE INTO links (rid, kind, to_path, to_line) VALUES (?, ?, ?, ?)",
+                "INSERT INTO links (rid, kind, to_path, to_line) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
                 vec![
                     rid.into(),
                     c.kind.into(),
@@ -375,10 +392,10 @@ impl Tx {
         let mut files: Vec<&str> = cites.iter().map(|c| c.path.as_str()).collect();
         files.sort_unstable();
         files.dedup();
-        self.execute("DELETE FROM items_fts WHERE rowid=?", vec![rid.into()])
-            .await?;
         self.execute(
-            "INSERT INTO items_fts (rowid, id, title, body, files) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO search (rid, id, title, body, files) VALUES (?, ?, ?, ?, ?) \
+             ON CONFLICT (rid) DO UPDATE SET id=EXCLUDED.id, title=EXCLUDED.title, body=EXCLUDED.body, \
+             files=EXCLUDED.files",
             vec![
                 rid.into(),
                 r.id.into(),
@@ -403,7 +420,7 @@ impl Tx {
     ) -> Result<(), DbErr> {
         let data = data
             .filter(|d| d.as_object().is_some_and(|m| !m.is_empty()))
-            .map(|d| pyjson::dumps(d, true));
+            .map_or(Value::Json(None), |d| json(d.clone()));
         let uid = format!(
             "{}-{}-{:06x}",
             self.now,
@@ -422,7 +439,7 @@ impl Tx {
                 branch.map(str::to_string).into(),
                 kind.into(),
                 note.map(str::to_string).into(),
-                data.into(),
+                data,
             ],
         )
         .await?;
@@ -446,11 +463,11 @@ impl Tx {
         } else {
             let have: Option<i64> = scalar(
                 &self.conn,
-                "SELECT 1 FROM links WHERE rid=? AND kind=? AND to_rid=?",
+                "SELECT COUNT(*) FROM links WHERE rid=? AND kind=? AND to_rid=?",
                 vec![rid.into(), kind.into(), to_rid.into()],
             )
             .await?;
-            if have.is_none() {
+            if have.unwrap_or(0) == 0 {
                 self.execute(
                     "INSERT INTO links (rid, kind, to_rid) VALUES (?, ?, ?)",
                     vec![rid.into(), kind.into(), to_rid.into()],
@@ -462,12 +479,13 @@ impl Tx {
         Ok(())
     }
 
-    /// The dump marks for every row touched, then COMMIT.
+    /// The dump marks for every row touched, the change notice, then COMMIT.
     pub async fn commit(self) -> Result<(), DbErr> {
         for rid in &self.touched {
             if let Some(r) = self.by_rid(*rid).await? {
                 self.execute(
-                    "INSERT OR REPLACE INTO pending_dump (rid, project) VALUES (?, ?)",
+                    "INSERT INTO pending_dump (rid, project) VALUES (?, ?) \
+                     ON CONFLICT (rid) DO UPDATE SET project=EXCLUDED.project",
                     vec![(*rid).into(), r.project.into()],
                 )
                 .await?;
@@ -485,11 +503,15 @@ impl Tx {
                 .unwrap_or_default();
             slugs.extend(self.touched_projects.iter().cloned());
             self.execute(
-                "INSERT OR REPLACE INTO meta (k, v) VALUES ('pending_dump_projects', ?)",
+                "INSERT INTO meta (k, v) VALUES ('pending_dump_projects', ?) \
+                 ON CONFLICT (k) DO UPDATE SET v=EXCLUDED.v",
                 vec![pyjson::dumps(&serde_json::json!(slugs), false).into()],
             )
             .await?;
         }
+        self.conn
+            .execute_unprepared(&format!("NOTIFY {CHANNEL}"))
+            .await?;
         self.conn.commit().await
     }
 }
@@ -505,3 +527,7 @@ impl From<DbErr> for Failure {
         Failure::Db(e)
     }
 }
+
+#[cfg(test)]
+#[path = "tests/store.rs"]
+mod tests;

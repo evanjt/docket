@@ -4,13 +4,12 @@ use std::collections::HashMap;
 
 use axum::Json;
 use axum::extract::{Extension, Query, State};
-use sea_orm::{ConnectionTrait, DatabaseConnection, FromQueryResult};
+use sea_orm::{DatabaseConnection, FromQueryResult};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use docket_core::clock::stamp;
 use docket_core::pace::epoch;
-use docket_core::pyjson::data_of;
 use docket_core::queue::release_of;
 use docket_core::rules::GATE;
 use docket_core::word::{Kind, word};
@@ -81,14 +80,19 @@ fn bump(pairs: &mut Vec<(String, u64)>, word: &str) {
     }
 }
 
-/// The word of every item of a project, in the order `SELECT * FROM items WHERE project=?` reads them.
+/// The word of every item of a project, by state then rid.
 async fn words(
     db: &DatabaseConnection,
     slug: &str,
     kinds: &Kinds,
 ) -> Result<Vec<(crate::entities::item::Model, String)>, Failure> {
     let open = open_members(db, slug).await?;
-    let found = rows(db, "SELECT * FROM items WHERE project=?", vec![slug.into()]).await?;
+    let found = rows(
+        db,
+        "SELECT * FROM items WHERE project=? ORDER BY state, rid",
+        vec![slug.into()],
+    )
+    .await?;
     Ok(found
         .into_iter()
         .map(|r| {
@@ -168,7 +172,7 @@ pub async fn problems(db: &DatabaseConnection, slug: &str) -> Result<Vec<Value>,
     let mut out = Vec::new();
     let conflicts: Vec<String> = column(
         db,
-        "SELECT id FROM items WHERE project=? AND conflict=1",
+        "SELECT id FROM items WHERE project=? AND conflict=1 ORDER BY state, rid",
         vec![slug.into()],
     )
     .await?;
@@ -186,7 +190,7 @@ pub async fn problems(db: &DatabaseConnection, slug: &str) -> Result<Vec<Value>,
     let stale = rows(
         db,
         "SELECT * FROM items WHERE project=? AND state='open' AND wait_on='condition' AND wait_since < ? \
-         AND wait_ref<>?",
+         AND wait_ref<>? ORDER BY rid",
         vec![slug.into(), cutoff.clone().into(), GATE.into()],
     )
     .await?;
@@ -198,7 +202,7 @@ pub async fn problems(db: &DatabaseConnection, slug: &str) -> Result<Vec<Value>,
     }));
     let bare: Vec<String> = column(
         db,
-        "SELECT id FROM items WHERE project=? AND state='open' AND body='' AND opened_at < ?",
+        "SELECT id FROM items WHERE project=? AND state='open' AND body='' AND opened_at < ? ORDER BY rid",
         vec![slug.into(), cutoff[..10].to_string().into()],
     )
     .await?;
@@ -250,25 +254,41 @@ async fn undefined_keys(
         .collect())
 }
 
+/// The indexes Postgres cannot use and the check constraints it has not validated, by name; then the
+/// foreign keys it has not validated, which may hold rows that break them.
 async fn database_checks(db: &DatabaseConnection) -> Result<Vec<Value>, Failure> {
     let mut out = Vec::new();
-    let ic: Option<String> = store::scalar(db, "PRAGMA integrity_check", vec![]).await?;
-    if let Some(ic) = ic.filter(|v| v != "ok") {
-        out.push(problem("integrity", json!({ "result": ic })));
+    let broken: Vec<String> = column(db, BROKEN, vec![]).await?;
+    if !broken.is_empty() {
+        out.push(problem("integrity", json!({ "result": broken.join(", ") })));
     }
-    let fk = db
-        .query_all_raw(sql("PRAGMA foreign_key_check", vec![]))
-        .await?;
-    if !fk.is_empty() {
-        out.push(problem("foreign_keys", json!({ "n": fk.len() })));
+    let unchecked: i64 = store::scalar(
+        db,
+        "SELECT COUNT(*) FROM pg_constraint k JOIN pg_namespace n ON n.oid = k.connamespace \
+         WHERE n.nspname = current_schema() AND k.contype = 'f' AND NOT k.convalidated",
+        vec![],
+    )
+    .await?
+    .unwrap_or(0);
+    if unchecked > 0 {
+        out.push(problem("foreign_keys", json!({ "n": unchecked })));
     }
     Ok(out)
 }
 
+/// Invalid or unready indexes and unvalidated check constraints in the server's schema.
+const BROKEN: &str = "SELECT 'index ' || c.relname FROM pg_index x JOIN pg_class c ON c.oid = x.indexrelid \
+     JOIN pg_namespace n ON n.oid = c.relnamespace \
+     WHERE n.nspname = current_schema() AND NOT (x.indisvalid AND x.indisready) \
+     UNION ALL SELECT 'constraint ' || k.conname FROM pg_constraint k \
+     JOIN pg_namespace n ON n.oid = k.connamespace \
+     WHERE n.nspname = current_schema() AND k.contype = 'c' AND NOT k.convalidated \
+     ORDER BY 1";
+
 async fn cycles(db: &DatabaseConnection, slug: &str) -> Result<Vec<Value>, Failure> {
     let waiting = rows(
         db,
-        "SELECT * FROM items WHERE project=? AND state='open' AND wait_on='item'",
+        "SELECT * FROM items WHERE project=? AND state='open' AND wait_on='item' ORDER BY rid",
         vec![slug.into()],
     )
     .await?;
@@ -347,7 +367,7 @@ async fn audits_held(
 ) -> Result<Vec<Value>, Failure> {
     let open: Vec<i64> = column(
         db,
-        "SELECT rid FROM items WHERE project=? AND state='open'",
+        "SELECT rid FROM items WHERE project=? AND state='open' ORDER BY rid",
         vec![slug.into()],
     )
     .await?;
@@ -396,7 +416,8 @@ pub async fn graph(
         })
         .collect();
     let links = LinkRow::find_by_statement(sql(
-        "SELECT l.* FROM links l JOIN items i ON i.rid=l.rid WHERE i.project=?",
+        "SELECT l.* FROM links l JOIN items i ON i.rid=l.rid WHERE i.project=? ORDER BY i.state, i.rid, \
+         l.kind, l.to_rid NULLS FIRST, l.to_path NULLS FIRST, l.to_line NULLS FIRST, l.id",
         vec![q.project.clone().into()],
     ))
     .all(&db)
@@ -444,7 +465,7 @@ pub async fn shares(
         text.push_str(" AND claim_host=?");
         values.push(host.into());
     }
-    text.push_str(" ORDER BY claim_since");
+    text.push_str(" ORDER BY claim_since, rid");
     let claimed = rows(&db, &text, values).await?;
     let flags = idle_flags(&db, &q.project, &model, &claimed).await?;
     let mut out = Vec::new();
@@ -632,7 +653,7 @@ async fn held_themes(
 struct HourEvent {
     kind: String,
     at: String,
-    data: Option<String>,
+    data: Option<Value>,
 }
 
 /// The tickets observed by fleet jobs and the tickets closed in the last hour.
@@ -650,8 +671,9 @@ async fn last_hour(db: &DatabaseConnection, slug: &str, now: i64) -> Result<Valu
         .iter()
         .filter(|e| e.kind == "opened" && e.at >= hour)
         .filter(|e| {
-            data_of(e.data.as_deref())
-                .get("observed_by")
+            e.data
+                .as_ref()
+                .and_then(|d| d.get("observed_by"))
                 .is_some_and(truthy)
         })
         .count();
@@ -751,8 +773,7 @@ async fn jobs(
     model: &crate::entities::project::Model,
     project: &store::ProjectRow,
 ) -> Result<Value, Failure> {
-    let text =
-        "SELECT * FROM items WHERE project=? AND claim_branch IS NOT NULL ORDER BY claim_since";
+    let text = "SELECT * FROM items WHERE project=? AND claim_branch IS NOT NULL ORDER BY claim_since, rid";
     let claims = ClaimRow::find_by_statement(sql(text, vec![slug.into()]))
         .all(db)
         .await?;
@@ -760,14 +781,17 @@ async fn jobs(
     let flags = idle_flags(db, slug, model, &claimed).await?;
     let mut out = Vec::new();
     for c in claims {
-        let data: Option<String> = store::scalar(
+        let data: Option<Value> = store::scalar(
             db,
             "SELECT data FROM events WHERE rid=? AND kind='claimed' ORDER BY at DESC, seq DESC LIMIT 1",
             vec![c.rid.into()],
         )
         .await?
         .flatten();
-        let d = data_of(data.as_deref());
+        let d = match data {
+            Some(Value::Object(m)) => m,
+            _ => Map::new(),
+        };
         let host = c
             .claim_on
             .clone()
@@ -795,7 +819,7 @@ async fn jobs(
 /// Every claim's id and when it was made, in the order the stalled list reads them.
 async fn claims(db: &DatabaseConnection, slug: &str) -> Result<Value, Failure> {
     let found = ClaimRow::find_by_statement(sql(
-        "SELECT * FROM items WHERE project=? AND state='open' AND claim_branch IS NOT NULL",
+        "SELECT * FROM items WHERE project=? AND state='open' AND claim_branch IS NOT NULL ORDER BY rid",
         vec![slug.into()],
     ))
     .all(db)
@@ -825,7 +849,7 @@ async fn packages(
     let found = rows(
         db,
         &format!(
-            "SELECT * FROM items WHERE project=? AND state='open' AND key IN ({})",
+            "SELECT * FROM items WHERE project=? AND state='open' AND key IN ({}) ORDER BY rid",
             vec!["?"; pk_sorted.len()].join(",")
         ),
         values,

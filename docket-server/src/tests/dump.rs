@@ -3,12 +3,12 @@ use std::collections::BTreeMap;
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode, header::AUTHORIZATION};
-use sea_orm::{ConnectOptions, ConnectionTrait, Database};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-use docket_core::SCHEMA;
 use docket_core::dump::{DumpPage, commit_subject, files, messages, page_messages};
+
+use docket_migration::scratch::Scratch;
 
 use crate::app;
 use crate::auth::Keys;
@@ -22,25 +22,23 @@ struct Dumped {
     files: BTreeMap<String, String>,
     cursor: i64,
     named: Vec<String>,
+    _db: Scratch,
 }
 
 impl Dumped {
     async fn new() -> Self {
-        let mut options = ConnectOptions::new("sqlite::memory:");
-        options.max_connections(1);
-        let db = Database::connect(options).await.unwrap();
-        db.execute_unprepared(SCHEMA).await.unwrap();
-        db.execute_unprepared(&format!(
+        let db = Scratch::new(2).await;
+        db.seed(&format!(
             "INSERT INTO projects (slug, keys, created_at, updated_at) VALUES ('{SLUG}', '{KEYS}', 'c', 'u')"
         ))
-        .await
-        .unwrap();
+        .await;
         let keys = Keys::parse("testbox owner ownerkey").unwrap();
         let mut d = Self {
-            app: app(&db, keys),
+            app: app(&db.db, keys),
             files: BTreeMap::new(),
             cursor: 0,
             named: Vec::new(),
+            _db: db,
         };
         d.take(0).await;
         d

@@ -1006,9 +1006,9 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "docket-core",
+ "docket-migration",
  "docket-server",
  "reqwest",
- "sea-orm",
  "serde",
  "serde_json",
  "tokio",
@@ -1031,6 +1031,7 @@ dependencies = [
  "clap",
  "docket-client",
  "docket-core",
+ "docket-migration",
  "docket-server",
  "sea-orm",
  "serde_json",
@@ -1055,6 +1056,7 @@ dependencies = [
  "axum",
  "crudcrate",
  "docket-core",
+ "docket-migration",
  "futures-util",
  "rand 0.9.5",
  "regex",
@@ -1881,7 +1883,6 @@ version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b1f111c8c41e7c61a49cd34e44c7619462967221a6443b0ec299e0ac30cfb9b1"
 dependencies = [
- "cc",
  "pkg-config",
  "vcpkg",
 ]

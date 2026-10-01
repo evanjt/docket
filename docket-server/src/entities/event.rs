@@ -25,7 +25,7 @@ pub struct Model {
     #[crudcrate(filterable)]
     pub kind: String,
     pub note: Option<String>,
-    pub data: Option<String>,
+    pub data: Option<serde_json::Value>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

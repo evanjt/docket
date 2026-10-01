@@ -109,7 +109,7 @@ pub async fn project_model(db: &DatabaseConnection, slug: &str) -> Result<projec
         .ok_or_else(|| Failure::NotFound(format!("no project {slug}")))
 }
 
-/// `?,?,?` for n values, `''` when there are none.
+/// `?,?,?` for n values, `NULL` when there are none.
 #[must_use]
 pub fn marks(n: usize) -> String {
     crate::reads::public::marks(n)

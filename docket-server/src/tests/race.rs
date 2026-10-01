@@ -1,41 +1,32 @@
 //! Scenario: several machines reach for the same item at the same moment, through separate connections
-//! to one database file.
+//! to one database.
 //! Expected behaviour: exactly one claim wins, and every filed item gets its own id.
 
 use std::collections::HashSet;
-use std::path::PathBuf;
 
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header::AUTHORIZATION};
-use sea_orm::ConnectionTrait;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+use docket_migration::scratch::Scratch;
+
 use super::*;
 
-use docket_core::SCHEMA;
 const RACERS: usize = 64;
 
-fn scratch_file(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("docket-race-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("docket.db");
-    std::fs::File::create(&path).unwrap();
-    path
-}
-
-async fn file_app(name: &str) -> Router {
-    let path = scratch_file(name);
-    let db = connect(path.to_str().unwrap()).await.unwrap();
-    db.execute_unprepared(SCHEMA).await.unwrap();
-    db.execute_unprepared(
+/// A server over a database of its own, with as many connections as the server opens.
+async fn served() -> (Router, Scratch) {
+    let s = Scratch::new(CONNECTIONS).await;
+    s.seed(
         r#"INSERT INTO projects (slug, keys, created_at, updated_at) VALUES ('o/p',
            '[{"key": "T", "kind": "work", "meaning": "tasks", "turn": "agent"}]', 'c', 'u')"#,
     )
-    .await
-    .unwrap();
-    app(&db, Keys::parse("testbox owner ownerkey").unwrap())
+    .await;
+    (
+        app(&s.db, Keys::parse("testbox owner ownerkey").unwrap()),
+        s,
+    )
 }
 
 async fn post(app: Router, verb: &'static str, body: Value) -> (StatusCode, Value) {
@@ -68,7 +59,7 @@ async fn race(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_concurrent_claims_one_wins() {
-    let app = file_app("claims").await;
+    let (app, _db) = served().await;
     let (status, _) = post(
         app.clone(),
         "new",
@@ -93,7 +84,7 @@ async fn test_concurrent_claims_one_wins() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_concurrent_new_items_get_distinct_ids() {
-    let app = file_app("ids").await;
+    let (app, _db) = served().await;
     let results = race(
         &app,
         "new",

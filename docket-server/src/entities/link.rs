@@ -9,10 +9,9 @@ use sea_orm::entity::prelude::*;
     generate_router
 )]
 pub struct Model {
-    // The table declares no key, so SQLite's own row id identifies a link.
-    #[sea_orm(primary_key, column_name = "rowid")]
+    #[sea_orm(primary_key)]
     #[crudcrate(primary_key, sortable)]
-    pub rowid: i64,
+    pub id: i64,
     #[crudcrate(filterable)]
     pub rid: i64,
     #[crudcrate(filterable)]

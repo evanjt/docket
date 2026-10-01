@@ -20,8 +20,10 @@ utoipa = { workspace = true }
 utoipa-axum = { workspace = true }
 
 docket-core = { path = "../docket-core" }
+docket-migration = { path = "../docket-migration" }
 
 [dev-dependencies]
+docket-migration = { path = "../docket-migration", features = ["scratch"] }
 tower = { workspace = true }
 
 [lints]

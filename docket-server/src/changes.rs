@@ -9,15 +9,17 @@ use axum::extract::State;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::routing::get;
 use futures_util::stream::{self, Stream};
-use sea_orm::{
-    ConnectOptions, ConnectionTrait, Database, DatabaseConnection, DbBackend, Statement,
-};
+use sea_orm::DatabaseConnection;
+use sea_orm::sqlx::postgres::PgListener;
 use tokio::sync::{OnceCell, watch};
 
-/// How often the watcher asks SQLite whether another connection committed.
-pub const EVERY: Duration = Duration::from_millis(500);
+/// The channel every write transaction notifies as it commits.
+pub const CHANNEL: &str = "docket_changes";
 
-/// One watcher per server, started by the first subscriber and shared by every later one.
+/// How long the watcher waits before listening again after its connection fails.
+const RETRY: Duration = Duration::from_secs(1);
+
+/// One listener per server, started by the first subscriber and shared by every later one.
 pub struct Changes {
     db: DatabaseConnection,
     seen: OnceCell<watch::Receiver<u64>>,
@@ -41,7 +43,8 @@ async fn changes(
         .seen
         .get_or_init(|| async {
             let (tx, rx) = watch::channel(0);
-            tokio::spawn(watch_file(state.db.clone(), tx));
+            let listener = listen(&state.db).await;
+            tokio::spawn(relay(state.db.clone(), listener, tx));
             rx
         })
         .await
@@ -60,60 +63,32 @@ async fn changes(
     Sse::new(all).keep_alive(KeepAlive::default())
 }
 
-/// The file behind the main schema, `None` for an in-memory database.
-async fn main_file(db: &DatabaseConnection) -> Option<String> {
-    let rows = db
-        .query_all_raw(Statement::from_string(
-            DbBackend::Sqlite,
-            "PRAGMA database_list",
-        ))
+/// A connection of its own listening on the channel, or none when the database cannot be reached.
+async fn listen(db: &DatabaseConnection) -> Option<PgListener> {
+    let mut listener = PgListener::connect_with(db.get_postgres_connection_pool())
         .await
         .ok()?;
-    rows.iter()
-        .find(|r| r.try_get::<String>("", "name").is_ok_and(|n| n == "main"))
-        .and_then(|r| r.try_get::<String>("", "file").ok())
-        .filter(|f| !f.is_empty())
+    listener.listen(CHANNEL).await.ok()?;
+    Some(listener)
 }
 
-/// `PRAGMA data_version` is per connection, so the watcher keeps one connection of its own: the value
-/// moves whenever any other connection, this server's or another process's, commits.
-async fn watch_file(db: DatabaseConnection, tx: watch::Sender<u64>) {
-    let Some(path) = main_file(&db).await else {
-        return;
-    };
-    let mut options = ConnectOptions::new(format!("sqlite://{path}?mode=ro"));
-    options
-        .max_connections(1)
-        .min_connections(1)
-        .idle_timeout(None)
-        .max_lifetime(None)
-        .sqlx_logging(false);
-    let Ok(own) = Database::connect(options).await else {
-        return;
-    };
-    let mut last = None;
-    let mut tick = tokio::time::interval(EVERY);
+/// Counts each notice into the watch. A notice lost while the connection is down is not counted.
+async fn relay(db: DatabaseConnection, mut listener: Option<PgListener>, tx: watch::Sender<u64>) {
     loop {
-        tick.tick().await;
-        let version = data_version(&own).await;
-        if version.is_some() && last.is_some() && version != last {
-            tx.send_modify(|n| *n += 1);
-        }
-        if version.is_some() {
-            last = version;
+        let Some(l) = listener.as_mut() else {
+            tokio::time::sleep(RETRY).await;
+            listener = listen(&db).await;
+            continue;
+        };
+        match l.try_recv().await {
+            Ok(Some(_)) => tx.send_modify(|n| *n += 1),
+            Ok(None) => {}
+            Err(_) => {
+                tokio::time::sleep(RETRY).await;
+                listener = None;
+            }
         }
     }
-}
-
-async fn data_version(db: &DatabaseConnection) -> Option<i64> {
-    db.query_one_raw(Statement::from_string(
-        DbBackend::Sqlite,
-        "PRAGMA data_version",
-    ))
-    .await
-    .ok()
-    .flatten()
-    .and_then(|r| r.try_get_by_index::<i64>(0).ok())
 }
 
 #[cfg(test)]

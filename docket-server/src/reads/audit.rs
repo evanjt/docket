@@ -31,7 +31,7 @@ struct TieRow {
 async fn ties(db: &DatabaseConnection, slug: &str) -> Result<Vec<Tie>, Failure> {
     let rows = TieRow::find_by_statement(sql(
         "SELECT l.rid, l.kind, l.to_rid FROM links l JOIN items i ON i.rid=l.rid \
-         WHERE i.project=? AND l.kind IN ('related', 'opened')",
+         WHERE i.project=? AND l.kind IN ('related', 'opened') ORDER BY i.state, i.rid, l.kind, l.to_rid",
         vec![slug.into()],
     ))
     .all(db)
@@ -139,14 +139,14 @@ pub async fn audit(
     } else if let Some(g) = &q.group {
         rows(
             &db,
-            "SELECT * FROM items WHERE project=? AND group_name=?",
+            "SELECT * FROM items WHERE project=? AND group_name=? ORDER BY state, rid",
             vec![q.project.clone().into(), g.clone().into()],
         )
         .await?
     } else if let Some(t) = &q.theme {
         rows(
             &db,
-            "SELECT * FROM items WHERE project=? AND theme LIKE ?",
+            "SELECT * FROM items WHERE project=? AND theme ILIKE ? ESCAPE '' ORDER BY state, rid",
             vec![q.project.clone().into(), format!("%{t}%").into()],
         )
         .await?
@@ -212,7 +212,7 @@ async fn orphans(
     let open = rows(
         db,
         &format!(
-            "SELECT * FROM items WHERE project=? AND key IN ({}) AND state='open' ORDER BY opened_at",
+            "SELECT * FROM items WHERE project=? AND key IN ({}) AND state='open' ORDER BY opened_at, rid",
             marks(work.len())
         ),
         values,
@@ -347,7 +347,7 @@ async fn about_target(
     let mut served: Map<String, Value> = Map::new();
     let citing = rows(
         db,
-        "SELECT * FROM items WHERE project=? AND body LIKE ?",
+        "SELECT * FROM items WHERE project=? AND body ILIKE ? ESCAPE '' ORDER BY state, rid",
         vec![slug.into(), format!("%{}#%", t.id).into()],
     )
     .await?;
@@ -370,7 +370,8 @@ async fn about_target(
 }
 
 /// `[[kind, [{id, title}]]]` for the ideas, stories and concepts tied to the target, or none at all
-/// when no idea, story or concept is tied to it and it belongs to no concept.
+/// when no idea, story or concept is tied to it and it belongs to no concept. The links leaving the
+/// target come first, by kind and target, then those reaching it, by link.
 async fn bound(
     db: &DatabaseConnection,
     slug: &str,
@@ -380,8 +381,16 @@ async fn bound(
     let near = rows(
         db,
         "SELECT i.* FROM links l JOIN items i ON i.rid = CASE WHEN l.rid=? THEN l.to_rid ELSE l.rid END \
-         WHERE (l.rid=? OR l.to_rid=?) AND l.kind IN ('related', 'opened')",
-        vec![t.rid.into(), t.rid.into(), t.rid.into()],
+         WHERE (l.rid=? OR l.to_rid=?) AND l.kind IN ('related', 'opened') \
+         ORDER BY l.rid<>?, CASE WHEN l.rid=? THEN l.kind END, CASE WHEN l.rid=? THEN l.to_rid END, l.id",
+        vec![
+            t.rid.into(),
+            t.rid.into(),
+            t.rid.into(),
+            t.rid.into(),
+            t.rid.into(),
+            t.rid.into(),
+        ],
     )
     .await?;
     let mut out: Vec<(Kind, Vec<(String, String)>)> = Vec::new();

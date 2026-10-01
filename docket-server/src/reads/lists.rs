@@ -43,7 +43,7 @@ pub async fn todo(
         &db,
         &q.project,
         "AND state='open' AND turn='user' \
-         ORDER BY key='Q', theme IS NULL, theme, rank IS NULL, rank, asked_at",
+         ORDER BY key='Q', theme IS NULL, theme, rank IS NULL, rank, asked_at NULLS FIRST, rid",
         vec![],
     )
     .await
@@ -68,7 +68,7 @@ pub async fn wip(
         tail.push_str(" AND claim_host=?");
         values.push(host.into());
     }
-    tail.push_str(" ORDER BY claim_since");
+    tail.push_str(" ORDER BY claim_since, rid");
     listed(&db, &q.project, &tail, values).await
 }
 
@@ -95,7 +95,7 @@ pub async fn waiting(
         tail.push_str(" AND wait_on=?");
         values.push(on.into());
     }
-    tail.push_str(" ORDER BY wait_on, wait_ref, wait_since");
+    tail.push_str(" ORDER BY wait_on, wait_ref NULLS FIRST, wait_since, rid");
     listed(&db, &q.project, &tail, values).await
 }
 
@@ -124,10 +124,10 @@ pub async fn questions(
     );
     let mut values: Vec<sea_orm::Value> = qkeys.into_iter().map(Into::into).collect();
     if let Some(theme) = q.theme {
-        tail.push_str(" AND theme LIKE ?");
+        tail.push_str(" AND theme ILIKE ? ESCAPE ''");
         values.push(like(&theme));
     }
-    tail.push_str(" ORDER BY theme IS NULL, theme, rank IS NULL, rank");
+    tail.push_str(" ORDER BY theme IS NULL, theme, rank IS NULL, rank, rid");
     listed(&db, &q.project, &tail, values).await
 }
 
@@ -142,7 +142,7 @@ pub async fn research(
     let project = project_of(&db, &q.project).await?;
     let qkeys = Kinds::of(&project).keys(Kind::Decision);
     let tail = format!(
-        "AND key IN ({}) AND state='open' AND decision IS NOT NULL ORDER BY decided_at",
+        "AND key IN ({}) AND state='open' AND decision IS NOT NULL ORDER BY decided_at, rid",
         marks(qkeys.len())
     );
     listed(
@@ -172,7 +172,7 @@ async fn in_state(db: &DatabaseConnection, q: Recent, state: &str) -> Result<Jso
         tail.push_str(" AND key=?");
         values.push(key.to_uppercase().into());
     }
-    tail.push_str(" ORDER BY updated_at DESC LIMIT ?");
+    tail.push_str(" ORDER BY updated_at DESC, rid LIMIT ?");
     values.push(q.n.into());
     listed(db, &q.project, &tail, values).await
 }
@@ -218,7 +218,7 @@ pub async fn groups(
         tail.push_str(" AND group_name=?");
         values.push(name.into());
     }
-    tail.push_str(" ORDER BY group_name, rank IS NULL, rank, num");
+    tail.push_str(" ORDER BY group_name, rank IS NULL, rank, num, state, rid");
     listed(&db, &q.project, &tail, values).await
 }
 
@@ -246,7 +246,7 @@ struct DerivedQuestion {
 struct DerivedEvent {
     at: String,
     note: Option<String>,
-    data: Option<String>,
+    data: Option<Value>,
     id: String,
     state: String,
     title: String,
@@ -269,7 +269,7 @@ pub async fn derived(
     let questions = DerivedQuestion::find_by_statement(sql(
         &format!(
             "SELECT id, state, decided_at, title, decision FROM items WHERE project=? AND key IN ({}) \
-             AND decision LIKE ? ORDER BY decided_at DESC LIMIT ?",
+             AND decision ILIKE ? ESCAPE '' ORDER BY decided_at DESC, rid LIMIT ?",
             marks(qkeys.len())
         ),
         values,
@@ -279,8 +279,8 @@ pub async fn derived(
     .map_err(|e| crate::reads::public::internal(&e))?;
     let events = DerivedEvent::find_by_statement(sql(
         "SELECT e.at, e.note, e.data, i.id, i.state, i.title FROM events e JOIN items i ON i.rid=e.rid \
-         WHERE e.project=? AND e.kind='decided' AND e.data LIKE '%\"derived\"%' \
-         ORDER BY e.at DESC LIMIT ?",
+         WHERE e.project=? AND e.kind='decided' AND e.data::text ILIKE '%\"derived\"%' ESCAPE '' \
+         ORDER BY e.at DESC, e.seq DESC LIMIT ?",
         vec![q.project.into(), q.n.into()],
     ))
     .all(&db)
@@ -297,11 +297,7 @@ pub async fn derived(
         ));
     }
     for e in events {
-        let data: Value = e
-            .data
-            .as_deref()
-            .and_then(|d| serde_json::from_str(d).ok())
-            .unwrap_or_default();
+        let data = e.data.unwrap_or_default();
         let basis = data["derived"].as_str().unwrap_or_default();
         out.push((
             e.at.clone(),

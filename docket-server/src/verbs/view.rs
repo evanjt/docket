@@ -110,7 +110,8 @@ async fn links<C: ConnectionTrait>(c: &C, rid: i64) -> Result<Links, DbErr> {
     let (mut related, mut opened, mut cites) = (Vec::new(), Vec::new(), Vec::new());
     let rows = c
         .query_all_raw(sql(
-            "SELECT kind, to_rid, to_path, to_line FROM links WHERE rid=?",
+            "SELECT kind, to_rid, to_path, to_line FROM links WHERE rid=? \
+             ORDER BY kind, to_rid NULLS FIRST, to_path NULLS FIRST, to_line NULLS FIRST, id",
             vec![rid.into()],
         ))
         .await?;

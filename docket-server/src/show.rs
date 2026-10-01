@@ -1,6 +1,7 @@
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use sea_orm::sea_query::NullOrdering;
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, Order, QueryFilter, QueryOrder};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -56,6 +57,11 @@ pub async fn show(
     let (mut related, mut opened, mut cites) = (Vec::new(), Vec::new(), Vec::new());
     let links = link::Entity::find()
         .filter(link::Column::Rid.eq(row.rid))
+        .order_by_asc(link::Column::Kind)
+        .order_by_with_nulls(link::Column::ToRid, Order::Asc, NullOrdering::First)
+        .order_by_with_nulls(link::Column::ToPath, Order::Asc, NullOrdering::First)
+        .order_by_with_nulls(link::Column::ToLine, Order::Asc, NullOrdering::First)
+        .order_by_asc(link::Column::Id)
         .all(&db)
         .await
         .map_err(|e| internal(&e))?;

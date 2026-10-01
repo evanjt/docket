@@ -3,8 +3,7 @@ use std::collections::HashMap;
 use axum::Json;
 use axum::http::StatusCode;
 use sea_orm::{
-    ColumnTrait, DatabaseConnection, DbBackend, DbErr, EntityTrait, FromQueryResult, QueryFilter,
-    Statement,
+    ColumnTrait, DatabaseConnection, DbErr, EntityTrait, FromQueryResult, QueryFilter, Statement,
 };
 use serde_json::{Map, Value, json};
 
@@ -22,15 +21,15 @@ pub fn internal(e: &DbErr) -> Failure {
     failure(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
 }
 
-/// A raw SQLite statement with its bound values.
+/// A raw statement, written with `?` marks, with its bound values.
 pub fn sql(text: &str, values: Vec<sea_orm::Value>) -> Statement {
-    Statement::from_sql_and_values(DbBackend::Sqlite, text, values)
+    docket_migration::statement(text, values)
 }
 
-/// `?,?,?` for a list of values, `''` when there are none, as the Python command binds a key list.
+/// `?,?,?` for a list of values, `NULL` when there are none, so `x IN (...)` matches nothing.
 pub fn marks(n: usize) -> String {
     if n == 0 {
-        return "''".to_string();
+        return "NULL".to_string();
     }
     vec!["?"; n].join(",")
 }

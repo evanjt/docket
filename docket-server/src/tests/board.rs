@@ -1,14 +1,14 @@
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode, header::AUTHORIZATION};
-use sea_orm::{ConnectOptions, ConnectionTrait, Database};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use crate::app;
 use crate::auth::Keys;
 
-use docket_core::SCHEMA;
+use docket_migration::scratch::Scratch;
+
 const SEED: &str = r#"
 INSERT INTO projects (slug, keys, themes, skills, remotes, created_at, updated_at) VALUES ('o/p',
   '[{"key":"T","kind":"work"},{"key":"Q","kind":"decision"},{"key":"A","kind":"audit"},
@@ -17,11 +17,11 @@ INSERT INTO projects (slug, keys, themes, skills, remotes, created_at, updated_a
   ('o/q', '[{"key":"T","kind":"work"}]', '[]', '{}', '[]', 'c', 'u');
 INSERT INTO items (rid, project, key, num, title, state, turn, tags, theme, group_name, body, opened_at, updated_at) VALUES
   (1, 'o/p', 'T', 1, 'Fix the sync', 'open', 'agent', '["high"]', NULL, 'g',
-     '- **Touches.** src/a.rs, src/b.rs' || char(10) || '`src/a.rs:3` serves A1#1', '2026-01-01T00:00:00Z', 'u1'),
+     '- **Touches.** src/a.rs, src/b.rs' || chr(10) || '`src/a.rs:3` serves A1#1', '2026-01-01T00:00:00Z', 'u1'),
   (2, 'o/p', 'PK', 1, 'Package', 'open', 'agent', '["critical"]', NULL, NULL, '', '2026-01-01T00:00:00Z', 'u2'),
   (3, 'o/p', 'CON', 1, 'Concept', 'open', 'agent', '[]', NULL, NULL, '', '2026-01-01T00:00:00Z', 'u3'),
   (4, 'o/p', 'A', 1, 'Plan', 'open', 'agent', '[]', NULL, NULL,
-     '- **Principles.**' || char(10) || '  1. One owner.' || char(10) || '  2. No gaps.', '2026-01-01T00:00:00Z', 'u4'),
+     '- **Principles.**' || chr(10) || '  1. One owner.' || chr(10) || '  2. No gaps.', '2026-01-01T00:00:00Z', 'u4'),
   (6, 'o/p', 'T', 3, 'Held theme', 'open', 'agent', '[]', 'roadmap', 'g', 'x', '2026-01-01T00:00:00Z', 'u6'),
   (7, 'o/p', 'Q', 1, 'Two of them', 'open', 'user', '[]', NULL, NULL, '', '2026-01-01T00:00:00Z', 'u7');
 INSERT INTO items (rid, project, key, num, title, state, resolution, tags, body, opened_at, updated_at) VALUES
@@ -43,27 +43,24 @@ INSERT INTO events (uid, project, rid, at, host, kind, note, data) VALUES
   ('e2', 'o/p', 1, '2026-01-01T00:00:01Z', 'devbox', 'claimed', NULL, '{"role": "build"}'),
   ('e3', 'o/p', 8, '2026-01-01T00:00:02Z', 'devbox', 'claimed', NULL, '{"model": "m1", "role": "review"}'),
   ('e4', 'o/p', 5, '2026-01-01T00:00:03Z', 'devbox', 'closed', 'abc1234', NULL);
-INSERT INTO items_fts (rowid, id, title, body, files) VALUES
+INSERT INTO search (rid, id, title, body, files) VALUES
   (1, 'T1', 'Fix the sync', 'serves A1#1', 'src/a.rs'),
   (5, 'T2', 'Done one', 'mentions T1 here', 'src/a.rs');
 "#;
 
 struct Seeded {
     app: Router,
-    db: sea_orm::DatabaseConnection,
+    db: Scratch,
 }
 
 impl Seeded {
     async fn new() -> Self {
-        let mut options = ConnectOptions::new("sqlite::memory:");
-        options.max_connections(1);
-        let db = Database::connect(options).await.unwrap();
-        db.execute_unprepared(SCHEMA).await.unwrap();
-        db.execute_unprepared(SEED).await.unwrap();
+        let scratch = Scratch::new(2).await;
+        scratch.seed(SEED).await;
         let keys = Keys::parse("devbox owner ownerkey\nother agent agentkey").unwrap();
         Self {
-            app: app(&db, keys),
-            db,
+            app: app(&scratch.db, keys),
+            db: scratch,
         }
     }
 
@@ -203,7 +200,7 @@ async fn test_deps_words_another_projects_row_by_its_own_keys() {
                 (21, 'o/r', 'T', 1, 'Other member', 'open', 'agent', '[]', '', 'o', 'u'); \
                 INSERT INTO links (rid, kind, to_rid) VALUES (21, 'opened', 20); \
                 INSERT INTO links (rid, kind, to_path) VALUES (20, 'cites_file', 'src/a.rs');";
-    s.db.execute_unprepared(seed).await.unwrap();
+    s.db.seed(seed).await;
     let d = s.ok("/deps/T1?project=o/p").await;
     let other = d["same_files"]
         .as_array()

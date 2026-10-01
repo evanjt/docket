@@ -7,10 +7,9 @@ use serde_json::Value;
 
 use docket_core::api::{Common, ProjectRequest, ProjectResolved, Reindexed};
 use docket_core::project::{default_keys, matches};
-use docket_core::pyjson;
 
 use crate::auth::Caller;
-use crate::store::{Tx, column, scalar};
+use crate::store::{Tx, column, json, scalar};
 use crate::verbs::Failure;
 
 /// The project a checkout belongs to: matched by its remote's slug, a shared remote or its directory
@@ -71,14 +70,14 @@ pub async fn project(
 }
 
 async fn remotes_of(tx: &Tx, slug: &str) -> Result<Vec<String>, Failure> {
-    let text: Option<String> = scalar(
+    let remotes: Option<Value> = scalar(
         &tx.conn,
         "SELECT remotes FROM projects WHERE slug=?",
         vec![slug.into()],
     )
     .await?;
-    Ok(text
-        .and_then(|t| serde_json::from_str(&t).ok())
+    Ok(remotes
+        .and_then(|r| serde_json::from_value(r).ok())
         .unwrap_or_default())
 }
 
@@ -94,8 +93,8 @@ async fn create(tx: &mut Tx, slug: &str, remotes: &[String]) -> Result<(), Failu
         "INSERT INTO projects (slug, keys, remotes, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
         vec![
             slug.into(),
-            pyjson::dumps(&default_keys(), false).into(),
-            pyjson::dumps(&sorted_unique(remotes.iter().cloned()), false).into(),
+            json(default_keys()),
+            json(sorted_unique(remotes.iter().cloned())),
             tx.now.clone().into(),
             tx.now.clone().into(),
         ],
@@ -117,11 +116,7 @@ async fn add_remotes(tx: &mut Tx, slug: &str, urls: &[String]) -> Result<(), Fai
     }
     tx.execute(
         "UPDATE projects SET remotes=?, updated_at=? WHERE slug=?",
-        vec![
-            pyjson::dumps(&all, false).into(),
-            tx.now.clone().into(),
-            slug.into(),
-        ],
+        vec![json(all), tx.now.clone().into(), slug.into()],
     )
     .await?;
     tx.touch_project(slug);

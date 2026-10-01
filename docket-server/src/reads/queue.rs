@@ -32,7 +32,7 @@ struct Slim {
     complexity: Option<String>,
     theme: Option<String>,
     rank: Option<i64>,
-    tags: String,
+    tags: Value,
     opened_at: String,
 }
 
@@ -60,7 +60,8 @@ async fn board(db: &DatabaseConnection, slug: &str) -> Result<Board, Failure> {
     .map_err(|e| internal(&e))?;
     let ties = TieRow::find_by_statement(sql(
         "SELECT l.rid, l.kind, l.to_rid FROM links l JOIN items i ON i.rid=l.rid \
-         WHERE i.project=? AND l.kind IN ('related', 'opened') AND l.to_rid IS NOT NULL",
+         WHERE i.project=? AND l.kind IN ('related', 'opened') AND l.to_rid IS NOT NULL \
+         ORDER BY i.state, i.rid, l.kind, l.to_rid",
         vec![slug.into()],
     ))
     .all(db)
@@ -77,7 +78,7 @@ async fn board(db: &DatabaseConnection, slug: &str) -> Result<Board, Failure> {
 }
 
 fn candidate<'a>(row: &'a Slim, kinds: &Kinds) -> Candidate<'a> {
-    let tags: Vec<String> = serde_json::from_str(&row.tags).unwrap_or_default();
+    let tags: Vec<String> = serde_json::from_value(row.tags.clone()).unwrap_or_default();
     let own = priority(&tags);
     Candidate {
         rid: row.rid,

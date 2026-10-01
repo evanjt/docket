@@ -7,7 +7,7 @@ pub mod doc;
 pub mod load;
 pub mod page;
 pub mod palette;
-
+pub mod run;
 pub mod source;
 pub mod style;
 pub mod view;

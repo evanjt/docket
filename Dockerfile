@@ -11,10 +11,15 @@ WORKDIR /build
 RUN apk --no-cache upgrade && \
     apk add --no-cache musl-dev gcc make perl
 COPY Cargo.toml Cargo.lock ./
+COPY docket-client/Cargo.toml docket-client/Cargo.toml
 COPY docket-core/Cargo.toml docket-core/Cargo.toml
 COPY docket-server/Cargo.toml docket-server/Cargo.toml
-RUN mkdir -p docket-core/src docket-server/src && \
+COPY docket-tui/Cargo.toml docket-tui/Cargo.toml
+RUN mkdir -p docket-client/src docket-core/src docket-server/src docket-tui/src && \
+    : > docket-client/src/lib.rs && \
     : > docket-core/src/lib.rs && \
+    : > docket-tui/src/lib.rs && \
+    echo 'fn main() {}' > docket-tui/src/main.rs && \
     : > docket-server/src/lib.rs && \
     echo 'fn main() {}' > docket-server/src/main.rs && \
     cargo build --release --locked -p docket-server && \
@@ -32,8 +37,10 @@ RUN apk --no-cache upgrade && \
 COPY --from=cacher /build/target target
 COPY --from=cacher /usr/local/cargo /usr/local/cargo
 COPY Cargo.toml Cargo.lock ./
+COPY docket-client docket-client
 COPY docket-core docket-core
 COPY docket-server docket-server
+COPY docket-tui docket-tui
 RUN cargo build --release --locked -p docket-server
 
 # ---- Stage 3: runtime ----------------------------------------------------

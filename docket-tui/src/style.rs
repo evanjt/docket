@@ -1,0 +1,63 @@
+//! One rule for every colour: it names the state an item is in or is moved into. A verb takes the colour
+//! of the word it leads to, so `claimed` is the yellow of `building`.
+
+use ratatui::style::{Color, Modifier, Style};
+
+/// The colour of a state word.
+#[must_use]
+pub fn word(w: &str) -> Style {
+    let s = Style::default();
+    match w {
+        "ready" => s.fg(Color::Green),
+        "building" => s.fg(Color::Yellow),
+        "checking" => s.fg(Color::Cyan),
+        "parked" => s.fg(Color::Magenta),
+        "blocked" => s.fg(Color::Blue),
+        "inbox" => s.fg(Color::White),
+        "dropped" | "FAILED" => s.fg(Color::Red),
+        "done" => s.add_modifier(Modifier::DIM),
+        _ => s,
+    }
+}
+
+/// The word a verb leads to, `None` for one that leads to no state of its own.
+#[must_use]
+pub fn verb_tint(verb: &str) -> Option<&'static str> {
+    match verb {
+        "closed" => Some("done"),
+        "released" | "replied" | "resumed" => Some("ready"),
+        "claimed" => Some("building"),
+        "parked" => Some("parked"),
+        "decided" => Some("checking"),
+        "blocked" => Some("blocked"),
+        "dropped" | "lost" => Some("dropped"),
+        _ => None,
+    }
+}
+
+/// A verb in the colour of the word it leads to, bold when it leads to none.
+#[must_use]
+pub fn verb(v: &str) -> Style {
+    verb_tint(v).map_or_else(|| Style::default().add_modifier(Modifier::BOLD), word)
+}
+
+#[must_use]
+pub fn bold() -> Style {
+    Style::default().add_modifier(Modifier::BOLD)
+}
+
+#[must_use]
+pub fn dim() -> Style {
+    Style::default().add_modifier(Modifier::DIM)
+}
+
+/// What stops the work: a missing fact, NO LOOP, a failure.
+#[must_use]
+pub fn alarm() -> Style {
+    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+}
+
+#[must_use]
+pub fn bar() -> Style {
+    Style::default().add_modifier(Modifier::REVERSED)
+}

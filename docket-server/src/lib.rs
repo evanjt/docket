@@ -1,6 +1,7 @@
 //! The docket server: one process over one database, read by every client through these routes.
 
 pub mod auth;
+pub mod changes;
 pub mod entities;
 pub mod reads;
 pub mod show;
@@ -51,6 +52,7 @@ pub fn app(db: &DatabaseConnection, keys: Keys) -> Router {
         .merge(reads::router())
         .nest("/do", verbs::router())
         .with_state(db.clone())
+        .merge(changes::router(db))
         .merge(resources)
         .layer(from_fn_with_state(Arc::new(keys), require_key))
         .route("/health", get(health))

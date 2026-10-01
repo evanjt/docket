@@ -8,13 +8,14 @@ license.workspace = true
 [dependencies]
 axum = { workspace = true }
 crudcrate = { workspace = true }
+futures-util = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }
 sea-orm = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 subtle = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time"] }
 utoipa = { workspace = true }
 utoipa-axum = { workspace = true }
 

@@ -1,0 +1,156 @@
+//! Where the screen reads from: the server through its routes, or fixed rows in a test.
+
+use std::collections::HashSet;
+
+use docket_client::Api;
+use docket_core::member::Tie;
+use docket_core::rows::{Derived, EventRow, ProjectRow, Row, Shown, Status};
+
+use crate::board::Board;
+
+pub type Result<T> = std::result::Result<T, String>;
+
+/// The event kinds that move an item, which the moves and the pace read.
+pub const MOVE_KINDS: [&str; 13] = [
+    "opened",
+    "reopened",
+    "closed",
+    "dropped",
+    "claimed",
+    "released",
+    "claim_lost",
+    "asked",
+    "replied",
+    "decided",
+    "waited",
+    "resumed",
+    "legacy",
+];
+
+/// How many of a project's newest moves the screen reads.
+pub const RECENT: usize = 400;
+
+pub trait Source: Sync {
+    /// # Errors
+    /// The words of whatever refused or failed.
+    fn projects(&self) -> Result<Vec<ProjectRow>>;
+    /// # Errors
+    /// As `projects`.
+    fn status(&self, slug: &str) -> Result<Status>;
+    /// # Errors
+    /// As `projects`.
+    fn next(&self, slug: &str, n: usize, under: Option<&str>) -> Result<Vec<Row>>;
+    /// A list route by name: `todo`, `questions`, `groups`, `wip` and the rest.
+    ///
+    /// # Errors
+    /// As `projects`.
+    fn list(&self, route: &str, slug: &str) -> Result<Vec<Row>>;
+    /// # Errors
+    /// As `projects`.
+    fn group(&self, slug: &str, name: &str) -> Result<Vec<Row>>;
+    /// # Errors
+    /// As `projects`.
+    fn derived(&self, slug: &str) -> Result<Vec<Derived>>;
+    /// # Errors
+    /// As `projects`.
+    fn search(&self, slug: &str, words: &str) -> Result<Vec<Row>>;
+    /// # Errors
+    /// As `projects`.
+    fn show(&self, slug: &str, id: &str) -> Result<Shown>;
+    /// # Errors
+    /// As `projects`.
+    fn board(&self, slug: &str) -> Result<Board>;
+    /// One item's events, oldest first.
+    ///
+    /// # Errors
+    /// As `projects`.
+    fn log(&self, rid: i64) -> Result<Vec<EventRow>>;
+    /// A project's newest moves, newest first.
+    ///
+    /// # Errors
+    /// As `projects`.
+    fn recent(&self, slug: &str) -> Result<Vec<EventRow>>;
+}
+
+pub struct Http(pub Api);
+
+impl Source for Http {
+    fn projects(&self) -> Result<Vec<ProjectRow>> {
+        self.0.projects().map_err(|e| e.to_string())
+    }
+
+    fn status(&self, slug: &str) -> Result<Status> {
+        self.0.status(slug).map_err(|e| e.to_string())
+    }
+
+    fn next(&self, slug: &str, n: usize, under: Option<&str>) -> Result<Vec<Row>> {
+        self.0.next(slug, n, under).map_err(|e| e.to_string())
+    }
+
+    fn list(&self, route: &str, slug: &str) -> Result<Vec<Row>> {
+        self.0.list(route, slug).map_err(|e| e.to_string())
+    }
+
+    fn group(&self, slug: &str, name: &str) -> Result<Vec<Row>> {
+        self.0.group(slug, name).map_err(|e| e.to_string())
+    }
+
+    fn derived(&self, slug: &str) -> Result<Vec<Derived>> {
+        self.0.derived(slug).map_err(|e| e.to_string())
+    }
+
+    fn search(&self, slug: &str, words: &str) -> Result<Vec<Row>> {
+        self.0.search(slug, words, 200).map_err(|e| e.to_string())
+    }
+
+    fn show(&self, slug: &str, id: &str) -> Result<Shown> {
+        self.0.show(slug, id).map_err(|e| e.to_string())
+    }
+
+    fn board(&self, slug: &str) -> Result<Board> {
+        board(&self.0, slug).map_err(|e| e.to_string())
+    }
+
+    fn log(&self, rid: i64) -> Result<Vec<EventRow>> {
+        self.0.log(rid).map_err(|e| e.to_string())
+    }
+
+    fn recent(&self, slug: &str) -> Result<Vec<EventRow>> {
+        self.0
+            .recent(slug, &MOVE_KINDS, RECENT)
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// A project's board from the stored lists: its row, its items, every `opened` tie leaving them, and
+/// the `related` ties reaching or leaving a standing item, which make a concept's members.
+fn board(api: &Api, slug: &str) -> docket_client::api::Result<Board> {
+    let project = api
+        .projects()?
+        .into_iter()
+        .find(|p| p.slug == slug)
+        .ok_or_else(|| docket_client::Error::Refused(404, format!("no project {slug}")))?;
+    let items = api.items(slug)?;
+    let rids: Vec<i64> = items.iter().map(|i| i.rid).collect();
+    let standing: Vec<i64> = items
+        .iter()
+        .filter(|i| project.kind(&i.key).is_standing())
+        .map(|i| i.rid)
+        .collect();
+    let mut links = api.links_from(&rids, "opened")?;
+    links.extend(api.links_from(&standing, "related")?);
+    links.extend(api.links_to(&standing, "related")?);
+    let mut seen = HashSet::new();
+    let ties = links
+        .into_iter()
+        .filter_map(|l| {
+            Some(Tie {
+                rid: l.rid,
+                opened: l.kind == "opened",
+                to: l.to_rid?,
+            })
+        })
+        .filter(|t| seen.insert((t.rid, t.opened, t.to)))
+        .collect();
+    Ok(Board::new(project, items, ties))
+}

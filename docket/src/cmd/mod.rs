@@ -3,13 +3,14 @@
 pub mod audit;
 pub mod lists;
 pub mod show;
+pub mod skills;
 pub mod status;
 pub mod write;
 
 use docket_core::api::{
     AnswerRequest, AskRequest, DecideRequest, DropRequest, FoldRequest, KeyRequest,
     PriorityRequest, RateRequest, ReleaseRequest, ReopenRequest, ReplyRequest, ResumeRequest,
-    StartRequest, WaitRequest,
+    RetryRequest, StartRequest, WaitRequest,
 };
 
 use crate::args::{Cmd, Queue};
@@ -92,6 +93,9 @@ pub fn run(ctx: &mut Ctx, cmd: Option<&Cmd>) -> Result<i32> {
         Cmd::Check { deep } => status::check(ctx, *deep),
         Cmd::Stale { open_only } => audit::stale(ctx, *open_only),
         Cmd::Bind { slug, root } => write::bind(ctx, slug.as_ref(), root.as_ref()),
+        Cmd::Skills {
+            what, key, value, ..
+        } => skills::skills(ctx, what.as_ref(), key.as_ref(), value.as_ref()),
         _ => run_write(ctx, cmd),
     }
 }
@@ -320,6 +324,14 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             write::key(ctx, &req)
         }
         Cmd::Reindex => write::reindex(ctx),
+        Cmd::Retry { id, note } => {
+            let req = RetryRequest {
+                common: ctx.common(false)?,
+                id: id.clone(),
+                note: opt(note.as_ref()),
+            };
+            write::moved(ctx, "retry", &req)
+        }
         _ => Ok(0),
     }
 }

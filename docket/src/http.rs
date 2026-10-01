@@ -5,6 +5,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use docket_client::{Api as Client, Config, Error};
+use docket_core::api::{FactSet, Facts};
 
 use crate::fail::{Fail, Result};
 
@@ -40,6 +41,22 @@ impl Api {
     pub fn post<T: DeserializeOwned>(&self, verb: &str, body: &impl Serialize) -> Result<T> {
         self.client
             .post(verb, body)
+            .map_err(|e| failed(&self.base, &e))
+    }
+}
+
+impl Api {
+    /// # Errors
+    /// The server cannot be reached, or refuses.
+    pub fn facts(&self, slug: &str) -> Result<Facts> {
+        self.client.facts(slug).map_err(|e| failed(&self.base, &e))
+    }
+
+    /// # Errors
+    /// The server cannot be reached, or refuses.
+    pub fn set_fact(&self, slug: &str, key: &str, value: &str) -> Result<FactSet> {
+        self.client
+            .set_fact(slug, key, value)
             .map_err(|e| failed(&self.base, &e))
     }
 }

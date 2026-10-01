@@ -397,6 +397,27 @@ pub enum Cmd {
         #[arg(long)]
         open_only: bool,
     },
+    /// the facts a project's skills read: show, KEY, KEY "value", get KEY, set KEY "value"
+    Skills {
+        /// show (the default), get, set, install or diff; or a fact name to show it, with a value to set it
+        #[arg(value_parser = clap::builder::PossibleValuesParser::new(crate::cmd::skills::words()))]
+        what: Option<String>,
+        /// set and get: the fact
+        key: Option<String>,
+        /// set: the text; omit it to unset the fact
+        value: Option<String>,
+        /// install: only ~/.claude/skills
+        #[arg(long)]
+        claude: bool,
+        /// install: only ~/.agents/skills
+        #[arg(long)]
+        codex: bool,
+        /// install without asking, for a run with no terminal
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+    /// give an item the loop parked or sent back a fresh start
+    Retry { id: String, note: Option<String> },
     /// bind this directory to a project by hand
     Bind {
         slug: Option<String>,

@@ -108,6 +108,18 @@ fn test_a_refusal_carries_the_servers_words() {
 }
 
 #[test]
+fn test_a_route_the_server_lacks_names_itself() {
+    let api = served();
+    match api.get::<serde_json::Value>("/no-such-route", &[]) {
+        Err(Error::Refused(404, why)) => assert_eq!(
+            why,
+            "the server has no route /no-such-route; it may be older than this client"
+        ),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
 fn test_changes_name_each_event_and_skip_comments() {
     let text = ": keep-alive\n\nevent: hello\ndata: 0\n\nevent: change\ndata: 1\n\ndata: x\n\n";
     let names: Vec<String> = Changes::over(Box::new(text.as_bytes())).collect();

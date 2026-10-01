@@ -197,6 +197,7 @@ impl Iterator for Changes {
 /// The words of a refused request: a verb's refusal, or any route's error.
 fn refusal(resp: Response) -> Error {
     let code = resp.status().as_u16();
+    let path = resp.url().path().to_string();
     let text = resp.text().unwrap_or_default();
     let why = serde_json::from_str::<Value>(&text)
         .ok()
@@ -207,7 +208,18 @@ fn refusal(resp: Response) -> Error {
                 .map(str::to_string)
         })
         .unwrap_or(text);
+    if why.trim().is_empty() {
+        return Error::Refused(code, unexplained(code, &path));
+    }
     Error::Refused(code, why)
+}
+
+/// What to say when the server answers an error with no words of its own.
+fn unexplained(code: u16, path: &str) -> String {
+    if code == 404 {
+        return format!("the server has no route {path}; it may be older than this client");
+    }
+    format!("the server answered {code} for {path} with no reason")
 }
 
 fn of(slug: &str) -> Vec<(&'static str, String)> {

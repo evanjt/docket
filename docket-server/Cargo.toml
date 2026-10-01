@@ -7,11 +7,12 @@ license.workspace = true
 
 [dependencies]
 axum = { workspace = true }
+clap = { version = "4.6", features = ["derive"] }
 crudcrate = { workspace = true }
 futures-util = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }
-sea-orm = { workspace = true }
+sea-orm = { workspace = true, features = ["sqlx-sqlite"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 subtle = { workspace = true }

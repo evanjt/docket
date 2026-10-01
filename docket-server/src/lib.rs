@@ -4,6 +4,7 @@ pub mod auth;
 pub mod changes;
 pub mod entities;
 mod facts;
+pub mod import;
 pub mod reads;
 pub mod show;
 mod store;

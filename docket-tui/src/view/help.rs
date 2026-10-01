@@ -56,7 +56,7 @@ Keys
   Enter, l               open the one selected
   Esc, h, Left           back                         f, Right   forward again
   /                      search, the list following each key; Enter keeps it, Esc cancels
-  Space                  open or close a row's children in the plans; elsewhere, as x
+  Space                  open or close a row's children in the plans; in the other lists, as x
   PgUp / PgDn            scroll
   g home   o yours   t plans   S settings   ? this page   . read everything again   q quit
 

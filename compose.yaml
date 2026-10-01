@@ -7,7 +7,7 @@
 #   DOCKET_UID/GID    the owner of DOCKET_DATA, so SQLite can use its -wal and -shm files
 services:
   traefik:
-    image: traefik:v3.5
+    image: traefik:v3.7
     command:
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false

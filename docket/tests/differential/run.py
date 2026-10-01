@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """The same command lines through the Python docket and this client, compared.
 
-Two copies of one database, taken with sqlite3's .backup: the server runs on one, the Python docket on
-the other, offline, writing its dump into an empty repository. Each command line runs through both, in
-the same order, and stdout, stderr and the exit code are compared after the normalisations below.
+Two copies of one database, taken with sqlite3's .backup: one is imported into an empty Postgres
+database the server runs on, the Python docket runs on the other, offline, writing its dump into an
+empty repository. Each command line runs through both, in the same order, and stdout, stderr and the
+exit code are compared after the normalisations below.
 
-    run.py --live DB --python SRC PROJECT [PROJECT ...]
-    run.py --live DB --python SRC PROJECT -c 'show B12' -c 'next 3 --json'
+    run.py --live DB --python SRC --database-url URL PROJECT [PROJECT ...]
+    run.py --live DB --python SRC --database-url URL PROJECT -c 'show B12' -c 'next 3 --json'
 
-SRC is the directory holding the Python `docket` package. The ids each command names are read from the
-copy, so the plan fits any project.
+SRC is the directory holding the Python `docket` package. URL names an empty Postgres database, which
+the copy is imported into; with --reuse it is used as the last run left it. The ids each command names
+are read from the copy, so the plan fits any project.
 """
 
 import argparse
@@ -30,7 +32,7 @@ AGENT_KEY = 'harness-agent-key'
 STAMP = re.compile(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ')
 DURATION = re.compile(r'\b\d+[smhd]( \d+[hm])?\b')
 BAR = re.compile(r'[#.]{10}')
-# bm25 from the SQLite the server bundles can differ from the system SQLite's in the last bits.
+# Scores compared to twelve significant digits.
 SCORE = re.compile(r'("score": )(-?[0-9.e+-]+)')
 # This host's own rows in the Python's database, which the server has no equal of: the loop's clock,
 # the build hosts' stats, the chores, the roots and the dump not yet committed.
@@ -52,10 +54,11 @@ def sh(args, **kw):
 class Pair:
     """Both commands, each on its own copy, run the same way."""
 
-    def __init__(self, work, python_src, bin_dir):
+    def __init__(self, work, python_src, bin_dir, database_url):
         self.work = work
         self.python_src = python_src
         self.bin_dir = bin_dir
+        self.database_url = database_url
         self.server = None
         self.port = None
 
@@ -89,12 +92,16 @@ class Pair:
             os.makedirs(os.path.join(self.work, d))
         with open(os.path.join(self.work, 'keys'), 'w') as f:
             f.write(f'{HOST} owner {OWNER_KEY}\n{HOST} agent {AGENT_KEY}\n')
+        r = sh([os.path.join(self.bin_dir, 'docket-server'), 'import', '--from', os.path.join(self.work, 'a.db')],
+               env=dict(os.environ, DATABASE_URL=self.database_url))
+        if r.returncode:
+            sys.exit(f'import failed: {r.stderr}')
 
     def start(self):
         with socket.socket() as s:
             s.bind(('127.0.0.1', 0))
             self.port = s.getsockname()[1]
-        env = dict(os.environ, DOCKET_DB=os.path.join(self.work, 'a.db'),
+        env = dict(os.environ, DATABASE_URL=self.database_url,
                    DOCKET_KEYS=os.path.join(self.work, 'keys'), DOCKET_LISTEN=f'127.0.0.1:{self.port}')
         log = open(os.path.join(self.work, 'server.log'), 'w')
         self.server = subprocess.Popen([os.path.join(self.bin_dir, 'docket-server')], env=env, stdout=log,
@@ -415,13 +422,14 @@ def main():
     ap.add_argument('--live', required=True, help='the database to take the copies from, with .backup')
     ap.add_argument('--python', required=True, help='the directory holding the Python docket package')
     ap.add_argument('--bin', default='target/debug', help='the directory holding docket and docket-server')
+    ap.add_argument('--database-url', required=True, help='an empty Postgres database the server runs on')
     ap.add_argument('--work', default=os.path.expanduser('~/.cache/docket-differential'))
     ap.add_argument('-c', '--command', action='append', help='one command line, run instead of the plan')
     ap.add_argument('--reuse', action='store_true', help='keep the copies from the last run')
     ap.add_argument('projects', nargs='+')
     a = ap.parse_args()
     os.makedirs(a.work, exist_ok=True)
-    pair = Pair(a.work, os.path.abspath(a.python), os.path.abspath(a.bin))
+    pair = Pair(a.work, os.path.abspath(a.python), os.path.abspath(a.bin), a.database_url)
     if not a.reuse:
         pair.prepare(a.live, a.projects[0])
     pair.start()

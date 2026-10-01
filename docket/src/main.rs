@@ -33,7 +33,20 @@ fn screen(cli: &Cli) -> ExitCode {
     docket_tui::run::main(config, project, "docket")
 }
 
+/// Ends the process quietly when the reader of its output goes away, as a pipe into `head` does.
+#[cfg(unix)]
+fn restore_sigpipe() {
+    // SAFETY: runs once at startup, before any thread exists or anything is written.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
+#[cfg(not(unix))]
+fn restore_sigpipe() {}
+
 fn main() -> ExitCode {
+    restore_sigpipe();
     let cli = Cli::parse();
     if cli.cmd.is_none() && !cli.json && !cli.plain && std::io::stdout().is_terminal() {
         return screen(&cli);

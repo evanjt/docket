@@ -988,6 +988,7 @@ dependencies = [
  "docket-client",
  "docket-core",
  "docket-tui",
+ "libc",
  "regex",
  "serde",
  "serde_json",

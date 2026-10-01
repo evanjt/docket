@@ -1,9 +1,10 @@
 use std::env;
 
 use clap::{Parser, Subcommand};
+use tokio::signal::unix::{SignalKind, signal};
 
 use docket_server::auth::Keys;
-use docket_server::{app, connect, import, migrate};
+use docket_server::{connect, import, migrate, serve};
 
 /// The docket server over the Postgres database `DATABASE_URL` names. It applies any migration the
 /// database lacks before it listens on `DOCKET_LISTEN`, with the keys in the file `DOCKET_KEYS`.
@@ -40,8 +41,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "docket-server listening on {listen} (clients reach it at the server in their client config, \
          through Traefik in compose); {ready}"
     );
-    axum::serve(listener, app(&db, keys)).await?;
+    serve(listener, &db, keys, stop_signal()?).await?;
+    db.close().await?;
+    println!("docket-server stopped");
     Ok(())
+}
+
+/// Resolves on the first SIGTERM or SIGINT. The handlers are in place once this returns.
+fn stop_signal() -> std::io::Result<impl Future<Output = ()>> {
+    let mut term = signal(SignalKind::terminate())?;
+    let mut int = signal(SignalKind::interrupt())?;
+    Ok(async move {
+        tokio::select! {
+            _ = term.recv() => {}
+            _ = int.recv() => {}
+        }
+    })
 }
 
 /// What the migrations did, named without the database's address or credentials.

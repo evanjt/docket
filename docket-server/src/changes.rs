@@ -23,13 +23,16 @@ const RETRY: Duration = Duration::from_secs(1);
 pub struct Changes {
     db: DatabaseConnection,
     seen: OnceCell<watch::Receiver<u64>>,
+    stopping: watch::Receiver<bool>,
 }
 
-/// `GET /changes`: an event stream, `hello` on connecting and `change` after each commit.
-pub fn router(db: &DatabaseConnection) -> Router {
+/// `GET /changes`: an event stream, `hello` on connecting and `change` after each commit. Every
+/// stream ends once `stopping` turns true, so a server shutting down is not held open by them.
+pub fn router(db: &DatabaseConnection, stopping: watch::Receiver<bool>) -> Router {
     let state = Arc::new(Changes {
         db: db.clone(),
         seen: OnceCell::new(),
+        stopping,
     });
     Router::new()
         .route("/changes", get(changes))
@@ -52,15 +55,32 @@ async fn changes(
     let hello = Event::default()
         .event("hello")
         .data(rx.borrow().to_string());
-    let rest = stream::unfold(rx, |mut rx| async move {
-        if rx.changed().await.is_err() {
-            std::future::pending::<()>().await;
-        }
-        let n = *rx.borrow_and_update();
-        Some((Ok(Event::default().event("change").data(n.to_string())), rx))
-    });
+    let rest = stream::unfold(
+        (rx, state.stopping.clone()),
+        |(mut rx, mut stopping)| async move {
+            tokio::select! {
+                () = stopped(&mut stopping) => None,
+                changed = rx.changed() => {
+                    if changed.is_err() {
+                        stopped(&mut stopping).await;
+                        return None;
+                    }
+                    let n = *rx.borrow_and_update();
+                    let event = Event::default().event("change").data(n.to_string());
+                    Some((Ok(event), (rx, stopping)))
+                }
+            }
+        },
+    );
     let all = futures_util::StreamExt::chain(stream::once(async { Ok(hello) }), rest);
     Sse::new(all).keep_alive(KeepAlive::default())
+}
+
+/// Resolves once the server is stopping; never, when nothing can stop it.
+async fn stopped(stopping: &mut watch::Receiver<bool>) {
+    if stopping.wait_for(|s| *s).await.is_err() {
+        std::future::pending::<()>().await;
+    }
 }
 
 /// A connection of its own listening on the channel, or none when the database cannot be reached.

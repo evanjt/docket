@@ -151,3 +151,35 @@ async fn test_no_route_accepts_a_write() {
     }
     assert_eq!(get("/items").await.1.as_array().unwrap().len(), 4);
 }
+
+/// Scenario: the server is told to stop while a client holds the change stream open.
+/// Expected behaviour: the stream ends and the server returns at once.
+#[tokio::test]
+async fn test_serve_returns_promptly_with_a_change_stream_open() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let s = Scratch::new(2).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let keys = Keys::parse("devbox agent secret").unwrap();
+    let db = s.db.clone();
+    let served = tokio::spawn(async move {
+        serve(listener, &db, keys, async {
+            stopped.await.ok();
+        })
+        .await
+    });
+    let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+    client
+        .write_all(b"GET /changes HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer secret\r\n\r\n")
+        .await
+        .unwrap();
+    let mut hello = [0u8; 256];
+    let n = client.read(&mut hello).await.unwrap();
+    assert!(String::from_utf8_lossy(&hello[..n]).contains("200 OK"));
+    stop.send(()).unwrap();
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(3), served).await;
+    assert!(ended.is_ok(), "the server waited on the open change stream");
+    ended.unwrap().unwrap().unwrap();
+}

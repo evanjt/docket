@@ -61,6 +61,48 @@ pub fn members_of<S: BuildHasher>(
     out
 }
 
+/// Every tie by the item at either end, and every item by those that opened it.
+pub struct Neighbours {
+    near: HashMap<i64, Vec<i64>>,
+    parents: HashMap<i64, Vec<i64>>,
+}
+
+impl Neighbours {
+    #[must_use]
+    pub fn new(ties: &[Tie]) -> Self {
+        let mut near: HashMap<i64, Vec<i64>> = HashMap::new();
+        let mut parents: HashMap<i64, Vec<i64>> = HashMap::new();
+        for t in ties {
+            near.entry(t.rid).or_default().push(t.to);
+            near.entry(t.to).or_default().push(t.rid);
+            if t.opened {
+                parents.entry(t.rid).or_default().push(t.to);
+            }
+        }
+        Self { near, parents }
+    }
+
+    /// The concepts an item belongs to: tied to it either way, or to anything that opened it, at any
+    /// depth.
+    #[must_use]
+    pub fn concepts_of<S: BuildHasher>(
+        &self,
+        concepts: &HashSet<i64, S>,
+        rid: i64,
+    ) -> HashSet<i64> {
+        let (mut seen, mut todo, mut out) = (HashSet::new(), vec![rid], HashSet::new());
+        while let Some(x) = todo.pop() {
+            if !seen.insert(x) {
+                continue;
+            }
+            let near = self.near.get(&x).into_iter().flatten();
+            out.extend(near.filter(|o| **o != rid && concepts.contains(*o)));
+            todo.extend(self.parents.get(&x).into_iter().flatten());
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 #[path = "tests/member.rs"]
 mod tests;

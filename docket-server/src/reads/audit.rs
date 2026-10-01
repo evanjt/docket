@@ -8,7 +8,7 @@ use sea_orm::{DatabaseConnection, FromQueryResult};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use docket_core::member::{Tie, members_of, opened_under};
+use docket_core::member::{Neighbours, Tie, members_of, opened_under};
 use docket_core::text::{principle_refs, principles};
 use docket_core::touch::declared_files;
 use docket_core::word::Kind;
@@ -196,7 +196,8 @@ async fn orphans(
     slug: &str,
     kinds: &Kinds,
 ) -> Result<Vec<item::Model>, Failure> {
-    if kinds.keys(Kind::Concept).is_empty() {
+    let con = kinds.keys(Kind::Concept);
+    if con.is_empty() {
         return Ok(Vec::new());
     }
     let project = store::project(db, slug).await?;
@@ -218,13 +219,39 @@ async fn orphans(
         values,
     )
     .await?;
-    let mut out = Vec::new();
-    for r in open {
-        if concepts_of(db, &project, r.rid).await?.is_empty() {
-            out.push(r);
-        }
-    }
-    Ok(out)
+    let index = Neighbours::new(&all_ties(db).await?);
+    let concepts: HashSet<i64> = store::column(
+        db,
+        &format!("SELECT rid FROM items WHERE key IN ({})", marks(con.len())),
+        con.into_iter().map(Into::into).collect(),
+    )
+    .await?
+    .into_iter()
+    .collect();
+    Ok(open
+        .into_iter()
+        .filter(|r| index.concepts_of(&concepts, r.rid).is_empty())
+        .collect())
+}
+
+/// Every item-to-item link in the database, whichever project holds its ends.
+async fn all_ties(db: &DatabaseConnection) -> Result<Vec<Tie>, Failure> {
+    let rows = TieRow::find_by_statement(sql(
+        "SELECT rid, kind, to_rid FROM links WHERE kind IN ('related', 'opened') AND to_rid IS NOT NULL",
+        vec![],
+    ))
+    .all(db)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|t| {
+            Some(Tie {
+                rid: t.rid,
+                opened: t.kind == "opened",
+                to: t.to_rid?,
+            })
+        })
+        .collect())
 }
 
 /// The rows under an id: a standing item's members, or what it opened at any depth, by rid.

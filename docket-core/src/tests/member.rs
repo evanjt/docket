@@ -42,3 +42,29 @@ fn test_members_of_survives_an_opened_cycle_and_an_empty_graph() {
     assert_eq!(members_of(&ties, &standing, 9), set(&[1, 2]));
     assert_eq!(members_of(&[], &standing, 9), set(&[]));
 }
+
+#[test]
+fn test_concepts_of_reads_ties_either_way_and_up_through_openers() {
+    // 10 and 11 are concepts. 1 relates to 10; 2 was opened by 1; 3 opened 2 and is tied from 11;
+    // 4 stands alone.
+    let ties = [
+        tie(1, false, 10),
+        tie(2, true, 1),
+        tie(2, true, 3),
+        tie(11, false, 3),
+    ];
+    let index = Neighbours::new(&ties);
+    let concepts = set(&[10, 11]);
+    assert_eq!(index.concepts_of(&concepts, 1), set(&[10]));
+    assert_eq!(index.concepts_of(&concepts, 2), set(&[10, 11]));
+    assert_eq!(index.concepts_of(&concepts, 4), set(&[]));
+}
+
+#[test]
+fn test_concepts_of_a_concept_leaves_itself_out_and_stops_at_a_cycle() {
+    let ties = [tie(10, false, 11), tie(1, true, 2), tie(2, true, 1)];
+    let index = Neighbours::new(&ties);
+    let concepts = set(&[10, 11]);
+    assert_eq!(index.concepts_of(&concepts, 10), set(&[11]));
+    assert_eq!(index.concepts_of(&concepts, 1), set(&[]));
+}

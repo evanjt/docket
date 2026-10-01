@@ -12,6 +12,7 @@ one place a claim is decided, so two machines never take the same item.
 |---|---|
 | `docket-core` | the rules: status words, claims, refusals, the queue order, the schema and the API types |
 | `docket-server` | axum and sea-orm over the database: read routes, the write verbs under `/do`, key auth |
+| `docket` | the command line: every verb as a request to the server, printed as the text an agent reads |
 | `docket-dump` | the database written one way into a git checkout, and rebuilt from one |
 
 ## Quick Start
@@ -29,6 +30,21 @@ The server listens on `127.0.0.1:7878` (set `DOCKET_LISTEN` to change it). Every
 curl -H "Authorization: Bearer $KEY" http://127.0.0.1:7878/projects
 ```
 
+## Client
+
+`docket` reads the server's address and its key from `~/.config/docket/client`, or from
+`DOCKET_SERVER` and `DOCKET_KEY` over it:
+
+```bash
+printf 'server = http://127.0.0.1:7878\nkey = %s\n' "$KEY" > ~/.config/docket/client
+cargo run -p docket -- status
+```
+
+A command works out its project from `-p SLUG`, then `DOCKET_PROJECT`, then the directories bound
+on this machine (`~/.config/docket/roots`, written by `docket bind` and by the first command run in
+a checkout), then the outermost git repository, matched to a project by its remote's slug, a shared
+remote or its directory name, or created with the default keys.
+
 ## Keys
 
 The keys file has one line per key, `host role key`, where role is `owner` or `agent`. The host is
@@ -42,9 +58,12 @@ machine. An agent key cannot open items with `new` or `add`.
 | `GET /next`, `/todo`, `/questions`, `/research`, `/waiting`, `/derived`, `/wip`, `/groups`, `/done`, `/dropped` | the lists, with `project=SLUG` |
 | `GET /status` | the flow counts and the summary |
 | `GET /show/{id}`, `/search`, `/similar/{id}` | one item, full-text search over FTS5 |
+| `GET /context/{id}`, `/log/{id}`, `/deps/{id}` | what `show` prints beside an item, its events, its ties |
+| `GET /flow`, `/summary`, `/check`, `/audit`, `/graph`, `/files`, `/citations`, `/shares` | a project's flow, status, integrity, audits, graph, cited files, claims sharing files |
+| `GET /counts`, `/whoami` | every project's counts; the host and role of the key presented |
 | `GET /projects`, `/items`, `/events`, `/links` | the stored rows, filtered and paged |
 | `GET /dump` | the rows changed after an event `seq` (`since=N`), or every row (`since=0`), for `docket-dump` |
-| `POST /do/{verb}` | `new`, `add`, `start`, `close`, `release`, `drop`, `reopen`, `wait`, `resume`, `ask`, `reply`, `answer`, `decide`, `priority`, `rate`, `edit`, `link`, `fold`, `key`, `pull`, `defer` |
+| `POST /do/{verb}` | `new`, `add`, `start`, `close`, `release`, `drop`, `reopen`, `wait`, `resume`, `ask`, `reply`, `answer`, `decide`, `priority`, `rate`, `edit`, `link`, `fold`, `key`, `pull`, `defer`, `project`, `reindex` |
 
 A refused write answers `409` with the reason, and nothing is written.
 
@@ -95,8 +114,6 @@ writes: reads and the change stream follow its commits, and every write is refus
 - One server process owns the database. Run a single replica on local disk: SQLite's locks do not
   hold over NFS.
 - The server creates no schema. Start it on a database made from `docket-core/schema.sql`.
-- There is no route to create a project yet, so a fresh database serves only the projects already in
-  it.
 
 ## License
 

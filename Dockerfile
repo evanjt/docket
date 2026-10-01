@@ -11,12 +11,14 @@ WORKDIR /build
 RUN apk --no-cache upgrade && \
     apk add --no-cache musl-dev gcc make perl
 COPY Cargo.toml Cargo.lock ./
+COPY docket/Cargo.toml docket/Cargo.toml
 COPY docket-client/Cargo.toml docket-client/Cargo.toml
 COPY docket-core/Cargo.toml docket-core/Cargo.toml
 COPY docket-dump/Cargo.toml docket-dump/Cargo.toml
 COPY docket-server/Cargo.toml docket-server/Cargo.toml
 COPY docket-tui/Cargo.toml docket-tui/Cargo.toml
-RUN mkdir -p docket-client/src docket-core/src docket-dump/src docket-server/src docket-tui/src && \
+RUN mkdir -p docket/src docket-client/src docket-core/src docket-dump/src docket-server/src docket-tui/src && \
+    echo 'fn main() {}' > docket/src/main.rs && \
     : > docket-client/src/lib.rs && \
     : > docket-core/src/lib.rs && \
     echo 'fn main() {}' > docket-dump/src/main.rs && \
@@ -39,6 +41,7 @@ RUN apk --no-cache upgrade && \
 COPY --from=cacher /build/target target
 COPY --from=cacher /usr/local/cargo /usr/local/cargo
 COPY Cargo.toml Cargo.lock ./
+COPY docket docket
 COPY docket-client docket-client
 COPY docket-core docket-core
 COPY docket-dump docket-dump

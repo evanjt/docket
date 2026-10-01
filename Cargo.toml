@@ -1,5 +1,5 @@
 [workspace]
-members = ["docket-client", "docket-core", "docket-dump", "docket-server", "docket-tui"]
+members = ["docket", "docket-client", "docket-core", "docket-dump", "docket-server", "docket-tui"]
 resolver = "2"
 
 [workspace.package]

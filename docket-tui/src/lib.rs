@@ -5,6 +5,7 @@ pub mod app;
 pub mod board;
 pub mod doc;
 pub mod load;
+pub mod mouse;
 pub mod page;
 pub mod palette;
 pub mod run;

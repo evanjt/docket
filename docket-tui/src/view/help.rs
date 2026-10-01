@@ -60,6 +60,17 @@ Keys
   PgUp / PgDn            scroll
   g home   o yours   t plans   S settings   ? this page   . read everything again   q quit
 
+Mouse
+
+  click                  open the id, count or list under the pointer, as Enter does; on the
+                         settings page, edit the fact clicked
+  click a row            select it in a list; a click on the selected row opens it
+  wheel                  scroll the pane under the pointer, 3 lines a notch
+  right click            back
+  move over an id        select it, where the terminal reports the pointer's moves
+  Marking rows stays on the keyboard (x). While the screen has the mouse, most terminals select
+  text with Shift held.
+
 Writing
 
   x                      mark or unmark the row; a move acts on the marked rows, else on the row

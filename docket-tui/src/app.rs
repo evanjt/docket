@@ -6,6 +6,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::board::Board;
 use crate::doc::{Cursor, Listing, Target};
+use crate::mouse::Map;
 use crate::page::{Browser, Detail, Help, Home, Page, Plans, Project, Queue, Settings, Typing};
 use crate::source::Source;
 use crate::view;
@@ -28,6 +29,8 @@ pub struct App<S: Source> {
     pub prompt: Option<Prompt>,
     /// Text for the runner to open in `$EDITOR`, handed back through `edited`.
     pub editor: Option<String>,
+    /// Where the last draw put each hot spot, list row and pane, for the mouse.
+    pub map: Map,
 }
 
 impl<S: Source> App<S> {
@@ -46,6 +49,7 @@ impl<S: Source> App<S> {
             size: (120, 40),
             prompt: None,
             editor: None,
+            map: Map::default(),
         };
         app.load();
         app
@@ -258,8 +262,8 @@ impl<S: Source> App<S> {
             KeyCode::BackTab => self.step_spot(false),
             KeyCode::Char('j') | KeyCode::Down => self.step_row(true),
             KeyCode::Char('k') | KeyCode::Up => self.step_row(false),
-            KeyCode::PageDown => self.scroll(isize::try_from(height).unwrap_or(10) - 2),
-            KeyCode::PageUp => self.scroll(2 - isize::try_from(height).unwrap_or(10)),
+            KeyCode::PageDown => self.scroll(isize::try_from(height).unwrap_or(10) - 2, height),
+            KeyCode::PageUp => self.scroll(2 - isize::try_from(height).unwrap_or(10), height),
             KeyCode::Enter | KeyCode::Char('l') => self.enter(),
             KeyCode::Char(' ') => self.fold(),
             _ => {}
@@ -309,20 +313,22 @@ impl<S: Source> App<S> {
     /// On a page that is one document: the next hot spot, or a line of scroll where it has none.
     fn step_doc(&mut self, forward: bool) {
         if view::spots(self).is_empty() {
-            self.scroll(if forward { 1 } else { -1 });
+            self.scroll(if forward { 1 } else { -1 }, self.body_height());
         } else {
             self.step_spot(forward);
         }
     }
 
-    fn scroll(&mut self, by: isize) {
-        let lines = view::lines(self);
-        let height = self.body_height();
-        self.cursor_mut().scroll(by, lines, height);
+    /// Scrolls the page's document in a window of the height, letting go of a spot it leaves behind.
+    pub(crate) fn scroll(&mut self, by: isize, height: usize) {
+        let doc = view::doc(self);
+        let cursor = self.cursor_mut();
+        cursor.scroll(by, doc.lines.len(), height);
+        cursor.release(&doc.spots(), height);
     }
 
     /// Enter: the selected hot spot, or in a list the selected row when no spot is chosen.
-    fn enter(&mut self) {
+    pub(crate) fn enter(&mut self) {
         let chosen = self.cursor().selected().cloned();
         if let Some(Target::Fact(key)) = chosen {
             self.edit_fact(key);

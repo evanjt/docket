@@ -18,6 +18,7 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::App;
 use crate::doc::{Doc, Target};
+use crate::mouse::Map;
 use crate::page::Page;
 use crate::source::Source;
 use crate::style;
@@ -60,13 +61,10 @@ pub fn spots<S: Source>(app: &App<S>) -> Vec<(usize, Target)> {
     doc(app).spots()
 }
 
-pub fn lines<S: Source>(app: &App<S>) -> usize {
-    doc(app).lines.len()
-}
-
 pub fn draw<S: Source>(app: &mut App<S>, f: &mut Frame) {
     let area = f.area();
     app.size = (area.width, area.height);
+    app.map = Map::default();
     let foot_lines = footer(app, usize::from(area.width));
     let [top, body, foot] = Layout::vertical([
         Constraint::Length(1),
@@ -83,8 +81,8 @@ pub fn draw<S: Source>(app: &mut App<S>, f: &mut Frame) {
     f.render_widget(Paragraph::new(foot_lines).style(style::bar()), foot);
 }
 
-/// A page that is one document, scrolled to keep the selected spot in view.
-fn draw_doc<S: Source>(app: &mut App<S>, f: &mut Frame, area: Rect) {
+/// The page's document, scrolled to keep the selected spot in view, its hot spots kept for the mouse.
+pub fn draw_doc<S: Source>(app: &mut App<S>, f: &mut Frame, area: Rect) {
     let doc = doc(app);
     let spots = doc.spots();
     let cursor = app.cursor_mut();
@@ -96,6 +94,7 @@ fn draw_doc<S: Source>(app: &mut App<S>, f: &mut Frame, area: Rect) {
         Paragraph::new(text).scroll((u16::try_from(top).unwrap_or(0), 0)),
         area,
     );
+    app.map.doc(&doc, area, top);
 }
 
 /// The pages behind, the one shown in brackets, the ones ahead dimmed, and whether changes arrive.

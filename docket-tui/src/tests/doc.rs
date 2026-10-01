@@ -98,3 +98,23 @@ fn test_render_reverses_the_selected_spot_only() {
     assert!(spans[0].style.add_modifier.contains(Modifier::UNDERLINED));
     assert!(spans[2].style.add_modifier.contains(Modifier::REVERSED));
 }
+
+#[test]
+fn test_places_give_each_spot_its_line_column_and_width() {
+    let mut d = Doc::default();
+    d.prose("T1 then PK1\n\nsee Q1", 40, &known);
+    assert_eq!(d.places(), [(0, 0, 2), (0, 8, 3), (2, 4, 2)]);
+}
+
+#[test]
+fn test_cursor_release_drops_a_spot_scrolled_out_of_view() {
+    let s = spots();
+    let mut c = Cursor::default();
+    c.step(&s, true);
+    c.scroll(1, 5, 2);
+    c.release(&s, 2);
+    assert_eq!((c.top, c.selected()), (1, None));
+    c.step(&s, false);
+    c.release(&s, 4);
+    assert_eq!(c.selected(), Some(&Target::Item("Q1".into())));
+}

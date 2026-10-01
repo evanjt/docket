@@ -10,12 +10,13 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use crate::app::App;
 use crate::board::Board;
 use crate::doc::{Doc, Target, seg, spot};
+use crate::mouse::Pane;
 use crate::page::{Page, PlanRow, Plans};
 use crate::source::Source;
 use crate::style;
 use crate::view::browser::follow;
 use crate::view::project::bar;
-use crate::view::{doc as page_doc, list_width};
+use crate::view::{draw_doc, list_width};
 
 fn row_line(r: &PlanRow, selected: bool, marked: bool, width: usize) -> Line<'static> {
     if let Some(h) = &r.heading {
@@ -56,43 +57,32 @@ pub fn draw<S: Source>(app: &mut App<S>, f: &mut Frame, area: Rect) {
         Constraint::Min(10),
     ])
     .areas(area);
-    draw_side(app, f, right);
+    let pad = Rect {
+        x: right.x + 1,
+        width: right.width.saturating_sub(1),
+        ..right
+    };
+    draw_doc(app, f, pad);
     let Page::Plans(p) = &mut app.page else {
         return;
     };
-    let height = usize::from(left.height.saturating_sub(1));
-    p.list_top = follow(p.list_top, p.sel, height.max(1));
+    let height = usize::from(left.height.saturating_sub(1)).max(1);
+    p.list_top = follow(p.list_top, p.sel, height);
     let width = usize::from(left.width.saturating_sub(1));
-    let lines: Vec<Line> = p
-        .rows
-        .iter()
-        .enumerate()
-        .skip(p.list_top)
-        .take(height)
-        .map(|(i, r)| row_line(r, i == p.sel, p.marks.contains(&r.id), width))
-        .collect();
     let block = Block::default()
         .borders(Borders::RIGHT)
         .title(Span::styled(" plans, packages and concepts", style::bold()));
+    let inner = block.inner(left);
+    app.map.panes.push((left, Pane::List));
+    app.map.list_rows = height;
+    let mut lines = Vec::new();
+    for (i, r) in p.rows.iter().enumerate().skip(p.list_top).take(height) {
+        if r.heading.is_none() {
+            app.map.row(inner, i, lines.len(), 1);
+        }
+        lines.push(row_line(r, i == p.sel, p.marks.contains(&r.id), width));
+    }
     f.render_widget(Paragraph::new(lines).block(block), left);
-}
-
-fn draw_side<S: Source>(app: &mut App<S>, f: &mut Frame, area: Rect) {
-    let d = page_doc(app);
-    let spots = d.spots();
-    let cursor = app.cursor_mut();
-    cursor.settle(&spots);
-    cursor.follow(&spots, usize::from(area.height));
-    let (index, top) = (cursor.index, cursor.top);
-    let pad = Rect {
-        x: area.x + 1,
-        width: area.width.saturating_sub(1),
-        ..area
-    };
-    f.render_widget(
-        Paragraph::new(d.render(index)).scroll((u16::try_from(top).unwrap_or(0), 0)),
-        pad,
-    );
 }
 
 /// The selected row: its head and progress, what comes next under it, and its rows below it.

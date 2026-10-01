@@ -139,6 +139,23 @@ impl Doc {
         out
     }
 
+    /// Where each hot spot sits, in the order of `spots`: its line, its first column and its width.
+    #[must_use]
+    pub fn places(&self) -> Vec<(usize, u16, u16)> {
+        let mut out = Vec::new();
+        for (y, line) in self.lines.iter().enumerate() {
+            let mut x = 0u16;
+            for s in line {
+                let width = u16::try_from(Span::raw(s.text.as_str()).width()).unwrap_or(u16::MAX);
+                if s.target.is_some() {
+                    out.push((y, x, width));
+                }
+                x = x.saturating_add(width);
+            }
+        }
+        out
+    }
+
     /// The lines to draw, the selected spot reversed. An item spot is underlined, as a link reads.
     #[must_use]
     pub fn render(&self, selected: Option<usize>) -> Vec<Line<'static>> {
@@ -312,6 +329,18 @@ impl Cursor {
     pub fn scroll(&mut self, by: isize, lines: usize, height: usize) {
         let most = lines.saturating_sub(height);
         self.top = self.top.saturating_add_signed(by).min(most);
+    }
+
+    /// Lets go of the selected spot once it has scrolled out of a window of the height, so the window
+    /// stays where it was put.
+    pub fn release(&mut self, spots: &[(usize, Target)], height: usize) {
+        let Some(y) = self.index.and_then(|i| spots.get(i)).map(|(y, _)| *y) else {
+            return;
+        };
+        if y < self.top || y >= self.top + height {
+            self.index = None;
+            self.target = None;
+        }
     }
 
     #[must_use]

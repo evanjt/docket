@@ -2,6 +2,9 @@
 
 use std::collections::BTreeMap;
 
+use crate::item::Refused;
+use crate::text::py_repr;
+
 /// Every fact a project carries, in the order `docket skills` prints them, with its one-line meaning.
 pub const FACTS: [(&str, &str); 36] = [
     ("owner", "the owner's name, as the skills address them"),
@@ -227,6 +230,173 @@ pub fn gaps(skills: &BTreeMap<String, String>) -> Vec<String> {
         if value(skills, key) == Value::Unset {
             out.push(format!("no {key}"));
         }
+    }
+    out
+}
+
+/// The values a fact may take, checked when it is set so the loop never reads a typo.
+pub const CHOICES: [(&str, &[&str]); 1] = [("mode", &["run", "drain", "pause"])];
+
+/// Facts that hold a whole number above 0.
+pub const COUNTS: [&str; 10] = [
+    "stale_claim",
+    "poll",
+    "pool_max",
+    "file_cap",
+    "packages_live",
+    "ram_floor",
+    "job_timeout",
+    "observe_cap",
+    "jobs_per_day",
+    "plan_batch",
+];
+
+/// Facts that hold a model and an optional effort.
+pub const MODELS: [&str; 3] = ["model_build", "model_review", "model_plan"];
+
+/// Facts only the owner's key sets.
+pub const OWNER_ONLY: [&str; 1] = ["pool_max"];
+
+/// What `docket skills KEY` also answers, worked out rather than set, for scripts.
+pub const COMPUTED: [(&str, &str); 3] = [
+    ("root", "the project's root on this host"),
+    ("slug", "the project's slug"),
+    (
+        "src",
+        "the directory holding the docket command this runs from",
+    ),
+];
+
+/// Refuses a value the loop or a skill could not use. An empty value unsets the fact.
+///
+/// # Errors
+/// The key is no fact, is written by docket, or the value is outside what the fact holds.
+pub fn check(key: &str, value: &str) -> Result<(), Refused> {
+    if meaning(key).is_none() {
+        let all: Vec<&str> = FACTS.iter().map(|(k, _)| *k).collect();
+        return Err(Refused(format!(
+            "{key} is not a skill fact. One of: {}",
+            all.join(", ")
+        )));
+    }
+    if value.is_empty() {
+        return Ok(());
+    }
+    if WRITTEN.contains(&key) {
+        return Err(Refused(format!(
+            "{key} is written by docket, not set by hand"
+        )));
+    }
+    if let Some((_, allowed)) = CHOICES.iter().find(|(k, _)| *k == key)
+        && !allowed.contains(&value)
+    {
+        return Err(Refused(format!(
+            "{key} is one of {}, not {}",
+            allowed.join(", "),
+            py_repr(value)
+        )));
+    }
+    check_shape(key, value)
+}
+
+/// The numbers, models and pools a fact's value must read as.
+fn check_shape(key: &str, value: &str) -> Result<(), Refused> {
+    if COUNTS.contains(&key) && !is_count(value) {
+        return Err(Refused(format!(
+            "{key} is a whole number above 0, not {}",
+            py_repr(value)
+        )));
+    }
+    if MODELS.contains(&key) && !(1..=2).contains(&value.split_whitespace().count()) {
+        return Err(Refused(format!(
+            "{key} is a model and an optional effort, as \"gpt-5.4 medium\", not {}",
+            py_repr(value)
+        )));
+    }
+    if key == "brake_ratio" && value.trim().parse::<f64>().is_err() {
+        return Err(Refused(format!(
+            "brake_ratio is a number, as 0.5, not {}",
+            py_repr(value)
+        )));
+    }
+    if key == "pool" {
+        pool_of(value)?;
+    }
+    Ok(())
+}
+
+/// Digits only, and not all of them zero.
+fn is_count(value: &str) -> bool {
+    !value.is_empty()
+        && value.bytes().all(|b| b.is_ascii_digit())
+        && value.bytes().any(|b| b != b'0')
+}
+
+/// Slots per host from a pool fact, refused when any pair does not read as `host=slots`.
+///
+/// # Errors
+/// A pair with no `=`, no host, or slots that are not digits.
+pub fn pool_of(value: &str) -> Result<Vec<(String, u128)>, Refused> {
+    let mut out = Vec::new();
+    for part in value.split_whitespace() {
+        let (host, n) = part.split_once('=').unwrap_or((part, ""));
+        let digits = !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit());
+        if host.is_empty() || !part.contains('=') || !digits {
+            return Err(Refused(format!(
+                "pool is host=slots pairs separated by spaces, as \"local=4 devbox=16\", not {}",
+                py_repr(value)
+            )));
+        }
+        out.push((host.to_string(), n.parse().unwrap_or(u128::MAX)));
+    }
+    Ok(out)
+}
+
+/// Refuses a pool, or a ceiling, that would put the pool's slots above `pool_max`.
+///
+/// # Errors
+/// The slots the pool would hold exceed the ceiling.
+pub fn ceiling(skills: &BTreeMap<String, String>, key: &str, value: &str) -> Result<(), Refused> {
+    if value.is_empty() || (key != "pool" && key != "pool_max") {
+        return Ok(());
+    }
+    let stored = |k: &str| skills.get(k).map_or("", String::as_str);
+    let cap = if key == "pool_max" {
+        value
+    } else {
+        stored("pool_max")
+    };
+    if cap.is_empty() {
+        return Ok(());
+    }
+    let pool = if key == "pool" { value } else { stored("pool") };
+    let slots: u128 = pool_of(pool)?
+        .iter()
+        .fold(0, |sum, (_, n)| sum.saturating_add(*n));
+    if slots > cap.parse().unwrap_or(u128::MAX) {
+        return Err(Refused(format!(
+            "the pool would hold {slots} slots, above pool_max {cap}, the owner's ceiling"
+        )));
+    }
+    Ok(())
+}
+
+/// The refusal a fleet job's key meets when it sets a fact the owner keeps.
+#[must_use]
+pub fn owner_only(key: &str) -> Option<String> {
+    OWNER_ONLY.contains(&key).then(|| {
+        format!("{key} is the owner's ceiling on the pool, and a fleet job does not set it")
+    })
+}
+
+/// The facts with one set or unset, as stored after the write.
+#[must_use]
+pub fn with(skills: &BTreeMap<String, String>, key: &str, value: &str) -> BTreeMap<String, String> {
+    let mut out = skills.clone();
+    if value.is_empty() {
+        out.remove(key);
+    } else {
+        out.insert(key.to_string(), value.to_string());
     }
     out
 }

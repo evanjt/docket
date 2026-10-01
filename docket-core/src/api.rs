@@ -1,5 +1,7 @@
 //! The request and response of every write verb, shared by the server and its clients.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -347,6 +349,26 @@ pub struct KeyRequest {
     pub turn: Option<String>,
 }
 
+/// `retry`: an item the loop parked or sent back, given a fresh start.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct RetryRequest {
+    #[serde(flatten)]
+    pub common: Common,
+    pub id: String,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+/// `fact`: one project fact set, or unset by an empty value.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct FactRequest {
+    #[serde(flatten)]
+    pub common: Common,
+    pub key: String,
+    #[serde(default)]
+    pub value: String,
+}
+
 /// The checkout a client stands in, for the project it belongs to.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ProjectRequest {
@@ -461,6 +483,22 @@ pub struct ProjectResolved {
 pub struct Reindexed {
     pub project: String,
     pub items: usize,
+}
+
+/// A project's facts as stored, and when the loop last ticked for it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Facts {
+    pub project: String,
+    pub skills: BTreeMap<String, String>,
+    pub last_tick: Option<String>,
+}
+
+/// One fact written: the facts as they stand after it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FactSet {
+    pub project: String,
+    pub key: String,
+    pub skills: BTreeMap<String, String>,
 }
 
 /// A stored JSON column, passed through as it is.

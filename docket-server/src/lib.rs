@@ -3,6 +3,7 @@
 pub mod auth;
 pub mod changes;
 pub mod entities;
+mod facts;
 pub mod reads;
 pub mod show;
 mod store;
@@ -83,6 +84,7 @@ pub fn app(db: &DatabaseConnection, keys: Keys) -> Router {
     Router::new()
         .route("/show/{id}", get(show::show))
         .merge(reads::router())
+        .merge(facts::router())
         .nest("/do", verbs::router())
         .with_state(db.clone())
         .merge(changes::router(db))

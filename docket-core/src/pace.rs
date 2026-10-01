@@ -85,14 +85,17 @@ pub struct Pace {
 }
 
 impl Pace {
-    /// Closes an hour of working time, none when nothing closed.
+    /// Closes an hour of working time, rounded half to even as Python's `round` does; none when nothing
+    /// closed.
     #[must_use]
     pub fn per_hour(&self) -> Option<u64> {
         if self.closed == 0 || self.working <= 0 {
             return None;
         }
         let working = u64::try_from(self.working).ok()?;
-        Some((self.closed * 3600 + working / 2) / working).filter(|n| *n > 0)
+        let (q, r) = (self.closed * 3600 / working, self.closed * 3600 % working);
+        let up = 2 * r > working || (2 * r == working && q % 2 == 1);
+        Some(q + u64::from(up)).filter(|n| *n > 0)
     }
 }
 
@@ -122,7 +125,7 @@ pub fn pace(moves: &[Move], recent: u64, now: i64) -> Pace {
     } else {
         let mut sorted = gaps.clone();
         sorted.sort_unstable();
-        let cap = (median(&sorted) * 6).max(1800);
+        let cap = six_medians(&sorted).max(1800);
         gaps.iter().map(|g| (*g).min(cap)).sum()
     };
     Pace {
@@ -132,11 +135,12 @@ pub fn pace(moves: &[Move], recent: u64, now: i64) -> Pace {
     }
 }
 
-fn median(sorted: &[i64]) -> i64 {
+/// Six times the median, exact: an even count's median is the mean of its middle two.
+fn six_medians(sorted: &[i64]) -> i64 {
     match sorted.len() {
         0 => 0,
-        n if n % 2 == 1 => sorted[n / 2],
-        n => (sorted[n / 2 - 1] + sorted[n / 2]) / 2,
+        n if n % 2 == 1 => sorted[n / 2] * 6,
+        n => (sorted[n / 2 - 1] + sorted[n / 2]) * 3,
     }
 }
 

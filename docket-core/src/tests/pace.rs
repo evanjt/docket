@@ -60,6 +60,33 @@ fn test_pace_reads_the_last_closes_and_caps_a_long_gap() {
 }
 
 #[test]
+fn test_pace_caps_at_six_of_an_even_median_and_rounds_half_to_even() {
+    // Gaps 500 and 601 and the stop to now: median of 500, 601, 40000 is 601, cap 3606.
+    let moves = [closed(0), closed(500), closed(1101)];
+    assert_eq!(pace(&moves, 20, 41_101).working, 500 + 601 + 3606);
+    // Gaps 400, 801, 100 and 3602: the median is 600.5, so the cap is 3603 and the stop counts whole.
+    let p = pace(
+        &[closed(0), closed(400), closed(1201), closed(1301)],
+        20,
+        4903,
+    );
+    assert_eq!(p.working, 400 + 801 + 100 + 3602);
+    // 1 close in 7200 seconds is 0.5 an hour, which rounds to 0; 3 in 7200 is 1.5, which rounds to 2.
+    let half = Pace {
+        closed: 1,
+        opened: 0,
+        working: 7200,
+    };
+    assert_eq!(half.per_hour(), None);
+    let three = Pace {
+        closed: 3,
+        opened: 0,
+        working: 7200,
+    };
+    assert_eq!(three.per_hour(), Some(2));
+}
+
+#[test]
 fn test_pace_keeps_to_the_recent_closes() {
     let moves: Vec<Move> = (0..10).map(|i| closed(i * 60)).collect();
     assert_eq!(pace(&moves, 3, 600).closed, 3);

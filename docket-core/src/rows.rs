@@ -137,6 +137,8 @@ pub struct Row {
     #[serde(default)]
     pub claim_since: Option<String>,
     #[serde(default)]
+    pub claim_runner: Option<String>,
+    #[serde(default)]
     pub claim_job: Option<String>,
     #[serde(default)]
     pub claim_on: Option<String>,
@@ -144,6 +146,8 @@ pub struct Row {
     pub wait_on: Option<String>,
     #[serde(default)]
     pub wait_ref: Option<String>,
+    #[serde(default)]
+    pub wait_since: Option<String>,
     #[serde(default)]
     pub decision: Option<String>,
     #[serde(default)]

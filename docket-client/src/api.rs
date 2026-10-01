@@ -4,12 +4,11 @@ use std::io::{BufRead, BufReader, Read};
 use std::time::Duration;
 
 use reqwest::blocking::{Client, Response};
+use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
-use docket_core::rows::{
-    Derived, EventRow, ItemRow, LinkRow, ProjectRow, Refusal, Row, Shown, Status,
-};
+use docket_core::rows::{Derived, EventRow, ItemRow, LinkRow, ProjectRow, Row, Shown, Status};
 
 use crate::config::Config;
 
@@ -69,10 +68,27 @@ impl Api {
         if resp.status().is_success() {
             return Ok(resp);
         }
-        let code = resp.status().as_u16();
-        let text = resp.text().unwrap_or_default();
-        let why = serde_json::from_str::<Refusal>(&text).map_or(text, |r| r.error);
-        Err(Error::Refused(code, why))
+        Err(refusal(resp))
+    }
+
+    /// A write verb, `POST /do/{verb}`, its answer read as `T`.
+    ///
+    /// # Errors
+    /// A refusal, the network, or an answer of another shape.
+    pub fn post<T: DeserializeOwned>(&self, verb: &str, body: &impl Serialize) -> Result<T> {
+        let resp = self
+            .http
+            .post(format!("{}/do/{verb}", self.base))
+            .bearer_auth(&self.key)
+            .header("content-type", "application/json")
+            .body(serde_json::to_vec(body).map_err(|e| Error::Failed(e.to_string()))?)
+            .send()
+            .map_err(|e| Error::Failed(format!("{}: {e}", self.base)))?;
+        if !resp.status().is_success() {
+            return Err(refusal(resp));
+        }
+        let text = resp.text().map_err(|e| Error::Failed(e.to_string()))?;
+        serde_json::from_str(&text).map_err(|e| Error::Failed(format!("{verb}: {e}")))
     }
 
     /// One route's answer, read as `T`.
@@ -175,6 +191,22 @@ impl Iterator for Changes {
             }
         }
     }
+}
+
+/// The words of a refused request: a verb's refusal, or any route's error.
+fn refusal(resp: Response) -> Error {
+    let code = resp.status().as_u16();
+    let text = resp.text().unwrap_or_default();
+    let why = serde_json::from_str::<Value>(&text)
+        .ok()
+        .and_then(|v| {
+            v["refused"]
+                .as_str()
+                .or_else(|| v["error"].as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or(text);
+    Error::Refused(code, why)
 }
 
 fn of(slug: &str) -> Vec<(&'static str, String)> {

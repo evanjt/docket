@@ -2,6 +2,7 @@
 
 pub mod api;
 pub mod config;
+pub mod roots;
 
 pub use api::{Api, Changes, Error};
 pub use config::Config;

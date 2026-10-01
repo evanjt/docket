@@ -13,22 +13,14 @@ use serde_json::Value;
 use docket_core::api::{FactRequest, FactSet, Facts};
 use docket_core::clock;
 use docket_core::fact;
-use docket_core::pyjson::{Style, dumps_styled};
 
 use crate::auth::Caller;
-use crate::store::{Tx, scalar};
+use crate::store::{Tx, json, scalar};
 use crate::verbs::Failure;
 
 const SKILLS: &str = "SELECT skills FROM projects WHERE slug=?";
 const WRITE: &str = "UPDATE projects SET skills=?, updated_at=? WHERE slug=?";
 const TICK: &str = "SELECT v FROM meta WHERE k=?";
-
-/// Skills as the Python writer stores them: `, ` and `: ` separators, non-ASCII kept.
-const STORED: Style = Style {
-    sort_keys: false,
-    ascii: false,
-    indent: None,
-};
 
 pub fn router() -> Router<DatabaseConnection> {
     Router::new()
@@ -46,16 +38,16 @@ async fn stored<C: ConnectionTrait>(
     c: &C,
     slug: &str,
 ) -> Result<BTreeMap<String, String>, Failure> {
-    let text: Option<String> = scalar(c, SKILLS, vec![slug.into()]).await?;
-    let Some(text) = text else {
+    let skills: Option<Value> = scalar(c, SKILLS, vec![slug.into()]).await?;
+    let Some(skills) = skills else {
         return Err(Failure::NotFound(format!("no project {slug}")));
     };
-    Ok(parse(&text))
+    Ok(parse(skills))
 }
 
 /// Every string-valued fact of a stored skills object; anything else is left out.
-fn parse(text: &str) -> BTreeMap<String, String> {
-    let Ok(Value::Object(map)) = serde_json::from_str::<Value>(text) else {
+fn parse(skills: Value) -> BTreeMap<String, String> {
+    let Value::Object(map) = skills else {
         return BTreeMap::new();
     };
     map.into_iter()
@@ -111,10 +103,10 @@ pub async fn set(
     }
     fact::ceiling(&skills, &key, &value)?;
     let skills = fact::with(&skills, &key, &value);
-    let text = dumps_styled(&serde_json::to_value(&skills).unwrap_or_default(), STORED);
+    let stored = json(serde_json::to_value(&skills).unwrap_or_default());
     tx.execute(
         WRITE,
-        vec![text.into(), tx.now.clone().into(), slug.clone().into()],
+        vec![stored, tx.now.clone().into(), slug.clone().into()],
     )
     .await?;
     tx.touch_project(&slug);

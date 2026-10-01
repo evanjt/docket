@@ -9,8 +9,8 @@ use std::collections::HashMap;
 use axum::Json;
 use axum::extract::{Query, State};
 use sea_orm::{
-    ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbErr, EntityTrait, FromQueryResult,
-    QueryOrder, TransactionTrait, Value,
+    AccessMode, ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbBackend, DbErr,
+    EntityTrait, FromQueryResult, IsolationLevel, QueryOrder, TransactionTrait, Value,
 };
 use serde::Deserialize;
 
@@ -84,7 +84,7 @@ pub async fn dump(
 }
 
 async fn page(db: &DatabaseConnection, since: i64) -> Result<DumpPage, DbErr> {
-    let tx = db.begin().await?;
+    let tx = snapshot(db).await?;
     let cursor: i64 = crate::store::scalar(&tx, "SELECT COALESCE(MAX(seq), 0) FROM events", vec![])
         .await?
         .unwrap_or(0);
@@ -102,6 +102,18 @@ async fn page(db: &DatabaseConnection, since: i64) -> Result<DumpPage, DbErr> {
     };
     tx.rollback().await?;
     Ok(page)
+}
+
+/// A read transaction that sees one snapshot for all its queries. SQLite gives that to every
+/// transaction; Postgres needs it asked for.
+async fn snapshot(db: &DatabaseConnection) -> Result<DatabaseTransaction, DbErr> {
+    if db.get_database_backend() == DbBackend::Postgres {
+        let level = Some(IsolationLevel::RepeatableRead);
+        return db
+            .begin_with_config(level, Some(AccessMode::ReadOnly))
+            .await;
+    }
+    db.begin().await
 }
 
 async fn projects(tx: &DatabaseTransaction) -> Result<Vec<ProjectDump>, DbErr> {

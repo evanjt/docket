@@ -1,5 +1,6 @@
 //! The lists whose order or content is a rule, each in the shape its Python command's `--json` prints.
 
+pub mod dump;
 pub mod lists;
 pub(crate) mod public;
 pub mod queue;
@@ -25,6 +26,7 @@ pub fn router() -> Router<DatabaseConnection> {
         .route("/groups", get(lists::groups))
         .route("/search", get(search::search))
         .route("/similar/{id}", get(search::similar))
+        .route("/dump", get(dump::dump))
 }
 
 #[cfg(test)]

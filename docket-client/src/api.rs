@@ -8,6 +8,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
+use docket_core::api::{Common, FactRequest, FactSet, Facts};
 use docket_core::rows::{Derived, EventRow, ItemRow, LinkRow, ProjectRow, Row, Shown, Status};
 
 use crate::config::Config;
@@ -272,6 +273,30 @@ impl Api {
     /// As `get`.
     pub fn show(&self, slug: &str, id: &str) -> Result<Shown> {
         self.get(&format!("/show/{id}"), &of(slug))
+    }
+
+    /// The facts a project sets, and when the loop last ticked for it.
+    ///
+    /// # Errors
+    /// As `get`.
+    pub fn facts(&self, slug: &str) -> Result<Facts> {
+        self.get("/facts", &of(slug))
+    }
+
+    /// One fact set, or unset by an empty value.
+    ///
+    /// # Errors
+    /// As `post`.
+    pub fn set_fact(&self, slug: &str, key: &str, value: &str) -> Result<FactSet> {
+        let req = FactRequest {
+            common: Common {
+                project: slug.to_string(),
+                ..Common::default()
+            },
+            key: key.to_string(),
+            value: value.to_string(),
+        };
+        self.post("fact", &req)
     }
 
     /// # Errors

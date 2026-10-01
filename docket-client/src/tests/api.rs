@@ -120,3 +120,20 @@ fn test_changes_from_the_server_start_with_hello() {
     let mut stream = api.changes().unwrap();
     assert_eq!(stream.next().as_deref(), Some("hello"));
 }
+
+#[test]
+fn test_facts_read_and_set_through_their_routes() {
+    let api = served();
+    let facts = api.facts("o/p").unwrap();
+    assert_eq!(facts.skills["mode"], "run");
+    assert_eq!(facts.last_tick, None);
+    let set = api.set_fact("o/p", "owner", "Ana").unwrap();
+    assert_eq!(set.skills["owner"], "Ana");
+    assert_eq!(api.facts("o/p").unwrap().skills["owner"], "Ana");
+    match api.set_fact("o/p", "mode", "go") {
+        Err(Error::Refused(409, why)) => {
+            assert_eq!(why, "mode is one of run, drain, pause, not 'go'");
+        }
+        other => panic!("{other:?}"),
+    }
+}

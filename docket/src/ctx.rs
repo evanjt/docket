@@ -246,3 +246,7 @@ pub fn id(text: &str) -> Result<String> {
     let (key, num) = split_id(text)?;
     Ok(format!("{key}{num}"))
 }
+
+#[cfg(test)]
+#[path = "tests/ctx.rs"]
+mod tests;

@@ -454,7 +454,7 @@ pub async fn similar_rows<C: ConnectionTrait>(
         .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
         .collect::<Vec<_>>()
         .join(" OR ");
-    let mut text = "SELECT i.* FROM items_fts JOIN items i ON i.rid = items_fts.rowid \
+    let mut text = "SELECT i.* FROM items_fts CROSS JOIN items i ON i.rid = items_fts.rowid \
                     WHERE items_fts MATCH ? AND i.project=?"
         .to_string();
     let mut values: Vec<Value> = vec![q.clone().into(), slug.into()];

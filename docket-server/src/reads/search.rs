@@ -36,7 +36,7 @@ pub(crate) async fn search_rows(
 ) -> Result<Vec<(item::Model, f64, String)>, Failure> {
     let mut text = "SELECT i.*, bm25(items_fts, 4.0, 8.0, 1.0, 2.0) AS score, \
                     snippet(items_fts, 2, '[', ']', ' ... ', 12) AS snip \
-                    FROM items_fts JOIN items i ON i.rid = items_fts.rowid \
+                    FROM items_fts CROSS JOIN items i ON i.rid = items_fts.rowid \
                     WHERE items_fts MATCH ? AND i.project=?"
         .to_string();
     let mut values: Vec<sea_orm::Value> = vec![query.into(), slug.into()];

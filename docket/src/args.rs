@@ -4,12 +4,12 @@ use clap::{Args, Parser, Subcommand};
 
 const COMPLEXITIES: [&str; 3] = ["high", "medium", "low"];
 const PRIORITIES: [&str; 4] = ["critical", "high", "normal", "low"];
-const SCOPES: [&str; 2] = ["inbox", "later"];
 const TURNS: [&str; 2] = ["agent", "user"];
 const STATES: [&str; 4] = ["open", "done", "dropped", "any"];
 const RUNNERS: [&str; 3] = ["codex", "claude", "remote"];
 const ROLES: [&str; 4] = ["build", "rebase", "review", "plan"];
 const WAITS: [&str; 2] = ["item", "condition"];
+const QUEUE_ROLES: [&str; 3] = ["plan", "work", "audit"];
 const KINDS: [&str; 8] = [
     "work", "decision", "research", "audit", "story", "concept", "idea", "package",
 ];
@@ -56,21 +56,16 @@ pub struct Queue {
     /// only items carrying this theme
     #[arg(long)]
     pub theme: Option<String>,
-    /// hide items carrying this theme, a roadmap held out of the release
-    #[arg(long)]
-    pub without_theme: Option<String>,
-    /// only items a plan or story opened, at any depth, or a concept's or central idea's members
+    /// only items a plan opened, at any depth
     #[arg(long, value_name = "ID")]
     pub under: Option<String>,
-    /// what sits outside the release instead: the inbox or later
-    #[arg(long, value_parser = SCOPES)]
-    pub scope: Option<String>,
+    /// only what this role takes: plan (new plans, investigations, decided questions), work
+    /// (tickets), audit (plans whose tickets are all closed)
+    #[arg(long, value_parser = QUEUE_ROLES)]
+    pub role: Option<String>,
     /// only this priority and anything more urgent
     #[arg(long, value_parser = PRIORITIES)]
     pub priority: Option<String>,
-    /// every theme, where a release fact keeps next to the release
-    #[arg(long)]
-    pub all: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -84,15 +79,13 @@ pub struct Recent {
 pub enum Cmd {
     /// counts, claims, checks and the next few as text (the bare command on a pipe)
     Status,
-    /// the agent queue: open, agent's turn, unclaimed, not waiting, work first
+    /// the agent queue: open, agent's turn, unclaimed, not waiting, most urgent then oldest first
     Next(Queue),
     /// shorthand for next --complexity high
     Complex {
         n: Option<i64>,
         #[arg(long)]
         theme: Option<String>,
-        #[arg(long)]
-        without_theme: Option<String>,
     },
     /// the owner's queue: open items on the user's turn
     Todo,
@@ -147,7 +140,7 @@ pub enum Cmd {
         #[arg(long)]
         group: Option<String>,
     },
-    /// file a ticket to the inbox, for the planner to place
+    /// file a side finding as a low-priority ticket
     Add {
         title: String,
         /// the work key to file under; default B, or the first work key
@@ -159,20 +152,6 @@ pub enum Cmd {
         /// the fleet job that saw it, so the brakes count it
         #[arg(long = "from", value_name = "JOB")]
         from: Option<String>,
-    },
-    /// move items to the later backlog, out of the release
-    Defer {
-        #[arg(required = true, value_name = "ID")]
-        ids: Vec<String>,
-        #[arg(long)]
-        why: Option<String>,
-    },
-    /// move items from the inbox or later into the release
-    Pull {
-        #[arg(required = true, value_name = "ID")]
-        ids: Vec<String>,
-        #[arg(long)]
-        why: Option<String>,
     },
     /// claim an item on this branch
     Start {
@@ -296,15 +275,6 @@ pub enum Cmd {
         #[arg(value_parser = PRIORITIES)]
         tier: String,
     },
-    /// gather packages into one: members, plans, concepts and waiters move, the rest drop
-    Fold {
-        #[arg(value_name = "PK")]
-        into: String,
-        #[arg(required = true, value_name = "PK")]
-        ids: Vec<String>,
-        #[arg(long)]
-        force: bool,
-    },
     /// fields, an appended note, or the whole body
     Edit {
         id: String,
@@ -406,12 +376,21 @@ pub enum Cmd {
         key: Option<String>,
         /// set: the text; omit it to unset the fact
         value: Option<String>,
-        /// install: only ~/.claude/skills
+        /// install and diff: only ~/.claude/skills
         #[arg(long)]
         claude: bool,
-        /// install: only ~/.agents/skills
+        /// install and diff: only ~/.agents/skills
         #[arg(long)]
         codex: bool,
+        /// install without asking, for a run with no terminal
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+    /// the docket block in the AGENTS.md at the project's root: install writes it, diff lists what
+    /// install would change
+    Instructions {
+        #[arg(value_parser = ["install", "diff"], default_value = "diff")]
+        what: String,
         /// install without asking, for a run with no terminal
         #[arg(short = 'y', long)]
         yes: bool,

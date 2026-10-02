@@ -13,7 +13,7 @@ export function verbs(item: Shown, kind: Kind, owner: boolean): Verb[] {
   if (question && owner && !item.decision) out.push('answer');
   if (word === 'parked' && !question) out.push('reply');
   if (item.claim_branch) out.push('close', 'release');
-  else if (word === 'ready' || word === 'inbox' || word === 'later') out.push('start');
+  else if (word === 'ready') out.push('start');
   if (word === 'blocked') out.push('resume');
   if (word !== 'parked' && word !== 'blocked') out.push('ask', 'wait');
   out.push('drop');

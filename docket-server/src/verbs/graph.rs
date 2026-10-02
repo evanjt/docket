@@ -28,10 +28,6 @@ pub fn keys_of(p: &ProjectRow, kinds: &[Kind]) -> Vec<String> {
         .collect()
 }
 
-pub fn is_package(p: &ProjectRow, key: &str) -> bool {
-    kind_of(&p.rules, key) == Ok(Kind::Package)
-}
-
 pub fn is_standing(p: &ProjectRow, key: &str) -> bool {
     kind_of(&p.rules, key).is_ok_and(Kind::is_standing)
 }
@@ -134,13 +130,13 @@ pub async fn open_under<C: ConnectionTrait>(c: &C, rid: i64) -> Result<Vec<Item>
     Ok(out)
 }
 
-/// The open gated items (audits, stories) among rids, and every one that opened one of them.
+/// The open plans among rids, and every one that opened one of them.
 pub async fn audits_over<C: ConnectionTrait>(
     c: &C,
     p: &ProjectRow,
     rids: &[i64],
 ) -> Result<Vec<Item>, DbErr> {
-    let audit_keys = keys_of(p, &[Kind::Audit, Kind::Story]);
+    let audit_keys = keys_of(p, &[Kind::Audit]);
     let mut seen = HashSet::new();
     let mut todo: Vec<i64> = rids.to_vec();
     let mut out = Vec::new();
@@ -165,7 +161,7 @@ pub async fn audits_over<C: ConnectionTrait>(
     Ok(out)
 }
 
-/// Hold each audit or story over rids while anything it opened is open; release it when nothing is.
+/// Hold each plan over rids while anything it opened is open; release it to its audit when nothing is.
 pub async fn settle_audits(
     tx: &mut Tx,
     p: &ProjectRow,
@@ -201,29 +197,19 @@ pub async fn settle_audits(
             )
             .await?;
         } else if pending.is_empty() && gated {
-            let turn = kind_of(&p.rules, &a.key)
-                .ok()
-                .and_then(Kind::gated_turn)
-                .unwrap_or("agent");
-            let mut cols = vec![
+            let cols = [
                 Field::WaitOn(None),
                 Field::WaitItem(None),
                 Field::WaitRef(None),
                 Field::WaitSince(None),
-                Field::Turn(Some(turn.into())),
+                Field::Turn(Some("agent".into())),
             ];
-            if turn == "user" {
-                cols.push(Field::AskedAt(Some(tx.now.clone())));
-                cols.push(Field::TurnNote(Some(
-                    "everything it opened is closed: accept it, or reopen what fails".into(),
-                )));
-            }
             tx.update(a.rid, &cols).await?;
             tx.event(
                 &p.rules.slug,
                 Some(a.rid),
                 "resumed",
-                Some("everything it opened is closed"),
+                Some(GATE),
                 None,
                 None,
             )
@@ -232,6 +218,25 @@ pub async fn settle_audits(
         }
     }
     Ok(released)
+}
+
+/// Whether a plan's audit came due: its last gate event is the resume.
+pub async fn came_due<C: ConnectionTrait>(c: &C, rid: i64) -> Result<bool, DbErr> {
+    let rows = c
+        .query_all_raw(sql(
+            "SELECT kind, note FROM events WHERE rid=? AND kind IN ('waited', 'resumed') ORDER BY seq",
+            vec![rid.into()],
+        ))
+        .await?;
+    let mut events = Vec::with_capacity(rows.len());
+    for r in rows {
+        let kind: String = r.try_get_by_index(0)?;
+        let note: Option<String> = r.try_get_by_index(1)?;
+        events.push((kind, note.unwrap_or_default()));
+    }
+    Ok(docket_core::rules::came_due(
+        events.iter().map(|(k, n)| (k.as_str(), n.as_str())),
+    ))
 }
 
 /// Every item waiting on target goes back to the agent's queue, and says why.
@@ -315,24 +320,6 @@ pub async fn concepts_of<C: ConnectionTrait>(
     }
     out.sort_by(|a, b| (&a.2, a.1).cmp(&(&b.2, b.1)));
     Ok(out.into_iter().map(|(id, _, _)| id).collect())
-}
-
-/// Whether an open work item, question or investigation belongs to no concept.
-pub async fn belongs_to_none<C: ConnectionTrait>(
-    c: &C,
-    p: &ProjectRow,
-    r: &Item,
-) -> Result<bool, DbErr> {
-    if r.state != "open" || keys_of(p, &[Kind::Concept]).is_empty() {
-        return Ok(false);
-    }
-    if !matches!(
-        kind_of(&p.rules, &r.key),
-        Ok(Kind::Work | Kind::Decision | Kind::Research)
-    ) {
-        return Ok(false);
-    }
-    Ok(concepts_of(c, p, r.rid).await?.is_empty())
 }
 
 // ---- the files a ticket touches ----

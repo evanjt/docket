@@ -16,5 +16,8 @@ docket-client = { path = "../docket-client" }
 docket-core = { path = "../docket-core" }
 docket-tui = { path = "../docket-tui" }
 
+[dev-dependencies]
+tempfile = "3"
+
 [lints]
 workspace = true

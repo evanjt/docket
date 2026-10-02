@@ -79,7 +79,7 @@ fn test_mouse_click_on_a_count_opens_its_list() {
     let mut a = app();
     a.open(Target::Project("o/p".into()));
     let buf = draw(&mut a, 160, 40);
-    let at = find(&buf, "ready 1", 0, 160);
+    let at = find(&buf, "ready 2", 0, 160);
     click(&mut a, (at.0 + 6, at.1));
     assert_eq!(a.page.title(), "ready");
 }

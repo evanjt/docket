@@ -136,7 +136,6 @@ pub fn facts(row: &item::Model, kind: Kind) -> Facts<'_> {
         state: &row.state,
         kind,
         claimed: row.claim_branch.is_some(),
-        scope: row.scope.as_deref(),
         waiting: row.wait_on.is_some(),
         turn: row.turn.as_deref(),
     }

@@ -99,6 +99,8 @@ pub struct Project {
     pub slug: String,
     pub data: Option<ProjectData>,
     pub cursor: Cursor,
+    /// Every move of the window, not the last few.
+    pub all_moves: bool,
 }
 
 /// One row of a browser's list.

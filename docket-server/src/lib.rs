@@ -7,6 +7,7 @@ mod facts;
 pub mod import;
 pub mod reads;
 pub mod show;
+pub mod simplify;
 mod store;
 mod verbs;
 

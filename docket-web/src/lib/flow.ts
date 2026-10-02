@@ -3,18 +3,16 @@ import { day, epoch } from './time';
 
 /** The flow read left to right, then the words that sit beside it. */
 export const FLOW = ['ready', 'building', 'checking'] as const;
-export const ASIDE = ['blocked', 'parked', 'inbox', 'later'] as const;
+export const ASIDE = ['blocked', 'parked'] as const;
 export const CLOSED = ['done', 'dropped'];
 
 /** What each word means, as the TUI's help words it. */
 export const MEANING: Record<string, string> = {
   ready: 'waiting for an agent to take it',
-  building: 'a job or a person is working on it now, or a package whose tickets are open',
-  checking: 'a package whose tickets are all done, under its review',
+  building: 'a job or a person is working on it now, or a plan whose tickets are open',
+  checking: 'an old package under its review',
   blocked: 'waiting on another item or a condition',
   parked: 'waiting on you: something only you can do',
-  inbox: 'filed by an agent, not yet placed',
-  later: 'held out of this release',
   done: 'closed',
   dropped: 'dropped',
   standing: 'a concept or idea, open for good',

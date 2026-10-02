@@ -20,8 +20,6 @@
   --w-checking: #2a7bc0;
   --w-blocked: #c8433a;
   --w-parked: #8a4fd0;
-  --w-inbox: #6b7486;
-  --w-later: #9aa2b1;
   --w-done: #9aa2b1;
   --w-dropped: #b3b8c2;
   --w-standing: #6b7486;
@@ -53,8 +51,6 @@
     --w-checking: #3d8bd0;
     --w-blocked: #d45a4e;
     --w-parked: #9c6be6;
-    --w-inbox: #8c95a8;
-    --w-later: #6b7489;
     --w-done: #6b7489;
     --w-dropped: #555e70;
     --w-standing: #8c95a8;
@@ -81,8 +77,6 @@
   --w-checking: #3d8bd0;
   --w-blocked: #d45a4e;
   --w-parked: #9c6be6;
-  --w-inbox: #8c95a8;
-  --w-later: #6b7489;
   --w-done: #6b7489;
   --w-dropped: #555e70;
   --w-standing: #8c95a8;

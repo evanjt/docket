@@ -6,13 +6,12 @@ use serde_json::Value;
 
 use docket_core::api::{
     AddRequest, AnswerRequest, Answered, AskRequest, Asked, Brief, CloseRequest, Closed, Common,
-    DropRequest, Dropped, EditRequest, FoldRequest, ItemView, KeyRequest, KeySet, LinkRequest,
-    Linked, Moved, MovedMany, NewRequest, Opened, PriorityRequest, Reindexed, ReleaseRequest,
-    ScopeRequest, SetField, StartRequest, Started,
+    DropRequest, Dropped, EditRequest, ItemView, KeyRequest, KeySet, LinkRequest, Linked, Moved,
+    MovedMany, NewRequest, Opened, PriorityRequest, Reindexed, ReleaseRequest, SetField,
+    StartRequest, Started,
 };
 
 use crate::cmd::lists::shares_text;
-use crate::cmd::show::progress_line;
 use crate::ctx::{Ctx, id};
 use crate::fail::{Fail, Result};
 use crate::local;
@@ -64,7 +63,7 @@ pub fn read_body(spec: Option<&String>) -> Result<Option<String>> {
         .map_err(|e| Fail::refused(format!("{spec}: {e}")))
 }
 
-/// A fleet job reports what it found and never files it: the loop files observations to the inbox.
+/// A fleet job reports what it found and never files it: the loop files observations as low-priority tickets.
 ///
 /// # Errors
 /// `DOCKET_JOB` names the fleet job this runs in.
@@ -72,7 +71,7 @@ pub fn refuse_in_job(verb: &str) -> Result<()> {
     match std::env::var("DOCKET_JOB").ok().filter(|j| !j.is_empty()) {
         Some(job) => Err(Fail::refused(format!(
             "docket {verb} is refused inside a fleet job ({job}). Put what you found under Observations \
-             in your report; the loop files it to the inbox."
+             in your report; the loop files it as a low-priority ticket."
         ))),
         None => Ok(()),
     }
@@ -173,23 +172,6 @@ pub fn add(
     Ok(0)
 }
 
-/// `defer` and `pull`.
-///
-/// # Errors
-/// The server refuses any of them.
-pub fn scope(ctx: &mut Ctx, verb: &str, ids: &[String], why: Option<&String>) -> Result<i32> {
-    let req = ScopeRequest {
-        common: ctx.common(false)?,
-        ids: ids.to_vec(),
-        why: why.filter(|w| !w.is_empty()).cloned(),
-    };
-    let out: MovedMany = ctx.api.post(verb, &req)?;
-    for item in &out.items {
-        print_item(ctx, item);
-    }
-    Ok(0)
-}
-
 /// # Errors
 /// The server refuses the claim.
 pub fn start(ctx: &mut Ctx, req: &StartRequest) -> Result<i32> {
@@ -209,30 +191,14 @@ pub fn start(ctx: &mut Ctx, req: &StartRequest) -> Result<i32> {
         "decision" => println!(
             "\nThis is a decided question: turn its decision into items, then docket close {i} \"opened B1, B2\"."
         ),
-        "story" => println!(
-            "\nThis is a user story with nothing under it yet. Open the items that deliver it and the test that \
-             asserts it, link them with docket link B1 T1 opened {i}, then release it; it comes to the owner for \
-             acceptance when they close."
-        ),
-        _ if out.review => println!(
-            "\nThis is the review of package {i}, every ticket of it closed. Read the package's whole diff against \
-             its Principles, repair what falls short on this branch, and close it: docket close {i} <sha> \
-             \"reviewed: what was checked\". When the approach itself is wrong, reopen the tickets that carry it \
-             with the reason and release this."
-        ),
         "audit" => println!(
-            "\nThis is an audit. Check the plan in its body against the working tree and against every item it \
-             opened (docket deps {i}), done and dropped alike. File each gap and link it: docket link B1 opened \
-             {i}, then docket release {i}; it comes back when those close. Close it only when an audit finds \
-             nothing missing."
+            "\nThis is a plan. With nothing opened under it yet, file its tickets, link each with docket link T1 \
+             opened {i}, and release it; it comes back for its audit when they are all closed. With every ticket \
+             closed, this is its audit: check the plan in its body against the working tree and against every \
+             item it opened (docket deps {i}), file each gap as a ticket linked the same way, and close it. One \
+             round: the gaps are worked as tickets."
         ),
         _ => {}
-    }
-    if let Some(p) = &out.package {
-        println!(
-            "\nPackage {}: {}. Its Fact and Principles are this ticket's context: docket show {}",
-            p.id, p.title, p.id
-        );
     }
     if let Some(hint) = out.worktree_hint.as_deref().filter(|h| !h.is_empty()) {
         println!("\n{hint}");
@@ -344,9 +310,6 @@ pub fn close(ctx: &mut Ctx, c: &Close) -> Result<i32> {
         if !out.opened.is_empty() {
             println!("opened by {}: {}", out.item.id, out.opened.join(", "));
         }
-        if let Some(p) = &out.review_ready {
-            println!("{p} has no open ticket left and is ready for its review: docket start {p}");
-        }
     }
     Ok(0)
 }
@@ -410,18 +373,6 @@ pub fn priority(ctx: &mut Ctx, req: &PriorityRequest) -> Result<i32> {
     let out: MovedMany = ctx.api.post("priority", req)?;
     for item in &out.items {
         print_item(ctx, item);
-    }
-    Ok(0)
-}
-
-/// # Errors
-/// The server refuses.
-pub fn fold(ctx: &mut Ctx, req: &FoldRequest) -> Result<i32> {
-    let out: Moved = ctx.api.post("fold", req)?;
-    print_item(ctx, &out.item);
-    if !ctx.json {
-        let p = serde_json::to_value(out.item.progress.unwrap_or_default()).unwrap_or_default();
-        println!("       {}", progress_line(&p));
     }
     Ok(0)
 }

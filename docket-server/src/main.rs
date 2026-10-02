@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 use tokio::signal::unix::{SignalKind, signal};
 
 use docket_server::auth::Keys;
-use docket_server::{connect, import, migrate, serve};
+use docket_server::{connect, import, migrate, serve, simplify};
 
 /// The docket server over the Postgres database `DATABASE_URL` names. It applies any migration the
 /// database lacks before it listens on `DOCKET_LISTEN`, with the keys in the file `DOCKET_KEYS`, and
@@ -24,6 +24,13 @@ enum Command {
         #[arg(long, value_name = "SQLITE_FILE")]
         from: String,
     },
+    /// Move the data onto the simple model after an import: packages become plans, the inbox,
+    /// later and the release fold into priority. Prints what each project changes, then exits.
+    Simplify {
+        /// Commit the changes; without it, the same writes are rolled back.
+        #[arg(long)]
+        write: bool,
+    },
 }
 
 #[tokio::main]
@@ -31,9 +38,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     let db = connect(&env::var("DATABASE_URL").map_err(|_| "DATABASE_URL is not set")?).await?;
     let ready = ready(&migrate(&db).await?);
-    if let Some(Command::Import { from }) = args.command {
-        println!("docket-server: {ready}");
-        return run_import(&from, &db).await;
+    match args.command {
+        Some(Command::Import { from }) => {
+            println!("docket-server: {ready}");
+            return run_import(&from, &db).await;
+        }
+        Some(Command::Simplify { write }) => {
+            println!("docket-server: {ready}");
+            return run_simplify(write, &db).await;
+        }
+        None => {}
     }
     let keys = Keys::parse(&std::fs::read_to_string(env::var("DOCKET_KEYS")?)?)?;
     let listen = env::var("DOCKET_LISTEN").unwrap_or_else(|_| "127.0.0.1:7878".to_string());
@@ -93,8 +107,40 @@ async fn run_import(
         let project = if project.is_empty() { "-" } else { project };
         println!("{table:<14} {project:<40} {n:>8}");
     }
-    println!("docket-server: imported {from}; every count matches");
+    println!(
+        "docket-server: imported {from}; every count matches. docket-server simplify shows what the \
+         move onto the simple model changes"
+    );
     Ok(())
+}
+
+/// What the move onto the simple model changes, project by project, written with `write`.
+async fn run_simplify(
+    write: bool,
+    db: &sea_orm::DatabaseConnection,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let host = hostname();
+    for change in simplify::simplify(db, &host, write).await? {
+        for line in change.lines() {
+            println!("{line}");
+        }
+    }
+    if write {
+        println!("docket-server: written");
+    } else {
+        println!("docket-server: a dry run, nothing written; --write commits these changes");
+    }
+    Ok(())
+}
+
+/// This machine's name, the host the step's events are written under.
+fn hostname() -> String {
+    std::fs::read_to_string("/etc/hostname")
+        .ok()
+        .map(|h| h.trim().to_string())
+        .filter(|h| !h.is_empty())
+        .or_else(|| env::var("HOSTNAME").ok())
+        .unwrap_or_else(|| "docket-server".to_string())
 }
 
 #[cfg(test)]

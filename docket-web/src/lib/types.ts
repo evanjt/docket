@@ -145,7 +145,6 @@ export interface Context {
   concepts: string[];
   holds: string[];
   members: string[];
-  no_concept: boolean;
   package: string | null;
   priority: string;
   raised_by: string | null;

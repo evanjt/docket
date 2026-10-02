@@ -184,14 +184,4 @@ impl Kind {
             _ => None,
         }
     }
-
-    /// Whether the kind waits until everything it opened is closed, and whose turn it is then.
-    #[must_use]
-    pub fn gated_turn(self) -> Option<&'static str> {
-        match self {
-            Kind::Audit => Some("agent"),
-            Kind::Story => Some("user"),
-            _ => None,
-        }
-    }
 }

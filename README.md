@@ -12,7 +12,7 @@ one place a claim is decided, so two machines never take the same item.
 |---|---|
 | `docket-core` | the rules: status words, claims, refusals, the queue order and the API types |
 | `docket-migration` | the schema as migrations, applied by the server before it listens |
-| `docket-server` | axum and sea-orm over the database: read routes, the write verbs under `/do`, key auth, the import from SQLite |
+| `docket-server` | axum and sea-orm over the database: read routes, the write verbs under `/do`, key auth, the import from SQLite and the move onto plans |
 | `docket` | the command line: every verb as a request to the server, printed as the text an agent reads |
 | `docket-dump` | the database written one way into a git checkout, and rebuilt from one |
 
@@ -66,6 +66,23 @@ DOCKET_WEB=$PWD/dist DATABASE_URL=postgres://... DOCKET_KEYS=keys cargo run -p d
 `npm run dev` serves it at `http://localhost:5190/ui/` and passes `/api` on to the server `DOCKET_SERVER` names
 (`http://docket.localhost` by default), so writes made there land in that server's database.
 
+## Skills
+
+Work is done by sessions, each taking one role with its skill, for Claude Code or Codex, as many at
+once as wanted:
+
+| Skill | What |
+|---|---|
+| `/plan` | a goal into a plan and its tickets; investigations and decided questions into tickets |
+| `/work` | the next ticket: a worktree off the branch the session started from, the failing test first, merged back and closed |
+| `/audit` | a plan whose tickets are all closed, checked once against what it asked; gaps filed as tickets |
+
+The templates are in `skills/` and the client carries them. A skill names no project: each reads
+the project's facts with `docket skills`. `docket skills install` writes them to `~/.claude/skills`
+and `~/.agents/skills` and removes the skills they replace, after listing each change and asking
+(`--yes` with no terminal; `docket skills diff` only lists). `docket instructions install` puts the
+short docket block, `skills/docket-block.md`, into the AGENTS.md at the project's root the same way.
+
 ## Keys
 
 The keys file has one line per key, `host role key`, where role is `owner` or `agent`. The host is
@@ -85,7 +102,7 @@ machine. An agent key cannot open items with `new` or `add`.
 | `GET /projects`, `/items`, `/events`, `/links` | the stored rows, filtered and paged |
 | `GET /dump` | the rows changed after an event `seq` (`since=N`), or every row (`since=0`), for `docket-dump` |
 | `GET /ui/` | the web client when `DOCKET_WEB` is set, with `/` sent to it; neither asks for a key |
-| `POST /do/{verb}` | `new`, `add`, `start`, `close`, `release`, `drop`, `reopen`, `wait`, `resume`, `ask`, `reply`, `answer`, `decide`, `priority`, `rate`, `edit`, `link`, `fold`, `key`, `pull`, `defer`, `project`, `reindex` |
+| `POST /do/{verb}` | `new`, `add`, `start`, `close`, `release`, `drop`, `reopen`, `wait`, `resume`, `ask`, `reply`, `answer`, `decide`, `priority`, `rate`, `edit`, `link`, `key`, `project`, `reindex` |
 
 A refused write answers `409` with the reason, and nothing is written.
 
@@ -115,6 +132,18 @@ that already holds rows is refused. Copy the SQLite file with `.backup` first, n
 ```bash
 sqlite3 docket.db ".backup docket-copy.db"
 DATABASE_URL=postgres://... docket-server import --from docket-copy.db
+```
+
+Data from before plans were the one grouping is moved onto that model with `docket-server simplify`.
+Each package key holds plans from then on, ids unchanged, and every open plan waits on what it opened.
+A review claim on a package is given back, and a plan that already held its audit round is closed.
+The inbox, later and the release fold into priority: normal work there goes to low, and the release
+fact is removed. Every change writes an event naming A7. Without `--write` it prints what each
+project changes and writes nothing; a second run changes nothing.
+
+```bash
+DATABASE_URL=postgres://... docket-server simplify
+DATABASE_URL=postgres://... docket-server simplify --write
 ```
 
 ## Docker
@@ -151,6 +180,7 @@ sqlite3 /path/to/docket.db ".backup $PWD/docket-copy.db"
 docker compose build docket-server
 docker compose up -d postgres
 docker compose run --rm -v "$PWD/docket-copy.db:/import/docket.db:ro" docket-server import --from /import/docket.db
+docker compose run --rm docket-server simplify --write
 docker compose up -d
 ```
 

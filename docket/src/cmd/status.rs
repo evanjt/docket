@@ -1,20 +1,19 @@
-//! `docket status`: the flow, the release, the loop, the machines, the claims, the packages, the
-//! check and the queue, as text; and `docket check`.
-
-use std::fmt::Write;
+//! `docket status`: the progress, what is claimed now, what waits on the owner, the plans due for
+//! audit, the plans under way, the check, the queue and how work starts, as text; and `docket check`.
 
 use serde_json::Value;
 
+use docket_core::flow::GET_GOING;
 use docket_core::pace::{Pace, duration};
 
 use crate::ctx::Ctx;
 use crate::fail::{Fail, Result};
-use crate::local;
 use crate::py::{Py, cut, or_none};
 
-const FLOW: [&str; 4] = ["ready", "building", "checking", "done"];
-const ASIDE: [&str; 4] = ["blocked", "parked", "inbox", "later"];
+const FLOW: [&str; 3] = ["ready", "building", "done"];
+const ASIDE: [&str; 3] = ["checking", "blocked", "parked"];
 const WIDTH: usize = 160;
+/// Rows each block shows before it says how many more.
 const SHOWN: usize = 21;
 
 /// `{word: count}` from the ordered pairs the flow route answers with.
@@ -38,6 +37,15 @@ fn as_dict(pairs: &[(String, u64)]) -> Py {
             .map(|(w, n)| (w.clone(), Py::Int(i64::try_from(*n).unwrap_or(0))))
             .collect(),
     )
+}
+
+/// Everything the status text is made from, read once.
+pub struct Read {
+    pub total: Vec<(String, u64)>,
+    pub summary: Value,
+    pub yours: Value,
+    pub next: Value,
+    pub now: i64,
 }
 
 /// # Errors
@@ -67,52 +75,16 @@ pub fn status(ctx: &mut Ctx) -> Result<i32> {
         return Ok(0);
     }
     let slug = ctx.project()?;
-    let s = ctx.read("/summary", &[])?;
-    let now = now();
-    let facts = Facts::of(&s["skills"]);
-    let machines = machines(&facts, &s["busy"]);
-    for line in head(&slug, &s, &facts, &machines, &total) {
+    let read = Read {
+        total,
+        summary: ctx.read("/summary", &[])?,
+        yours: ctx.read("/todo", &[])?,
+        next: ctx.read("/next", &[("n", Some("8".into()))])?,
+        now: now(),
+    };
+    for line in render(&slug, &read) {
         println!("{}", cut(&line, WIDTH - 1));
     }
-    println!("{}", flow_line(&total));
-    print_release(&s);
-    println!(
-        "\nLoop: mode {}, pool {}, last tick never, {} running{}",
-        facts.mode,
-        facts.pool,
-        s["running"].as_i64().unwrap_or(0),
-        facts
-            .paused
-            .as_ref()
-            .map_or(String::new(), |p| format!("; paused itself: {p}"))
-    );
-    for line in stalled(&s["claims"], facts.stale, now) {
-        println!("{line}");
-    }
-    for block in [
-        machine_lines(&machines),
-        job_lines(&s["jobs"], now),
-        package_lines(&s["packages"]),
-        vec![cut(
-            "CHORES  none has run here yet: docket loop runs them",
-            WIDTH - 1,
-        )],
-    ] {
-        println!();
-        print_block(&block);
-    }
-    let problems = problem_lines(&s["problems"]);
-    if !problems.is_empty() {
-        println!("\nCheck:");
-        for p in problems {
-            println!("  {p}");
-        }
-    }
-    print_next(ctx)?;
-    println!(
-        "\nOwner: {} parked on you (docket todo). Claim: docket start ID. Search: docket search <words>.",
-        count(&total, "parked")
-    );
     Ok(0)
 }
 
@@ -122,101 +94,51 @@ fn now() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0))
 }
 
-fn print_block(lines: &[String]) {
-    for l in lines.iter().take(SHOWN) {
-        println!("{l}");
+/// The status text, line by line.
+#[must_use]
+pub fn render(slug: &str, r: &Read) -> Vec<String> {
+    let s = &r.summary;
+    let mut out = vec![head(slug, s, &r.total), flow_line(&r.total)];
+    let closed = count(&r.total, "done");
+    let open: u64 = r
+        .total
+        .iter()
+        .filter(|(w, _)| !matches!(w.as_str(), "done" | "dropped" | "standing"))
+        .map(|(_, n)| n)
+        .sum();
+    #[allow(clippy::cast_precision_loss)]
+    out.push(format!(
+        "Progress: {}  {closed} of {} closed",
+        bar(closed as f64, (closed + open) as f64),
+        closed + open
+    ));
+    out.push(String::new());
+    out.extend(claim_lines(&s["claims"], r.now));
+    out.extend(titled_lines(
+        "YOURS",
+        "  (docket todo)",
+        "nothing waits on you",
+        &r.yours,
+    ));
+    out.extend(titled_lines("AUDITS DUE", "", "no plan is due", &s["due"]));
+    out.extend(plan_lines(&s["plans"]));
+    let problems = problem_lines(&s["problems"]);
+    if !problems.is_empty() {
+        out.push("\nCheck:".into());
+        out.extend(problems.into_iter().map(|p| format!("  {p}")));
     }
-    if lines.len() > SHOWN {
-        println!("  ... {} more", lines.len() - SHOWN);
+    out.extend(next_lines(&r.next));
+    out.push("\nTo get going, a session per role:".into());
+    for (skill, what) in GET_GOING {
+        out.push(format!("  {skill:<8}{what}"));
     }
+    out.push("Claim: docket start ID. Search: docket search <words>.".into());
+    out
 }
 
-/// The loop facts the status text reads, each its default when unset.
-pub struct Facts {
-    pub mode: String,
-    pub pool: String,
-    pub paused: Option<String>,
-    pub stale: i64,
-}
-
-impl Facts {
-    #[must_use]
-    pub fn of(skills: &Value) -> Self {
-        let get = |k: &str| {
-            skills[k]
-                .as_str()
-                .filter(|v| !v.is_empty())
-                .map(str::to_string)
-        };
-        Self {
-            mode: get("mode").unwrap_or_else(|| "pause".into()),
-            pool: get("pool").unwrap_or_else(|| "local=2".into()),
-            paused: get("paused_by"),
-            stale: get("stale_claim")
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(120),
-        }
-    }
-
-    /// `{host: slots}` in the order the pool names them; an unreadable pool holds none.
-    #[must_use]
-    pub fn slots(&self) -> Vec<(String, i64)> {
-        self.pool
-            .split_whitespace()
-            .filter_map(|part| {
-                let (host, n) = part.split_once('=')?;
-                Some((host.to_string(), n.parse().ok()?))
-            })
-            .collect()
-    }
-}
-
-/// One pool host: its slots, the jobs this host runs on it, and its cores, load and memory when read.
-pub struct Machine {
-    pub host: String,
-    pub slots: i64,
-    pub running: i64,
-    pub stats: Option<(u64, f64, u64, u64)>,
-}
-
-fn machines(facts: &Facts, busy: &Value) -> Vec<Machine> {
-    facts
-        .slots()
-        .into_iter()
-        .map(|(host, slots)| Machine {
-            running: busy[&host].as_i64().unwrap_or(0),
-            stats: if host == "local" {
-                local::stats()
-            } else {
-                None
-            },
-            host,
-            slots,
-        })
-        .collect()
-}
-
-fn head(
-    slug: &str,
-    s: &Value,
-    facts: &Facts,
-    machines: &[Machine],
-    total: &[(String, u64)],
-) -> Vec<String> {
+/// The project, with the pace of closes and how long the open work takes at it.
+fn head(slug: &str, s: &Value, total: &[(String, u64)]) -> String {
     let mut parts = vec![slug.to_string()];
-    if let Some(name) = s["release"]["name"].as_str() {
-        parts.push(format!("release {name}"));
-    }
-    parts.push("NO LOOP".into());
-    let running: i64 = machines.iter().map(|m| m.running).sum();
-    let slots: i64 = facts.slots().iter().map(|(_, n)| n).sum();
-    parts.push(format!("jobs {running} of {slots} slots"));
-    let closed = s["hour"]["closed"].as_u64().unwrap_or(0);
-    if closed > 0 {
-        #[allow(clippy::cast_precision_loss)]
-        let ratio = s["hour"]["observed"].as_u64().unwrap_or(0) as f64 / closed as f64;
-        parts.push(format!("{ratio:.2} observations per close"));
-    }
     let pace = Pace {
         closed: s["pace"]["closed"].as_u64().unwrap_or(0),
         opened: 0,
@@ -224,7 +146,7 @@ fn head(
     };
     if let Some(per_hour) = pace.per_hour() {
         parts.push(format!("closing {per_hour}/h"));
-        let todo = count(total, "ready") + count(total, "building") + count(total, "checking");
+        let todo = count(total, "ready") + count(total, "building");
         if todo > 0 {
             parts.push(format!(
                 "clear in {}",
@@ -232,19 +154,10 @@ fn head(
             ));
         }
     }
-    let mut lines = vec![parts.join("   ")];
-    lines.push(match &facts.paused {
-        Some(p) => format!(
-            "  The loop paused itself: {p}. Fix that, then press space to run it again."
-        ),
-        None => "  Nothing is being worked: no loop runs on this host. L starts one; space sets it to run. \
-                 ? explains the screen."
-            .into(),
-    });
-    lines
+    parts.join("   ")
 }
 
-/// `ready 212 > building 18 > checking 6 > done 141    blocked 3  parked 9`.
+/// `ready 212 > building 18 > done 141    blocked 3  parked 9`.
 #[must_use]
 pub fn flow_line(total: &[(String, u64)]) -> String {
     let head: Vec<String> = FLOW
@@ -264,53 +177,6 @@ pub fn flow_line(total: &[(String, u64)]) -> String {
     line
 }
 
-fn print_release(s: &Value) {
-    let r = &s["release"];
-    if r.is_object() {
-        let n = |k: &str| r[k].as_i64().unwrap_or(0);
-        println!(
-            "Release {}, cut {}: {} open, {} done since the cut, {} closed in the last day",
-            r["name"].as_str().unwrap_or_default(),
-            r["cut"].as_str().unwrap_or_default(),
-            n("open"),
-            n("since_cut"),
-            n("last_day")
-        );
-    }
-    for t in s["held_themes"].as_array().into_iter().flatten() {
-        let name = t[0].as_str().unwrap_or_default();
-        println!(
-            "  {name}: {} open, held out of the release  (docket next --theme {name})",
-            t[1].as_u64().unwrap_or(0)
-        );
-    }
-}
-
-/// The claims older than `stale_claim`, which no loop has looked at.
-fn stalled(jobs: &Value, stale: i64, now: i64) -> Vec<String> {
-    let rows: Vec<String> = jobs
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|j| {
-            let since = j["since"].as_i64()?;
-            (now - since >= stale * 60).then(|| {
-                format!(
-                    "  {:<7} claimed {} ago, past stale_claim {stale}m",
-                    j["id"].as_str().unwrap_or_default(),
-                    duration(now - since)
-                )
-            })
-        })
-        .collect();
-    if rows.is_empty() {
-        return rows;
-    }
-    let mut out = vec!["Stalled while the loop was off (the loop has never ticked):".to_string()];
-    out.extend(rows);
-    out
-}
-
 /// `##########` filled in proportion, ten cells, rounded half to even.
 #[must_use]
 pub fn bar(part: f64, whole: f64) -> String {
@@ -322,111 +188,103 @@ pub fn bar(part: f64, whole: f64) -> String {
     format!("{}{}", "#".repeat(n), ".".repeat(10 - n))
 }
 
-fn machine_lines(rows: &[Machine]) -> Vec<String> {
-    if rows.is_empty() {
-        return vec!["MACHINES  none in the pool".into()];
-    }
-    let mut lines = vec![format!("{:<18}{:<13}{:<13}slots", "MACHINES", "cpu", "ram")];
-    for m in rows {
-        #[allow(clippy::cast_precision_loss)]
-        let seen = match m.stats {
-            Some((cores, load, free, total)) if cores > 0 => format!(
-                "{:<13}{:<13}",
-                bar(load, cores as f64),
-                bar(total.saturating_sub(free) as f64, total as f64)
-            ),
-            _ => format!("{:<26}", "not read yet"),
-        };
-        lines.push(format!(
-            " {:<17}{seen}{}/{}",
-            cut(&m.host, 16),
-            m.running,
-            m.slots
-        ));
-    }
-    lines
+fn rows(list: &Value) -> Vec<Value> {
+    list.as_array().cloned().unwrap_or_default()
 }
 
-fn job_lines(jobs: &Value, now: i64) -> Vec<String> {
-    let rows = jobs.as_array().cloned().unwrap_or_default();
-    if rows.is_empty() {
-        return vec!["JOBS  nothing claimed".into()];
+fn text<'a>(row: &'a Value, key: &str) -> &'a str {
+    row[key].as_str().unwrap_or_default()
+}
+
+fn shown(lines: &mut Vec<String>, n: usize) {
+    if n > SHOWN {
+        lines.truncate(SHOWN + 1);
+        lines.push(format!("  ... {} more", n - SHOWN));
     }
-    let mut lines = vec![format!(
-        "{:<7}{:<8}{:<12}{:<18}{:>6}  title",
-        "JOBS", "role", "host", "model", "time"
-    )];
-    for j in rows {
-        let s = |k: &str| j[k].as_str().filter(|v| !v.is_empty());
-        let took = j["since"]
+}
+
+/// CLAIMED NOW: every claim, its branch, the host it was claimed on, how long ago, and a flag when
+/// nothing has moved on it lately.
+fn claim_lines(claims: &Value, now: i64) -> Vec<String> {
+    let rows = rows(claims);
+    if rows.is_empty() {
+        return vec!["CLAIMED NOW  nothing claimed".into()];
+    }
+    let mut lines = vec![format!("CLAIMED NOW  {}", rows.len())];
+    for c in &rows {
+        let since = c["since"]
             .as_i64()
             .filter(|t| *t != 0)
-            .map_or(String::new(), |t| duration(now - t));
-        let flag = s("flag").map_or(String::new(), |f| format!("[{f}] "));
-        let pkg = s("package").map_or(String::new(), |p| format!("{p} "));
-        let line = format!(
-            " {:<6}{:<8}{:<12}{:<18}{took:>6}  {flag}{pkg}{}",
-            s("id").unwrap_or_default(),
-            s("role").unwrap_or("build"),
-            cut(s("host").unwrap_or_default(), 11),
-            cut(s("model").unwrap_or("by hand"), 17),
-            s("title").unwrap_or_default()
-        );
-        lines.push(cut(&line, WIDTH - 1));
+            .map_or(String::new(), |t| format!("  {}", duration(now - t)));
+        let flag = c["flag"]
+            .as_str()
+            .filter(|f| !f.is_empty())
+            .map_or(String::new(), |f| format!("  [{f}]"));
+        lines.push(format!(
+            " {:<6} {} on {}{since}{flag} {}",
+            text(c, "id"),
+            text(c, "branch"),
+            text(c, "host"),
+            text(c, "title")
+        ));
     }
+    shown(&mut lines, rows.len());
     lines
 }
 
-fn package_lines(packages: &Value) -> Vec<String> {
-    let rows = packages.as_array().cloned().unwrap_or_default();
+/// A heading with its count, then a row per item with its title.
+fn titled_lines(name: &str, hint: &str, none: &str, list: &Value) -> Vec<String> {
+    let rows = rows(list);
     if rows.is_empty() {
-        return vec!["PACKAGES  none started".into()];
+        return vec![format!("{name}  {none}")];
+    }
+    let mut lines = vec![format!("{name}  {}{hint}", rows.len())];
+    for r in &rows {
+        lines.push(format!(" {:<6} {}", text(r, "id"), text(r, "title")));
+    }
+    shown(&mut lines, rows.len());
+    lines
+}
+
+/// PLANS: those with tickets being worked first, then the nearest done.
+fn plan_lines(plans: &Value) -> Vec<String> {
+    let rows = rows(plans);
+    if rows.is_empty() {
+        return vec!["PLANS  none under way".into()];
     }
     let n = |p: &Value, k: &str| p[k].as_u64().unwrap_or(0);
-    let live: Vec<&Value> = rows.iter().filter(|p| n(p, "live") > 0).collect();
-    let mut shown = live.clone();
-    shown.extend(rows.iter().filter(|p| n(p, "live") == 0).take(5));
-    let mut head = format!(
-        "PACKAGES  {} started, {} being worked",
-        rows.len(),
-        live.len()
-    );
-    if shown.len() > live.len() {
-        let _ = write!(head, ", and the {} nearest done", shown.len() - live.len());
-    }
-    let mut lines = vec![head, format!("{:<20}done  live  title", "")];
-    for p in shown {
+    let mut lines = vec![format!("PLANS  {} under way", rows.len())];
+    for p in &rows {
         #[allow(clippy::cast_precision_loss)]
-        let row = format!(
+        lines.push(format!(
             " {:<7}{}  {:>3}/{:<3}{:>4}  {}",
-            p["id"].as_str().unwrap_or_default(),
+            text(p, "id"),
             bar(n(p, "done") as f64, n(p, "total") as f64),
             n(p, "done"),
             n(p, "total"),
             n(p, "live"),
-            p["title"].as_str().unwrap_or_default()
-        );
-        lines.push(cut(&row, WIDTH - 1));
+            text(p, "title")
+        ));
     }
+    shown(&mut lines, rows.len());
     lines
 }
 
-fn print_next(ctx: &mut Ctx) -> Result<()> {
-    let rows = ctx.read("/next", &[("n", Some("8".into()))])?;
-    let rows = rows.as_array().cloned().unwrap_or_default();
-    println!("\nNext {} for an agent:", rows.len());
+fn next_lines(next: &Value) -> Vec<String> {
+    let rows = rows(next);
+    let mut lines = vec![format!("\nNext {}:", rows.len())];
     for (i, r) in rows.iter().enumerate() {
         let s = |k: &str| r[k].as_str().filter(|v| !v.is_empty());
         let cx = s("complexity").map_or(String::new(), |c| format!(" [{c}]"));
         let g = s("group").map_or(String::new(), |g| format!("  {{{g}}}"));
-        println!(
+        lines.push(format!(
             "  {:>2}. {:<6} {}{cx}{g}",
             i + 1,
             s("id").unwrap_or_default(),
             cut(s("title").unwrap_or_default(), 80)
-        );
+        ));
     }
-    Ok(())
+    lines
 }
 
 /// Each problem the check route found, in the words `docket check` prints.
@@ -457,11 +315,6 @@ fn problem_line(p: &Value) -> String {
         "integrity" => format!("integrity_check: {}", s("result")),
         "foreign_keys" => format!("{n} foreign key violations"),
         "cycle" => format!("{} waits in a cycle", s("id")),
-        "two_packages" => format!(
-            "{} sits in two open packages, {}. Unlink it from one.",
-            s("id"),
-            s("packages")
-        ),
         "held_gate" => format!(
             "{} is held although everything it opened is closed: docket resume {}",
             s("id"),

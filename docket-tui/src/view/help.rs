@@ -12,37 +12,39 @@ const HELP: &str = "What this screen shows
 
 Pages
 
-  Home        every project: the loop's mode, its open tickets, what waits on you (YOURS), its flow.
-              The mode is red when the project lacks a fact the loop needs. Enter opens a project.
-  Project     the head: the project, the release it works towards, the loop's mode (RUN, PAUSE or
-              DRAIN), jobs running of the slots the pool allows, the pace of closes and how long the
-              ready work takes at it. Under it, in red, why nothing is worked when the facts say so,
-              naming each missing fact; S shows them.
-              The flow and LISTS: every count and list is a hot spot that opens it in the browser.
-              NEXT       the tickets a free slot takes next, in order, with their package
-              JOBS       every claim: its branch, the machine, how long it has run
-              PACKAGES   packages started: done of all their tickets, and how many are worked now
-              MOVES      every open, close, claim and decision, a row per minute, newest first
+  Home        every project: its open tickets, what waits on you (YOURS), its flow. Enter opens one.
+  Project     a sidebar, above the rest on a narrow screen:
+              PROGRESS      closed of everything in the flow, the pace of closes and how long the
+                            open work takes at it, and the open counts
+              CLAIMED NOW   every claim: its branch, the host it was claimed on, how long ago
+              YOURS         what waits on you
+              AUDITS DUE    plans whose tickets are all closed, for an /audit session to check
+              TO GET GOING  work starts with a session per role: /plan, /work or /audit
+              LISTS         every list the browser shows
+              and beside it:
+              NEXT       the first of the queue, most urgent then oldest
+              PLANS      plans under way: done of all they opened, and how many are claimed now
+              MOVES      the last opens, closes, claims and decisions, a row per minute, newest
+                         first; m shows every one of the last day
+              Every count, id and list is a hot spot that opens it in the browser.
   Browser     a list beside the selected row in full: its facts, body, ties and log. Every id in it
               is a hot spot; opening one lists that item and everything tied to it.
   Yours (o)   what waits on you, then the open questions, one at a time with its whole body:
               a answers a question, r replies to a parked item, R retries what the loop parked.
   Plans (t)   plans, stories, packages, concepts and central ideas with their progress. Space opens
               one's children, and the side shows what comes next under the selected one.
-  Settings (S) every fact of the project, its value and what it means; red where the loop needs a
-              fact the project lacks. Tab or j/k picks a fact, Enter edits it in place, and an
-              empty value unsets it. A value the server refuses is named under the fact.
+  Settings (S) every fact of the project, its value and what it means. Tab or j/k picks a fact,
+              Enter edits it in place, and an empty value unsets it. A value the server refuses is
+              named under the fact.
 
 State words, each in its colour
 
-  ready      in the release, waiting for a free slot
-  building   a job or a person is working on it now, or a package whose tickets are open
-  checking   a package whose tickets are all done, under its review
+  ready      waiting for someone to take it
+  building   someone is working on it now
+  checking   a package under its review, from before plans were the one grouping
   done       closed, with the commit that fixed it
   blocked    waiting on another item or a condition
   parked     waiting on you: something only you can do
-  inbox      filed by an agent, not yet placed by the planner
-  later      held out of this release
   dropped    closed without doing
   standing   a concept or central idea, open for good
 
@@ -58,6 +60,7 @@ Keys
   /                      search, the list following each key; Enter keeps it, Esc cancels
   Space                  open or close a row's children in the plans; in the other lists, as x
   PgUp / PgDn            scroll
+  m                      on a project, every move of the last day or the last five
   g home   o yours   t plans   S settings   ? this page   . read everything again   q quit
 
 Mouse
@@ -78,11 +81,9 @@ Writing
   a                      answer the question; on one an agent decided, answering again overturns it
   r                      reply to a parked item: back to the agents with what happened
   R                      retry: a fresh start for what the loop parked or sent back
-  p / d                  pull into the release / defer to later
   !                      priority: then c critical, h high, n normal, l low
   c                      complexity: then h high, m medium, l low
   L                      link: then related ID or opened ID
-  F                      fold packages: then the package they go into
   :                      any verb of the command line, as close T3 abc1234 or priority high; an
                          id left out is the selected row's, ids left out are the marked rows
   Enter                  sends a typed line; Ctrl-E opens it in $EDITOR, and saving sends it;
@@ -108,8 +109,7 @@ pub fn doc() -> Doc {
         let mut segs = Vec::new();
         let mut rest = line;
         for w in [
-            "ready", "building", "checking", "done", "blocked", "parked", "inbox", "later",
-            "dropped", "standing",
+            "ready", "building", "checking", "done", "blocked", "parked", "dropped", "standing",
         ] {
             if let Some(tail) = line.strip_prefix(&format!("  {w} ")) {
                 segs.push(seg("  ", tone));

@@ -22,6 +22,15 @@ impl Kind {
     pub fn is_standing(self) -> bool {
         matches!(self, Kind::Concept | Kind::Idea)
     }
+
+    /// A kind kept to read: plans group the work, so nothing new is filed under these or claimed.
+    #[must_use]
+    pub fn is_read_only(self) -> bool {
+        matches!(
+            self,
+            Kind::Package | Kind::Concept | Kind::Idea | Kind::Story
+        )
+    }
 }
 
 /// The stored facts the status word is derived from.
@@ -30,7 +39,6 @@ pub struct Facts<'a> {
     pub state: &'a str,
     pub kind: Kind,
     pub claimed: bool,
-    pub scope: Option<&'a str>,
     pub waiting: bool,
     pub turn: Option<&'a str>,
 }
@@ -50,9 +58,6 @@ pub fn word<'a>(facts: &Facts<'a>, open_members: u64) -> &'a str {
         } else {
             "building"
         };
-    }
-    if let Some(scope) = facts.scope {
-        return scope;
     }
     if facts.waiting {
         return "blocked";

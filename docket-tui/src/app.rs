@@ -110,6 +110,7 @@ impl<S: Source> App<S> {
                 slug,
                 data: None,
                 cursor: Cursor::default(),
+                all_moves: false,
             }),
             (Target::Item(id), Some(slug)) => Page::Browser(Browser::new(&slug, Listing::Ties(id))),
             (Target::List(listing), Some(slug)) => Page::Browser(Browser::new(&slug, listing)),
@@ -266,6 +267,11 @@ impl<S: Source> App<S> {
             KeyCode::PageUp => self.scroll(2 - isize::try_from(height).unwrap_or(10), height),
             KeyCode::Enter | KeyCode::Char('l') => self.enter(),
             KeyCode::Char(' ') => self.fold(),
+            KeyCode::Char('m') => {
+                if let Page::Project(p) = &mut self.page {
+                    p.all_moves = !p.all_moves;
+                }
+            }
             _ => {}
         }
     }

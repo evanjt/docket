@@ -13,9 +13,8 @@ use crate::fail::{Fail, Result};
 use crate::local::{self, expand};
 use crate::py::{Py, cut, or_none};
 
-const SECTIONS: [&str; 10] = [
-    "inbox", "ready", "building", "checking", "blocked", "parked", "later", "standing", "done",
-    "dropped",
+const SECTIONS: [&str; 8] = [
+    "ready", "building", "checking", "blocked", "parked", "standing", "done", "dropped",
 ];
 
 static SHA: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b([0-9a-f]{7,40})\b").unwrap());

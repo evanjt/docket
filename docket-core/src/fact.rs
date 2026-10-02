@@ -6,7 +6,7 @@ use crate::item::Refused;
 use crate::text::py_repr;
 
 /// Every fact a project carries, in the order `docket skills` prints them, with its one-line meaning.
-pub const FACTS: [(&str, &str); 36] = [
+pub const FACTS: [(&str, &str); 35] = [
     ("owner", "the owner's name, as the skills address them"),
     (
         "worktree",
@@ -24,10 +24,6 @@ pub const FACTS: [(&str, &str); 36] = [
     (
         "hands",
         "what only the owner can do: devices, accounts, pushes, judgement calls",
-    ),
-    (
-        "release",
-        "the release that open work with no held theme makes up, its name and cut date (1.0.0 2026-10-01). Set, next lists only that work unless --all",
     ),
     (
         "remote",

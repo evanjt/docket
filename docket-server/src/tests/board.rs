@@ -13,7 +13,7 @@ const SEED: &str = r#"
 INSERT INTO projects (slug, keys, themes, skills, remotes, created_at, updated_at) VALUES ('o/p',
   '[{"key":"T","kind":"work"},{"key":"Q","kind":"decision"},{"key":"A","kind":"audit"},
     {"key":"PK","kind":"package"},{"key":"CON","kind":"concept"},{"key":"CID","kind":"idea"}]',
-  '[{"name":"sync"}]', '{"release":"1.0 2026-01-01","stale_claim":"1"}', '["git@h:o/p.git"]', 'c', 'u'),
+  '[{"name":"sync"}]', '{"stale_claim":"1"}', '["git@h:o/p.git"]', 'c', 'u'),
   ('o/q', '[{"key":"T","kind":"work"}]', '[]', '{}', '[]', 'c', 'u');
 INSERT INTO items (rid, project, key, num, title, state, turn, tags, theme, group_name, body, opened_at, updated_at) VALUES
   (1, 'o/p', 'T', 1, 'Fix the sync', 'open', 'agent', '["high"]', NULL, 'g',
@@ -33,9 +33,12 @@ INSERT INTO items (rid, project, key, num, title, state, turn, claim_branch, cla
      '- **Touches.** src/a.rs', '2026-01-01T00:00:00Z', 'u9');
 INSERT INTO items (rid, project, key, num, title, state, turn, wait_on, wait_item, wait_ref, wait_since, tags, opened_at, updated_at) VALUES
   (10, 'o/p', 'T', 6, 'Waits', 'open', 'agent', 'item', 1, 'T1', '2026-01-01T00:00:00Z', '[]', '2026-01-01T00:00:00Z', 'u10');
+INSERT INTO items (rid, project, key, num, title, state, turn, resolution, tags, body, opened_at, updated_at) VALUES
+  (11, 'o/p', 'A', 2, 'Due plan', 'open', 'agent', NULL, '[]', 'x', '2026-01-01T00:00:00Z', 'u11'),
+  (12, 'o/p', 'T', 7, 'Due work', 'done', NULL, 'def5678', '[]', 'x', '2026-01-01T00:00:00Z', 'u12');
 INSERT INTO links (rid, kind, to_rid) VALUES
   (1, 'opened', 2), (5, 'opened', 2), (1, 'related', 3), (3, 'related', 1), (1, 'opened', 4), (5, 'opened', 4),
-  (8, 'opened', 2), (8, 'opened', 4);
+  (8, 'opened', 2), (8, 'opened', 4), (12, 'opened', 11);
 INSERT INTO links (rid, kind, to_path, to_line) VALUES
   (1, 'cites_file', 'src/a.rs', 3), (5, 'cites_file', 'src/a.rs', NULL), (6, 'cites_test', 'tests/t.rs', NULL);
 INSERT INTO events (uid, project, rid, at, host, kind, note, data) VALUES
@@ -132,7 +135,7 @@ async fn test_counts_every_project_by_state_and_last_event() {
     let c = s.ok("/counts").await;
     assert_eq!(
         c[0],
-        json!({"slug": "o/p", "open": 9, "done": 1, "dropped": 0, "last_event": "2026-01-01T00:00:03Z"})
+        json!({"slug": "o/p", "open": 10, "done": 2, "dropped": 0, "last_event": "2026-01-01T00:00:03Z"})
     );
     assert_eq!(c[1]["slug"], "o/q");
     assert_eq!(c[1]["last_event"], Value::Null);
@@ -143,7 +146,7 @@ async fn test_flow_counts_tickets_in_the_order_first_met() {
     let s = Seeded::new().await;
     let f = s.ok("/flow?project=o/p").await;
     assert_eq!(f["host"], "devbox");
-    assert_eq!(f["total"], 9);
+    assert_eq!(f["total"], 11);
     let words: Vec<&str> = f["by_word"]
         .as_array()
         .unwrap()
@@ -215,8 +218,7 @@ async fn test_deps_words_another_projects_row_by_its_own_keys() {
 async fn test_context_reads_what_show_prints_beside_the_row() {
     let s = Seeded::new().await;
     let c = s.ok("/context/T1?project=o/p").await;
-    assert_eq!(c["priority"], "critical");
-    assert_eq!(c["raised_by"], "PK1");
+    assert_eq!(c["priority"], "high");
     assert_eq!(c["package"]["id"], "PK1");
     assert_eq!(
         c["package"]["progress"],
@@ -224,7 +226,6 @@ async fn test_context_reads_what_show_prints_beside_the_row() {
     );
     assert_eq!(c["holds"], json!(["T6"]));
     assert_eq!(c["concepts"], json!(["CON1"]));
-    assert_eq!(c["no_concept"], false);
     let p = s.ok("/context/PK1?project=o/p").await;
     assert_eq!(ids(&p["members"]), ["T1", "T2", "T4"]);
     let con = s.ok("/context/CON1?project=o/p").await;
@@ -265,7 +266,7 @@ async fn test_graph_nodes_carry_the_rid_events_name() {
     let s = Seeded::new().await;
     let g = s.ok("/graph?project=o/p").await;
     let items = s
-        .ok("/items?filter=%7B%22project%22%3A%22o%2Fp%22%7D")
+        .ok("/items?filter=%7B%22project%22%3A%22o%2Fp%22%7D&range=%5B0%2C999%5D")
         .await;
     for n in g["nodes"].as_array().unwrap() {
         let stored = items
@@ -282,7 +283,7 @@ async fn test_graph_nodes_carry_the_rid_events_name() {
 async fn test_graph_holds_nodes_and_edges_once_each() {
     let s = Seeded::new().await;
     let g = s.ok("/graph?project=o/p").await;
-    assert_eq!(g["nodes"].as_array().unwrap().len(), 10);
+    assert_eq!(g["nodes"].as_array().unwrap().len(), 12);
     let edges = g["edges"].as_array().unwrap();
     let related = edges.iter().filter(|e| e["kind"] == "related").count();
     assert_eq!(related, 1);
@@ -294,7 +295,7 @@ async fn test_graph_holds_nodes_and_edges_once_each() {
 }
 
 #[tokio::test]
-async fn test_check_finds_two_packages_an_open_audit_and_bare_bodies() {
+async fn test_check_finds_an_open_audit_and_bare_bodies() {
     let s = Seeded::new().await;
     let c = s.ok("/check?project=o/p").await;
     let kinds: Vec<&str> = c
@@ -319,19 +320,40 @@ async fn test_shares_flags_idle_claims_and_files_they_share() {
 }
 
 #[tokio::test]
-async fn test_summary_reads_release_themes_jobs_and_packages() {
+async fn test_summary_reads_claims_plans_and_due_audits() {
     let s = Seeded::new().await;
     let m = s.ok("/summary?project=o/p").await;
-    assert_eq!(m["release"]["name"], "1.0");
-    assert_eq!(m["held_themes"], json!([["roadmap", 1]]));
-    assert_eq!(m["busy"], json!({"local": 1}));
-    assert_eq!(m["running"], 1);
-    assert_eq!(ids(&m["jobs"]), ["T4", "T5"]);
-    assert_eq!(m["jobs"][0]["role"], "review");
-    assert_eq!(m["jobs"][0]["model"], "m1");
-    assert_eq!(m["jobs"][0]["package"], "PK1");
-    assert_eq!(m["packages"][0]["id"], "PK1");
+    for gone in [
+        "release",
+        "held_themes",
+        "hour",
+        "busy",
+        "running",
+        "jobs",
+        "packages",
+    ] {
+        assert!(m.get(gone).is_none(), "{gone}: {m}");
+    }
     assert_eq!(ids(&m["claims"]), ["T4", "T5"]);
+    assert_eq!(m["claims"][0]["branch"], "audit/t4");
+    assert_eq!(m["claims"][0]["host"], "devbox");
+    assert_eq!(m["claims"][0]["title"], "Claimed");
+    assert!(
+        m["claims"][0]["flag"]
+            .as_str()
+            .unwrap()
+            .starts_with("no event for")
+    );
+    assert_eq!(ids(&m["plans"]), ["A1", "A2"]);
+    assert_eq!(
+        (
+            &m["plans"][0]["done"],
+            &m["plans"][0]["total"],
+            &m["plans"][0]["live"]
+        ),
+        (&json!(1), &json!(3), &json!(1))
+    );
+    assert_eq!(ids(&m["due"]), ["A2"]);
 }
 
 #[tokio::test]
@@ -408,7 +430,7 @@ async fn test_reindex_rebuilds_every_items_search_row() {
         )
         .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(out, json!({"project": "o/p", "items": 10}));
+    assert_eq!(out, json!({"project": "o/p", "items": 12}));
     let hits = s.ok("/search?project=o/p&q=Claimed").await;
     let mut found = ids(&hits);
     found.sort_unstable();

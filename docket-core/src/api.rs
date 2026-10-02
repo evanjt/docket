@@ -81,7 +81,7 @@ pub struct ItemView {
     pub progress: Option<Progress>,
 }
 
-/// An item named in passing: a released waiter, a package.
+/// An item named in passing: a released waiter, a plan come due.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Brief {
     pub id: String,
@@ -147,16 +147,6 @@ pub struct AddRequest {
     /// The fleet job that saw it, so the brakes count it.
     #[serde(default)]
     pub from: Option<String>,
-}
-
-/// `defer` and `pull`: items moved out to later, or into the release.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct ScopeRequest {
-    #[serde(flatten)]
-    pub common: Common,
-    pub ids: Vec<String>,
-    #[serde(default)]
-    pub why: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -331,14 +321,6 @@ pub struct LinkRequest {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct FoldRequest {
-    #[serde(flatten)]
-    pub common: Common,
-    pub into: String,
-    pub ids: Vec<String>,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct KeyRequest {
     #[serde(flatten)]
     pub common: Common,
@@ -394,17 +376,15 @@ pub struct Opened {
     pub kind: String,
     /// Decided questions close to a new question, the prior decisions an agent derives from.
     pub decided_like: Vec<Decided>,
-    /// An open work item, question or investigation that belongs to no concept.
-    pub no_concept: bool,
 }
 
-/// One item moved: `release`, `reopen`, `wait`, `resume`, `reply`, `decide`, `rate`, `edit`, `fold`.
+/// One item moved: `release`, `reopen`, `wait`, `resume`, `reply`, `decide`, `rate`, `edit`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Moved {
     pub item: ItemView,
 }
 
-/// Several items moved: `defer`, `pull`, `priority`.
+/// Several items moved: `priority`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MovedMany {
     pub items: Vec<ItemView>,
@@ -414,15 +394,10 @@ pub struct MovedMany {
 pub struct Started {
     pub item: ItemView,
     pub kind: String,
-    /// The claim is a package's review.
-    pub review: bool,
     pub shares: Vec<Share>,
-    /// The open package the item sits in.
-    pub package: Option<Brief>,
     pub worktree_hint: Option<String>,
     /// The other open items of its group.
     pub group_others: Vec<String>,
-    pub no_concept: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -431,8 +406,6 @@ pub struct Closed {
     pub released: Vec<Brief>,
     /// The ids a decision's resolution says it opened, now linked.
     pub opened: Vec<String>,
-    /// The item's package, when this close left it with no open ticket.
-    pub review_ready: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

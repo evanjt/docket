@@ -12,7 +12,7 @@ use docket_server::auth::Keys;
 
 use super::*;
 
-const KEYS: &str = r#"[{"key": "B", "kind": "work", "meaning": "bugs", "turn": "agent"}, {"key": "Q", "kind": "decision", "meaning": "questions", "turn": "user"}, {"key": "CON", "kind": "concept", "meaning": "concepts", "turn": "agent"}, {"key": "PK", "kind": "package", "meaning": "packages", "turn": "agent"}]"#;
+const KEYS: &str = r#"[{"key": "B", "kind": "work", "meaning": "bugs", "turn": "agent"}, {"key": "Q", "kind": "decision", "meaning": "questions", "turn": "user"}, {"key": "A", "kind": "audit", "meaning": "plans", "turn": "agent"}]"#;
 
 async fn call(
     app: &Router,
@@ -58,18 +58,15 @@ async fn seeded() -> (Router, Scratch) {
         ("new", json!({"key": "Q", "title": "One cache or two"})),
         (
             "new",
-            json!({"key": "PK", "title": "Shelves", "body": "- **Principles.**\n  1. One owner.\n- **Evidence.** `src/crust.ts:1`\n"}),
+            json!({"key": "A", "title": "Shelves", "body": "- **Principles.**\n  1. One owner.\n- **Evidence.** `src/crust.ts:1`\n"}),
         ),
-        ("new", json!({"key": "CON", "title": "Recording"})),
-        ("link", json!({"a": ["B1"], "kind": "opened", "b": "PK1"})),
-        (
-            "link",
-            json!({"a": ["PK1"], "kind": "related", "b": "CON1"}),
-        ),
+        ("new", json!({"key": "A", "title": "Recording"})),
+        ("link", json!({"a": ["B1"], "kind": "opened", "b": "A1"})),
+        ("link", json!({"a": ["A1"], "kind": "related", "b": "A2"})),
         ("wait", json!({"id": "B1", "on": "Q1"})),
         ("drop", json!({"id": "B2", "superseded_by": "B1"})),
         ("new", json!({"key": "B", "title": "After shelves"})),
-        ("wait", json!({"id": "B3", "on": "PK1"})),
+        ("wait", json!({"id": "B3", "on": "A1"})),
         ("answer", json!({"id": "Q1", "decision": "Two"})),
         ("start", json!({"id": "Q1"})),
         (
@@ -135,13 +132,13 @@ async fn test_restore_refuses_a_database_that_holds_items() {
 #[tokio::test]
 async fn test_restore_refuses_a_reference_the_checkout_does_not_hold() {
     let mut page = full_page(&seeded().await.0).await;
-    page.items.retain(|i| i.id != "PK1");
+    page.items.retain(|i| i.id != "A1");
     let dir = tempfile::tempdir().unwrap();
     write_all(dir.path(), &page);
     let db = Scratch::bare(2).await;
     let refused = restore(dir.path(), &db.url()).await.unwrap_err();
     assert!(
-        refused.contains("PK1, which is not in the tree"),
+        refused.contains("A1, which is not in the tree"),
         "{refused}"
     );
 }

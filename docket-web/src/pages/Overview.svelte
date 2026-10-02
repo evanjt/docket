@@ -94,7 +94,7 @@
             {#each next.data as r (r.id)}<ItemRow row={r} href={ctx.item(r.id)} />{/each}
           </ul>
         {:else if next.data}
-          <p class="empty">Nothing is ready. What is left is blocked, parked on you or not yet scoped.</p>
+          <p class="empty">Nothing is ready. What is left is blocked or parked on you.</p>
         {/if}
       </section>
 

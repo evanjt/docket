@@ -14,9 +14,8 @@ use crate::py::{Py, cut, dumps_line, float_repr, or_none};
 use crate::row::{fmt_row, item_json, row_of};
 
 /// The words in the order an item moves through them.
-pub const WORDS: [&str; 10] = [
-    "inbox", "ready", "building", "checking", "blocked", "parked", "later", "standing", "done",
-    "dropped",
+pub const WORDS: [&str; 8] = [
+    "ready", "building", "checking", "blocked", "parked", "standing", "done", "dropped",
 ];
 
 /// `members: 9 of 13 done, 2 live`.
@@ -92,12 +91,6 @@ pub fn show(ctx: &mut Ctx, item: &str) -> Result<i32> {
         let qkeys = keys_of(&ctx.project_row(&slug)?, "decision");
         print_decided_like(ctx, &r, &qkeys)?;
     }
-    if about["no_concept"].as_bool() == Some(true) {
-        println!(
-            "\n{} belongs to no concept: docket link {} related CON<n>, or file a new one with docket new CON \"the area\".",
-            r.id, r.id
-        );
-    }
     Ok(0)
 }
 
@@ -106,14 +99,9 @@ fn facts(r: &Row, about: &Value) -> Vec<String> {
     if let Some(t) = r.theme.as_deref().filter(|t| !t.is_empty()) {
         facts.push(format!("theme: {t}"));
     }
-    if let Some(rank) = r.rank {
-        facts.push(format!("rank: {rank}"));
-    }
     let tier = about["priority"].as_str().unwrap_or("normal");
-    let raised = about["raised_by"].as_str();
-    if tier != "normal" || raised.is_some() {
-        let by = raised.map_or(String::new(), |p| format!(" (raised by {p})"));
-        facts.push(format!("priority: {tier}{by}"));
+    if tier != "normal" {
+        facts.push(format!("priority: {tier}"));
     }
     if let Some(asked) = r.asked_at.as_deref().filter(|a| !a.is_empty()) {
         facts.push(format!("asked: {asked}"));

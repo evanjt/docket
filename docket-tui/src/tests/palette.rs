@@ -34,22 +34,19 @@ fn test_parse_a_many_id_verb_takes_the_marked_rows() {
     assert_eq!(verb, "priority");
     assert_eq!(body["ids"], json!(["T3", "B1"]));
     assert_eq!(body["tier"], "high");
-    let (_, body) = post("defer T7 T8 --why later", &["T3"]);
+    let (_, body) = post("priority T7 T8 low", &["T3"]);
     assert_eq!(body["ids"], json!(["T7", "T8"]));
-    assert_eq!(body["why"], "later");
+    assert_eq!(body["tier"], "low");
 }
 
 #[test]
-fn test_parse_link_and_fold_put_the_selection_where_the_ids_go() {
+fn test_parse_link_puts_the_selection_where_the_ids_go() {
     let (_, body) = post("link related CON1 --remove", &["T3", "B1"]);
     assert_eq!(body["a"], json!(["T3", "B1"]));
     assert_eq!(
         (&body["kind"], &body["b"], &body["remove"]),
         (&json!("related"), &json!("CON1"), &json!(true))
     );
-    let (_, body) = post("fold PK1", &["PK2", "PK3"]);
-    assert_eq!(body["into"], "PK1");
-    assert_eq!(body["ids"], json!(["PK2", "PK3"]));
 }
 
 #[test]
@@ -57,12 +54,12 @@ fn test_parse_aliases_flags_and_lists() {
     assert_eq!(post("park T3 need a device", &[]).0, "ask");
     assert_eq!(post("built T3 abc1234", &[]).0, "close");
     let (_, body) = post(
-        "edit --set theme=crusts --set rank=2 --append=noted --force",
+        "edit --set theme=crusts --set group=g --append=noted --force",
         &["T3"],
     );
     assert_eq!(
         body["set"],
-        json!([{ "field": "theme", "value": "crusts" }, { "field": "rank", "value": "2" }])
+        json!([{ "field": "theme", "value": "crusts" }, { "field": "group", "value": "g" }])
     );
     assert_eq!(body["append"], "noted");
     assert_eq!(body["force"], true);

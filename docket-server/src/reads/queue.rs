@@ -8,11 +8,10 @@ use serde_json::{Value, json};
 
 use docket_core::flow::tally;
 use docket_core::member::{Tie, members_of, opened_under};
-use docket_core::queue::{Candidate, Filter, next as queue, release_of};
+use docket_core::queue::{Candidate, Filter, Role, next as queue};
 use docket_core::word::{Facts, Kind, PRIORITIES, priority, word};
 
 use crate::auth::Caller;
-use crate::entities::project;
 use crate::reads::public::{
     Failure, Kinds, failure, internal, item_of, items_where, marks, one_of, open_members,
     project_of, public, sql,
@@ -28,10 +27,8 @@ struct Slim {
     claim_branch: Option<String>,
     wait_on: Option<String>,
     conflict: i64,
-    scope: Option<String>,
     complexity: Option<String>,
     theme: Option<String>,
-    rank: Option<i64>,
     tags: Value,
     opened_at: String,
 }
@@ -51,8 +48,8 @@ struct TieRow {
 /// Every item of a project and every item-to-item link leaving one.
 async fn board(db: &DatabaseConnection, slug: &str) -> Result<Board, Failure> {
     let items = Slim::find_by_statement(sql(
-        "SELECT rid, key, state, turn, claim_branch, wait_on, conflict, scope, complexity, theme, \
-         rank, tags, opened_at FROM items WHERE project=? ORDER BY rid",
+        "SELECT rid, key, state, turn, claim_branch, wait_on, conflict, complexity, theme, tags, \
+         opened_at FROM items WHERE project=? ORDER BY rid",
         vec![slug.into()],
     ))
     .all(db)
@@ -89,10 +86,8 @@ fn candidate<'a>(row: &'a Slim, kinds: &Kinds) -> Candidate<'a> {
         claimed: row.claim_branch.is_some(),
         waiting: row.wait_on.is_some(),
         conflict: row.conflict != 0,
-        scope: row.scope.as_deref(),
         complexity: row.complexity.as_deref(),
         theme: row.theme.as_deref(),
-        rank: row.rank,
         tier: PRIORITIES.iter().position(|p| *p == own).unwrap_or(2),
         opened_at: &row.opened_at,
     }
@@ -106,12 +101,9 @@ pub struct NextQuery {
     complexity: Option<String>,
     key: Option<String>,
     theme: Option<String>,
-    without_theme: Option<String>,
     under: Option<String>,
-    scope: Option<String>,
+    role: Option<String>,
     priority: Option<String>,
-    #[serde(default)]
-    all: bool,
 }
 
 fn ten() -> usize {
@@ -139,21 +131,7 @@ async fn rids_under(
     Ok(members_of(&board.ties, &standing, target.rid))
 }
 
-/// The themes inside the release: the declared ones, which group questions and hold nothing out.
-fn release_themes(project: &project::Model) -> Vec<String> {
-    let mut themes: Vec<String> = project
-        .themes
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|t| t["name"].as_str().map(str::to_string))
-        .collect();
-    themes.sort();
-    themes
-}
-
-/// `docket next`: the queue an agent takes from, most urgent first. With a release fact set, the
-/// queue is the release until `all` or `theme` asks for the held themes.
+/// `docket next`: the queue an agent takes from, most urgent first, narrowed to one role when asked.
 ///
 /// # Errors
 /// 400 for a choice outside its options, 404 for an unknown project or `under` id.
@@ -166,7 +144,7 @@ pub async fn next(
         q.complexity.as_deref(),
         &["high", "medium", "low"],
     )?;
-    one_of("scope", q.scope.as_deref(), &["inbox", "later"])?;
+    one_of("role", q.role.as_deref(), &Role::NAMES)?;
     one_of("priority", q.priority.as_deref(), &PRIORITIES)?;
     let project = project_of(&db, &q.project).await?;
     let kinds = Kinds::of(&project);
@@ -175,11 +153,9 @@ pub async fn next(
         Some(id) => Some(rids_under(&db, &board, &kinds, &q.project, id).await?),
         None => None,
     };
-    let released = release_of(project.skills["release"].as_str()).is_some();
-    let themes = release_themes(&project);
     let key = q.key.as_deref().map(str::to_uppercase);
     let filter = Filter {
-        scope: q.scope.as_deref(),
+        role: q.role.as_deref().and_then(Role::parse),
         priority: q
             .priority
             .as_deref()
@@ -188,8 +164,6 @@ pub async fn next(
         under: under.as_ref(),
         complexity: q.complexity.as_deref(),
         theme: q.theme.as_deref(),
-        without_theme: q.without_theme.as_deref(),
-        release: (released && !q.all && q.theme.is_none()).then_some(themes.as_slice()),
     };
     let candidates: Vec<Candidate> = board.items.iter().map(|r| candidate(r, &kinds)).collect();
     let picked = queue(&candidates, &board.ties, &filter, q.n);
@@ -257,7 +231,6 @@ pub async fn status(
                 state: &r.state,
                 kind,
                 claimed: r.claim_branch.is_some(),
-                scope: r.scope.as_deref(),
                 waiting: r.wait_on.is_some(),
                 turn: r.turn.as_deref(),
             };

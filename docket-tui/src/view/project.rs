@@ -1,158 +1,92 @@
-//! One project: the head and why nothing is worked, the flow, NEXT, the jobs, the packages under way,
-//! and the moves.
+//! One project as a dashboard: a sidebar with the progress, what is claimed now, what waits on the
+//! owner, the plans due for audit and how work starts, beside NEXT, the plans under way and the moves.
+//! Narrower than `WIDE`, the sidebar stands above the main pane.
 
 use chrono::{Local, TimeZone};
-use docket_core::fact;
+use docket_core::flow::GET_GOING;
 use docket_core::pace::{Minute, duration};
 use docket_core::rows::Row;
 use ratatui::style::Style;
 
 use crate::board::Board;
-use crate::doc::{Doc, Listing, Route, Seg, Target, seg, spot, wrap};
+use crate::doc::{Doc, Listing, Route, Seg, Target, seg, spot};
 use crate::page::ProjectData;
 use crate::style;
 
-/// The flow read left to right, then what sits beside it.
-const FLOW: [&str; 4] = ["ready", "building", "checking", "done"];
-const ASIDE: [&str; 4] = ["blocked", "parked", "inbox", "later"];
-/// Started packages shown beyond those being worked.
-const NEAREST: usize = 5;
+/// The narrowest screen the sidebar stands beside the main pane on.
+const WIDE: usize = 120;
+/// The sidebar's width beside the main pane, and the gap after it.
+const SIDE: usize = 44;
+const GAP: usize = 2;
+/// The flow counts the sidebar always shows; the rest only when something carries them.
+const FLOW: [&str; 2] = ["ready", "building"];
+const ASIDE: [&str; 3] = ["checking", "blocked", "parked"];
+/// Rows each sidebar block shows before it says how many more.
+const ROWS: usize = 5;
+/// Rows of NEXT, and of MOVES until `m` shows them all.
+const NEXT: usize = 5;
+const MOVES: usize = 5;
 
 #[must_use]
-pub fn doc(board: &Board, data: Option<&ProjectData>, width: usize) -> Doc {
-    let mut d = Doc::default();
-    head(&mut d, board, data);
-    why(&mut d, &board.project.skills, width);
+pub fn doc(board: &Board, data: Option<&ProjectData>, width: usize, all_moves: bool) -> Doc {
     let Some(data) = data else {
+        let mut d = Doc::default();
         d.plain("  reading...", style::dim());
         return d;
     };
-    d.blank();
-    d.line(flow(data));
-    d.line(lists(board));
-    d.blank();
-    next(&mut d, board, &data.next, width);
-    d.blank();
-    machines(&mut d, board, &data.wip);
-    jobs(&mut d, &data.wip, data.now, width);
-    d.blank();
-    packages(&mut d, board, width);
-    d.blank();
-    moves(&mut d, data);
+    if width >= WIDE {
+        let main_width = width - SIDE - GAP;
+        beside(
+            sidebar(board, data, SIDE),
+            main(board, data, main_width, all_moves),
+        )
+    } else {
+        let mut d = sidebar(board, data, width);
+        d.blank();
+        d.lines.extend(main(board, data, width, all_moves).lines);
+        d
+    }
+}
+
+/// Two documents side by side, the left one padded to `SIDE` and the gap.
+fn beside(left: Doc, right: Doc) -> Doc {
+    let rows = left.lines.len().max(right.lines.len());
+    let mut lefts = left.lines.into_iter();
+    let mut rights = right.lines.into_iter();
+    let mut d = Doc::default();
+    for _ in 0..rows {
+        let mut line = lefts.next().unwrap_or_default();
+        let used: usize = line.iter().map(|s| s.text.chars().count()).sum();
+        line.push(seg(
+            " ".repeat(SIDE + GAP - used.min(SIDE)),
+            Style::default(),
+        ));
+        line.extend(rights.next().unwrap_or_default());
+        d.line(line);
+    }
     d
 }
 
-/// The head line, then the line saying why nothing is worked when the facts say so.
-pub fn head(d: &mut Doc, board: &Board, data: Option<&ProjectData>) {
-    let skills = &board.project.skills;
-    let mode = fact::effective(skills, "mode").unwrap_or_default();
-    let mut segs = vec![seg(board.project.slug.clone(), style::bold())];
-    if let Some(release) = skills
-        .get("release")
-        .and_then(|r| r.split_whitespace().next())
-    {
-        segs.push(seg(format!("   release {release}"), Style::default()));
-    }
-    let tone = if mode == "run" {
-        style::word("ready")
-    } else {
-        style::alarm()
-    };
-    segs.push(seg("   ", Style::default()));
-    segs.push(seg(mode.to_uppercase(), tone));
-    let slots: u64 = fact::pool(&fact::effective(skills, "pool").unwrap_or_default())
-        .iter()
-        .map(|(_, n)| n)
-        .sum();
-    if let Some(data) = data {
-        let running = data.wip.iter().filter(|r| r.claim_job.is_some()).count();
-        segs.push(seg(
-            format!("   jobs {running} of {slots} slots"),
-            Style::default(),
-        ));
-        segs.extend(pace(data));
-    }
-    d.line(segs);
-}
-
-/// The line under the head when the facts keep the loop from dispatching, naming each missing fact.
-pub fn why(d: &mut Doc, skills: &std::collections::BTreeMap<String, String>, width: usize) {
-    let gaps = fact::gaps(skills);
-    if gaps.is_empty() {
-        return;
-    }
-    let text = format!(
-        "Nothing is worked: {}. S shows the settings.",
-        gaps.join(", ")
-    );
-    for line in wrap(&text, width.saturating_sub(4)) {
-        d.plain(format!("  {line}"), style::alarm());
-    }
-}
-
-/// The pace of closes and how long the ready work takes at it, when anything closed lately.
-fn pace(data: &ProjectData) -> Vec<Seg> {
-    let Some(per_hour) = data.pace.per_hour() else {
-        return Vec::new();
-    };
-    let mut out = vec![seg(format!("   closing {per_hour}/h"), Style::default())];
-    let todo =
-        data.status.count("ready") + data.status.count("building") + data.status.count("checking");
-    if todo > 0 {
-        let eta = i64::try_from(todo * 3600 / per_hour).unwrap_or(0);
-        out.push(seg(
-            format!("   clear in {}", duration(eta)),
-            Style::default(),
-        ));
+/// A line cut to the width, the cut falling inside whichever segment crosses it.
+fn fit(segs: Vec<Seg>, width: usize) -> Vec<Seg> {
+    let mut room = width;
+    let mut out = Vec::new();
+    for mut s in segs {
+        if room == 0 {
+            break;
+        }
+        let n = s.text.chars().count();
+        if n > room {
+            s.text = s.text.chars().take(room).collect();
+        }
+        room -= s.text.chars().count();
+        out.push(s);
     }
     out
 }
 
-/// `ready 212 > building 18 > checking 6 > done 141    blocked 3  parked 9`, every count a hot spot.
-fn flow(data: &ProjectData) -> Vec<Seg> {
-    let mut segs = Vec::new();
-    for (i, w) in FLOW.iter().enumerate() {
-        if i > 0 {
-            segs.push(seg(" > ", style::dim()));
-        }
-        let text = format!("{w} {}", data.status.count(w));
-        segs.push(spot(
-            text,
-            style::word(w),
-            Target::List(Listing::Word((*w).into())),
-        ));
-    }
-    segs.push(seg("    ", Style::default()));
-    for w in ASIDE.iter().filter(|w| data.status.count(w) > 0) {
-        let text = format!("{w} {}", data.status.count(w));
-        segs.push(spot(
-            text,
-            style::word(w),
-            Target::List(Listing::Word((*w).into())),
-        ));
-        segs.push(seg("  ", Style::default()));
-    }
-    segs
-}
-
-/// The list routes, each a hot spot, the owner's two with their counts.
-fn lists(board: &Board) -> Vec<Seg> {
-    let mut segs = vec![seg("LISTS ", style::bold())];
-    for r in Route::ALL {
-        let text = match r {
-            Route::Todo => format!("yours {}", board.on_owner()),
-            Route::Questions => format!("questions {}", board.undecided()),
-            _ => r.name().to_string(),
-        };
-        let tone = if r == Route::Todo {
-            style::word("parked")
-        } else {
-            Style::default()
-        };
-        segs.push(seg(" ", Style::default()));
-        segs.push(spot(text, tone, Target::List(Listing::Route(r))));
-    }
-    segs
+fn cut(text: &str, room: usize) -> String {
+    text.chars().take(room).collect()
 }
 
 fn item_spot(board: &Board, id: &str, pad: usize) -> Vec<Seg> {
@@ -165,70 +99,84 @@ fn item_spot(board: &Board, id: &str, pad: usize) -> Vec<Seg> {
     ]
 }
 
-fn cut(text: &str, room: usize) -> String {
-    text.chars().take(room).collect()
+// ---- the sidebar ----
+
+fn sidebar(board: &Board, data: &ProjectData, width: usize) -> Doc {
+    let mut d = Doc::default();
+    progress(&mut d, data, width);
+    d.blank();
+    claimed(&mut d, board, &data.wip, data.now, width);
+    d.blank();
+    yours(&mut d, board, width);
+    d.blank();
+    due(&mut d, board, width);
+    d.blank();
+    get_going(&mut d, width);
+    d.blank();
+    lists(&mut d, board, width);
+    d
 }
 
-fn next(d: &mut Doc, board: &Board, rows: &[Row], width: usize) {
-    if rows.is_empty() {
-        d.plain(
-            "NEXT  nothing ready: the inbox, what is parked or what is blocked holds the rest",
-            style::bold(),
-        );
-        return;
+/// PROGRESS: closed of everything in the flow, the pace, and the open counts, each a hot spot.
+fn progress(d: &mut Doc, data: &ProjectData, width: usize) {
+    d.plain("PROGRESS", style::bold());
+    let closed = data.status.count("done");
+    let all = closed + data.status.open();
+    d.plain(
+        cut(
+            &format!(" {}  {closed} of {all} closed", bar(closed, all)),
+            width,
+        ),
+        Style::default(),
+    );
+    let pace = pace(data);
+    if !pace.is_empty() {
+        d.plain(cut(&format!(" {pace}"), width), Style::default());
     }
-    d.plain("NEXT  what a free slot takes, in order", style::bold());
-    for r in rows {
-        let mut segs = vec![seg(" ", Style::default())];
-        segs.extend(item_spot(board, &r.id, 7));
-        let pri = if r.priority == "normal" {
-            ""
-        } else {
-            r.priority.as_str()
-        };
-        segs.push(seg(format!("{pri:<9}"), style::alarm()));
-        let package = board.get(&r.id).and_then(|i| board.package_of(i.rid));
-        if let Some(p) = package {
-            segs.extend(item_spot(board, &p.id, p.id.len() + 1));
+    let mut segs = vec![seg(" ", Style::default())];
+    let shown = FLOW
+        .iter()
+        .chain(ASIDE.iter().filter(|w| data.status.count(w) > 0));
+    for (i, w) in shown.enumerate() {
+        if i > 0 {
+            segs.push(seg("  ", Style::default()));
         }
-        segs.push(seg(
-            cut(&r.title, width.saturating_sub(26)),
-            Style::default(),
-        ));
-        d.line(segs);
-    }
-}
-
-/// MACHINES: each host of the pool, with the jobs it runs of its slots. A job names its build host,
-/// none meaning the loop's own, `local`.
-fn machines(d: &mut Doc, board: &Board, wip: &[Row]) {
-    let pool = fact::pool(&fact::effective(&board.project.skills, "pool").unwrap_or_default());
-    let mut segs = vec![seg("MACHINES", style::bold())];
-    for (host, slots) in pool {
-        let running = wip
-            .iter()
-            .filter(|r| r.claim_job.is_some() && r.claim_on.as_deref().unwrap_or("local") == host)
-            .count();
-        segs.push(seg(
-            format!("  {host} {running} of {slots} slots"),
-            Style::default(),
+        segs.push(spot(
+            format!("{w} {}", data.status.count(w)),
+            style::word(w),
+            Target::List(Listing::Word((*w).into())),
         ));
     }
-    d.line(segs);
+    d.line(fit(segs, width));
 }
 
-/// JOBS: every claim, its branch, where it runs and for how long.
-fn jobs(d: &mut Doc, wip: &[Row], now: i64, width: usize) {
+/// The pace of closes and how long the open work takes at it, when anything closed lately.
+fn pace(data: &ProjectData) -> String {
+    let Some(per_hour) = data.pace.per_hour() else {
+        return String::new();
+    };
+    let todo = data.status.open();
+    if todo == 0 {
+        return format!("closing {per_hour}/h");
+    }
+    let eta = i64::try_from(todo * 3600 / per_hour).unwrap_or(0);
+    format!("closing {per_hour}/h   clear in {}", duration(eta))
+}
+
+/// CLAIMED NOW: every claim, its branch, the host it was claimed on and for how long.
+fn claimed(d: &mut Doc, board: &Board, wip: &[Row], now: i64, width: usize) {
+    d.line(vec![spot(
+        format!("CLAIMED NOW  {}", wip.len()),
+        style::bold(),
+        Target::List(Listing::Route(Route::Wip)),
+    )]);
     if wip.is_empty() {
-        d.plain("JOBS  nothing claimed", style::bold());
-        return;
+        d.plain(" nothing claimed", style::dim());
     }
-    d.plain(format!("JOBS  {} claimed", wip.len()), style::bold());
-    for r in wip {
+    for r in wip.iter().take(ROWS) {
         let host = r
-            .claim_on
-            .as_ref()
-            .or(r.claim_host.as_ref())
+            .claim_host
+            .as_deref()
             .map_or("", |h| h.split('.').next().unwrap_or(""));
         let since = r
             .claim_since
@@ -237,18 +185,138 @@ fn jobs(d: &mut Doc, wip: &[Row], now: i64, width: usize) {
             .map_or_else(String::new, |t| duration(now - t));
         let branch = r.claim_branch.clone().unwrap_or_default();
         let mut segs = vec![seg(" ", Style::default())];
-        segs.push(spot(
-            r.id.clone(),
-            style::word(&r.word),
-            Target::Item(r.id.clone()),
-        ));
+        segs.extend(item_spot(board, &r.id, 7));
         segs.push(seg(
-            " ".repeat(7usize.saturating_sub(r.id.len())),
+            format!("{branch} on {host}  {since}"),
             Style::default(),
         ));
-        let line = format!("{:<12}{since:>8}  {branch}  {}", cut(host, 11), r.title);
-        segs.push(seg(cut(&line, width.saturating_sub(9)), Style::default()));
-        d.line(segs);
+        d.line(fit(segs, width));
+    }
+    more(d, wip.len());
+}
+
+/// YOURS: what waits on the owner, a hot spot to the owner's queue.
+fn yours(d: &mut Doc, board: &Board, width: usize) {
+    let mut rows: Vec<_> = board
+        .items
+        .iter()
+        .filter(|i| i.state == "open" && i.turn.as_deref() == Some("user"))
+        .collect();
+    rows.sort_by(|a, b| (&a.key, a.num).cmp(&(&b.key, b.num)));
+    d.line(vec![spot(
+        format!("YOURS  {}", rows.len()),
+        style::word("parked"),
+        Target::List(Listing::Route(Route::Todo)),
+    )]);
+    if rows.is_empty() {
+        d.plain(" nothing waits on you", style::dim());
+    }
+    for i in rows.iter().take(ROWS) {
+        titled(d, board, &i.id, &i.title, width);
+    }
+    more(d, rows.len());
+}
+
+/// AUDITS DUE: the plans whose tickets are all closed and that nobody audits yet.
+fn due(d: &mut Doc, board: &Board, width: usize) {
+    let rows = board.due_audits();
+    d.plain(format!("AUDITS DUE  {}", rows.len()), style::bold());
+    if rows.is_empty() {
+        d.plain(" no plan is due", style::dim());
+    }
+    for p in rows.iter().take(ROWS) {
+        titled(d, board, &p.id, &p.title, width);
+    }
+    more(d, rows.len());
+}
+
+fn titled(d: &mut Doc, board: &Board, id: &str, title: &str, width: usize) {
+    let mut segs = vec![seg(" ", Style::default())];
+    segs.extend(item_spot(board, id, 7));
+    segs.push(seg(title.to_string(), Style::default()));
+    d.line(fit(segs, width));
+}
+
+fn more(d: &mut Doc, n: usize) {
+    if n > ROWS {
+        d.plain(format!(" and {} more", n - ROWS), style::dim());
+    }
+}
+
+/// TO GET GOING: a session per role, each started with its skill.
+fn get_going(d: &mut Doc, width: usize) {
+    d.plain("TO GET GOING  a session per role", style::bold());
+    for (skill, what) in GET_GOING {
+        d.line(fit(
+            vec![
+                seg(format!(" {skill:<8}"), style::word("ready")),
+                seg(what, Style::default()),
+            ],
+            width,
+        ));
+    }
+}
+
+/// The list routes, each a hot spot, wrapped to the width.
+fn lists(d: &mut Doc, board: &Board, width: usize) {
+    let mut line = vec![seg("LISTS", style::bold())];
+    let mut used = 5;
+    for r in Route::ALL {
+        let text = match r {
+            Route::Questions => format!("questions {}", board.undecided()),
+            _ => r.name().to_string(),
+        };
+        if used + 1 + text.len() > width {
+            d.line(std::mem::take(&mut line));
+            used = 0;
+        }
+        line.push(seg(" ", Style::default()));
+        used += 1 + text.len();
+        line.push(spot(
+            text,
+            Style::default(),
+            Target::List(Listing::Route(r)),
+        ));
+    }
+    d.line(line);
+}
+
+// ---- the main pane ----
+
+fn main(board: &Board, data: &ProjectData, width: usize, all_moves: bool) -> Doc {
+    let mut d = Doc::default();
+    next(&mut d, board, &data.next, width);
+    d.blank();
+    plans(&mut d, board, width);
+    d.blank();
+    moves(&mut d, data, all_moves);
+    d
+}
+
+fn next(d: &mut Doc, board: &Board, rows: &[Row], width: usize) {
+    if rows.is_empty() {
+        d.plain(
+            "NEXT  nothing ready: what is parked or blocked holds the rest",
+            style::bold(),
+        );
+        return;
+    }
+    d.line(vec![spot(
+        format!("NEXT  the first {} in the queue", rows.len().min(NEXT)),
+        style::bold(),
+        Target::List(Listing::Route(Route::Next)),
+    )]);
+    for r in rows.iter().take(NEXT) {
+        let mut segs = vec![seg(" ", Style::default())];
+        segs.extend(item_spot(board, &r.id, 7));
+        let pri = if r.priority == "normal" {
+            ""
+        } else {
+            r.priority.as_str()
+        };
+        segs.push(seg(format!("{pri:<9}"), style::alarm()));
+        segs.push(seg(r.title.clone(), Style::default()));
+        d.line(fit(segs, width));
     }
 }
 
@@ -264,41 +332,31 @@ pub fn bar(part: u64, whole: u64) -> String {
     format!("{}{}", "#".repeat(n), ".".repeat(10 - n))
 }
 
-/// PACKAGES: those with tickets being worked, then the few started ones nearest done.
-fn packages(d: &mut Doc, board: &Board, width: usize) {
-    let all = board.packages_under_way();
+/// PLANS: those with tickets being worked, then the nearest done.
+fn plans(d: &mut Doc, board: &Board, width: usize) {
+    let all = board.plans_under_way();
     if all.is_empty() {
-        d.plain("PACKAGES  none started", style::bold());
+        d.plain("PLANS  none under way", style::bold());
         return;
     }
-    let live = all.iter().filter(|(_, g)| g.live > 0).count();
-    let shown = (live + NEAREST).min(all.len());
-    let nearest = if shown > live {
-        format!(", and the {} nearest done", shown - live)
-    } else {
-        String::new()
-    };
-    d.plain(
-        format!(
-            "PACKAGES  {} started, {live} being worked{nearest}",
-            all.len()
-        ),
-        style::bold(),
-    );
-    for (p, g) in &all[..shown] {
+    d.plain(format!("PLANS  {} under way", all.len()), style::bold());
+    for (p, g) in all.iter().take(ROWS) {
         let mut segs = vec![seg(" ", Style::default())];
         segs.extend(item_spot(board, &p.id, 7));
-        let text = format!(
-            "{}  {:>3}/{:<3}{:>4}  {}",
-            bar(g.done, g.total),
-            g.done,
-            g.total,
-            g.live,
-            p.title
-        );
-        segs.push(seg(cut(&text, width.saturating_sub(9)), Style::default()));
-        d.line(segs);
+        segs.push(seg(
+            format!(
+                "{}  {:>3}/{:<3}{:>4}  {}",
+                bar(g.done, g.total),
+                g.done,
+                g.total,
+                g.live,
+                p.title
+            ),
+            Style::default(),
+        ));
+        d.line(fit(segs, width));
     }
+    more(d, all.len());
 }
 
 /// `HH:MM` for today, the date as well for anything older, in local time.
@@ -317,18 +375,30 @@ pub fn stamp(t: i64, now: i64) -> String {
     }
 }
 
-/// MOVES, newest first: when, the open count before and after, and each verb with its ids.
-fn moves(d: &mut Doc, data: &ProjectData) {
-    let title = match (data.stale, data.minutes.first()) {
-        (_, None) => "MOVES  none recorded yet".to_string(),
-        (true, Some(m)) => format!(
-            "MOVES  none in the last day; the last ones, {} ago",
-            duration(data.now - m.at)
-        ),
-        (false, _) => "MOVES, last day".to_string(),
+/// MOVES, newest first: the last few, or all of them once `m` asks.
+fn moves(d: &mut Doc, data: &ProjectData, all: bool) {
+    let Some(newest) = data.minutes.first() else {
+        d.plain("MOVES  none recorded yet", style::bold());
+        return;
     };
-    d.plain(title, style::bold());
-    for m in &data.minutes {
+    let n = data.minutes.len();
+    let (count, key) = match (n > MOVES, all) {
+        (false, _) => (format!("the last {n}"), String::new()),
+        (true, false) => (
+            format!("the last {MOVES} of {n}"),
+            "   m shows them all".to_string(),
+        ),
+        (true, true) => (format!("all {n}"), format!("   m shows the last {MOVES}")),
+    };
+    d.plain(
+        format!(
+            "MOVES  {count}, the newest {} ago{key}",
+            duration(data.now - newest.at)
+        ),
+        style::bold(),
+    );
+    let shown = if all { n } else { n.min(MOVES) };
+    for m in &data.minutes[..shown] {
         d.line(minute(m, data.now));
     }
 }

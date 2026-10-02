@@ -84,7 +84,6 @@ impl Board {
             state: &item.state,
             kind,
             claimed: item.claim_branch.is_some(),
-            scope: item.scope.as_deref(),
             waiting: item.wait_on.is_some(),
             turn: item.turn.as_deref(),
         };
@@ -149,14 +148,14 @@ impl Board {
         }
     }
 
-    /// Open packages started: those being worked first, then the nearest done.
+    /// Open plans started: those being worked first, then the nearest done.
     #[must_use]
-    pub fn packages_under_way(&self) -> Vec<(&ItemRow, Progress)> {
+    pub fn plans_under_way(&self) -> Vec<(&ItemRow, Progress)> {
         let mut out: Vec<(&ItemRow, Progress)> = self
-            .open_of(&[Kind::Package])
+            .open_of(&[Kind::Audit])
             .into_iter()
             .map(|p| (p, self.progress(p)))
-            .filter(|(_, g)| g.total > 0 && (g.live > 0 || g.done > 0))
+            .filter(|(_, g)| g.total > 0)
             .collect();
         out.sort_by(|(a, x), (b, y)| {
             let near = |g: &Progress| g.done * 1000 / g.total;
@@ -170,14 +169,21 @@ impl Board {
         out
     }
 
-    /// The open package an item is a member of.
+    /// Plans due for their audit: everything they opened, at any depth, is closed, and nobody holds
+    /// them yet.
     #[must_use]
-    pub fn package_of(&self, rid: i64) -> Option<&ItemRow> {
-        self.ties
-            .iter()
-            .filter(|t| t.opened && t.rid == rid)
-            .filter_map(|t| self.by_rid(t.to))
-            .find(|p| self.kind(p) == Kind::Package && p.state == "open")
+    pub fn due_audits(&self) -> Vec<&ItemRow> {
+        self.open_of(&[Kind::Audit])
+            .into_iter()
+            .filter(|p| {
+                let g = self.progress(p);
+                p.wait_on.is_none()
+                    && p.claim_branch.is_none()
+                    && p.turn.as_deref() == Some("agent")
+                    && g.total > 0
+                    && g.done == g.total
+            })
+            .collect()
     }
 
     /// Open items of the kinds, by key and number.

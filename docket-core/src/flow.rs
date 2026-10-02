@@ -40,6 +40,13 @@ pub fn derived_parts(decision: &str) -> (String, String) {
 
 pub const DERIVED: &str = "Derived from ";
 
+/// How work starts: a session per role, each with its skill, as many at once as wanted.
+pub const GET_GOING: [(&str, &str); 3] = [
+    ("/plan", "turn a goal into tickets"),
+    ("/work", "take the next ticket to its merge"),
+    ("/audit", "check a plan whose tickets closed"),
+];
+
 #[cfg(test)]
 #[path = "tests/flow.rs"]
 mod tests;

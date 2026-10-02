@@ -7,7 +7,7 @@ const PRIORITIES: [&str; 4] = ["critical", "high", "normal", "low"];
 const TURNS: [&str; 2] = ["agent", "user"];
 const STATES: [&str; 4] = ["open", "done", "dropped", "any"];
 const RUNNERS: [&str; 3] = ["codex", "claude", "remote"];
-const ROLES: [&str; 4] = ["build", "rebase", "review", "plan"];
+const ROLES: [&str; 5] = ["build", "rebase", "review", "plan", "audit"];
 const WAITS: [&str; 2] = ["item", "condition"];
 const QUEUE_ROLES: [&str; 3] = ["plan", "work", "audit"];
 const JOB_ROLES: [&str; 3] = ["build", "audit", "plan"];
@@ -432,6 +432,45 @@ pub enum Cmd {
         #[arg(long)]
         session: Option<String>,
     },
+    /// a lead's dispatch: claim the item on a fresh branch, push the base to a machine with a free
+    /// slot and start a job there, on the model the models fact gives its complexity
+    Dispatch {
+        id: String,
+        /// the machine to run it on; default: the one with the most free slots for the runner
+        #[arg(long)]
+        on: Option<String>,
+        #[arg(long, value_parser = crate::job::RUNNERS)]
+        runner: Option<String>,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        effort: Option<String>,
+        /// default: audit for a plan, plan for an investigation, build for the rest
+        #[arg(long, value_parser = JOB_ROLES)]
+        role: Option<String>,
+    },
+    /// the project's jobs on every machine, read over ssh: running, done, failed or lost
+    Jobs {
+        /// return when one of the running jobs ends, printing them all
+        #[arg(long)]
+        wait: bool,
+        /// seconds between reads while waiting
+        #[arg(long, default_value_t = 20)]
+        every: u64,
+        /// stop waiting after this many seconds even when no job ended; 0 waits for one
+        #[arg(long, default_value_t = 0)]
+        timeout: u64,
+        /// every project's jobs, not only this one's
+        #[arg(long)]
+        all: bool,
+    },
+    /// fetch a dispatched item's branch from the machine its job ran on into this repository
+    Collect {
+        id: String,
+        /// then remove the job's worktree, branch and record on that machine
+        #[arg(long)]
+        remove: bool,
+    },
     /// bind this directory to a project by hand
     Bind {
         slug: Option<String>,
@@ -460,6 +499,15 @@ pub enum JobCmd {
     },
     /// every job on this machine, or the one named: running, done, failed or lost, and its report
     Status { job: Option<String> },
+    /// the checkout of -p SLUG on this machine, where a lead pushes a job's branch
+    Where,
+    /// remove a finished job: its worktree, its branch in the checkout and its record
+    Remove {
+        job: String,
+        /// leave the branch, for a job that ran in the lead's own repository
+        #[arg(long)]
+        keep_branch: bool,
+    },
     /// stop a job's whole process group
     Kill { job: String },
     /// the last lines of a job's event stream

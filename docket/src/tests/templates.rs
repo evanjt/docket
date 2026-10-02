@@ -4,7 +4,7 @@ use std::path::Path;
 use super::*;
 
 /// Project and owner names a template must never carry: every fact comes from `docket skills`.
-const NAMED: [&str; 9] = [
+const NAMED: [&str; 10] = [
     "sample",
     "sample-audit",
     "evanjt",
@@ -14,6 +14,7 @@ const NAMED: [&str; 9] = [
     "Ada",
     "{{",
     "~/projects/",
+    "/home/",
 ];
 
 fn texts() -> Vec<(String, &'static str)> {
@@ -53,7 +54,7 @@ fn test_templates_name_no_project() {
 #[test]
 fn test_each_skill_names_itself_and_its_role() {
     let names: Vec<&str> = SKILLS.iter().map(|s| s.name).collect();
-    assert_eq!(names, ["plan", "work", "audit"]);
+    assert_eq!(names, ["plan", "work", "audit", "lead"]);
     for s in &SKILLS {
         for text in [s.claude, s.codex] {
             assert!(
@@ -61,8 +62,21 @@ fn test_each_skill_names_itself_and_its_role() {
                 "{}",
                 s.name
             );
-            assert!(text.contains(&format!("--role {}", s.name)), "{}", s.name);
+            let role = if s.name == "lead" {
+                "docket lead take".to_string()
+            } else {
+                format!("--role {}", s.name)
+            };
+            assert!(text.contains(&role), "{}", s.name);
         }
+    }
+}
+
+#[test]
+fn test_no_template_carries_an_address() {
+    let address = regex::Regex::new(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b").unwrap();
+    for (name, text) in texts() {
+        assert!(!address.is_match(text), "{name} carries an address");
     }
 }
 
@@ -102,6 +116,8 @@ fn test_install_on_a_scratch_home_lists_and_writes_exactly_the_skills() {
             "new .agents/skills/work/SKILL.md",
             "new .claude/skills/audit/SKILL.md",
             "current .agents/skills/audit/SKILL.md",
+            "new .claude/skills/lead/SKILL.md",
+            "new .agents/skills/lead/SKILL.md",
         ]
     );
     apply(&steps).unwrap();
@@ -130,7 +146,7 @@ fn test_install_for_one_tool_leaves_the_other_alone() {
     write(&h.join(".agents/skills/start-queue/SKILL.md"), "old loop");
     let steps = skill_steps(h, &["claude"]);
     assert!(steps.iter().all(|s| s.path.starts_with(h.join(".claude"))));
-    assert_eq!(steps.len(), 3);
+    assert_eq!(steps.len(), 4);
 }
 
 #[test]

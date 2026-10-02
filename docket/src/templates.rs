@@ -12,7 +12,7 @@ pub struct Skill {
     pub codex: &'static str,
 }
 
-pub const SKILLS: [Skill; 3] = [
+pub const SKILLS: [Skill; 4] = [
     Skill {
         name: "plan",
         claude: include_str!("../../skills/plan/SKILL.md"),
@@ -27,6 +27,11 @@ pub const SKILLS: [Skill; 3] = [
         name: "audit",
         claude: include_str!("../../skills/audit/SKILL.md"),
         codex: include_str!("../../skills/audit/SKILL.codex.md"),
+    },
+    Skill {
+        name: "lead",
+        claude: include_str!("../../skills/lead/SKILL.md"),
+        codex: include_str!("../../skills/lead/SKILL.codex.md"),
     },
 ];
 

@@ -26,57 +26,7 @@ pub fn job(flags: &Flags, what: &JobCmd) -> Result<i32> {
             model,
             effort,
             role,
-        } => {
-            let Some(branch) = flags.branch.clone().filter(|b| !b.is_empty()) else {
-                return Err(Fail::refused(
-                    "docket job run needs --branch NAME, the branch the lead pushed here",
-                ));
-            };
-            if flags.project.as_deref().is_none_or(str::is_empty) {
-                return Err(Fail::refused("docket job run needs -p SLUG"));
-            }
-            let mut ctx = Ctx::new(flags.json, flags.project.clone(), Some(branch.clone()))?;
-            let slug = ctx.project()?;
-            let checkout = checkout(&mut ctx, &slug)?;
-            let spec = Spec {
-                project: slug.clone(),
-                id: crate::ctx::id(id)?,
-                branch,
-                runner: runner.clone(),
-                model: model.clone(),
-                effort: effort.clone().filter(|e| !e.is_empty()),
-                role: role.clone(),
-            };
-            let name = job::name_of(&spec.branch);
-            let env = [
-                ("DOCKET_PROJECT", slug.as_str()),
-                ("DOCKET_JOB", name.as_str()),
-            ];
-            let started = job::run(&spec, &checkout, &root, &env, &job::program(runner))
-                .map_err(Fail::refused)?;
-            if flags.json {
-                let out = serde_json::json!({
-                    "name": started.name,
-                    "dir": started.dir.display().to_string(),
-                    "worktree": started.worktree.display().to_string(),
-                    "pid": started.child.id(),
-                });
-                println!("{out}");
-            } else {
-                println!(
-                    "started {} (pid {}): {} on {}, {} {}{}, in {}",
-                    started.name,
-                    started.child.id(),
-                    spec.id,
-                    spec.branch,
-                    spec.runner,
-                    spec.model,
-                    spec.effort.map(|e| format!(" {e}")).unwrap_or_default(),
-                    started.worktree.display()
-                );
-            }
-            Ok(0)
-        }
+        } => run(flags, &root, id, runner, model, effort.as_deref(), role),
         JobCmd::Status { job: name } => {
             let rows: Vec<Row> = job::rows(&root, job::now())
                 .into_iter()
@@ -95,6 +45,24 @@ pub fn job(flags: &Flags, what: &JobCmd) -> Result<i32> {
             }
             Ok(0)
         }
+        JobCmd::Where => {
+            if flags.project.as_deref().is_none_or(str::is_empty) {
+                return Err(Fail::refused("docket job where needs -p SLUG"));
+            }
+            let mut ctx = Ctx::new(flags.json, flags.project.clone(), None)?;
+            let slug = ctx.project()?;
+            println!("{}", checkout(&mut ctx, &slug)?.display());
+            Ok(0)
+        }
+        JobCmd::Remove {
+            job: name,
+            keep_branch,
+        } => {
+            let dir = job::find(&root, name, flags.project.as_deref()).map_err(Fail::refused)?;
+            job::remove(&dir, *keep_branch).map_err(Fail::refused)?;
+            println!("removed {name}");
+            Ok(0)
+        }
         JobCmd::Kill { job: name } => {
             let dir = job::find(&root, name, flags.project.as_deref()).map_err(Fail::refused)?;
             job::kill(&dir).map_err(Fail::refused)?;
@@ -107,6 +75,67 @@ pub fn job(flags: &Flags, what: &JobCmd) -> Result<i32> {
             Ok(0)
         }
     }
+}
+
+/// `docket job run`: the checkout found, the job started, its name and where it runs printed.
+fn run(
+    flags: &Flags,
+    root: &std::path::Path,
+    id: &str,
+    runner: &str,
+    model: &str,
+    effort: Option<&str>,
+    role: &str,
+) -> Result<i32> {
+    let Some(branch) = flags.branch.clone().filter(|b| !b.is_empty()) else {
+        return Err(Fail::refused(
+            "docket job run needs --branch NAME, the branch the lead pushed here",
+        ));
+    };
+    if flags.project.as_deref().is_none_or(str::is_empty) {
+        return Err(Fail::refused("docket job run needs -p SLUG"));
+    }
+    let mut ctx = Ctx::new(flags.json, flags.project.clone(), Some(branch.clone()))?;
+    let slug = ctx.project()?;
+    let checkout = checkout(&mut ctx, &slug)?;
+    let spec = Spec {
+        project: slug.clone(),
+        id: crate::ctx::id(id)?,
+        branch,
+        runner: runner.to_string(),
+        model: model.to_string(),
+        effort: effort.filter(|e| !e.is_empty()).map(str::to_string),
+        role: role.to_string(),
+    };
+    let name = job::name_of(&spec.branch);
+    let env = [
+        ("DOCKET_PROJECT", slug.as_str()),
+        ("DOCKET_JOB", name.as_str()),
+    ];
+    let started =
+        job::run(&spec, &checkout, root, &env, &job::program(runner)).map_err(Fail::refused)?;
+    if flags.json {
+        let out = serde_json::json!({
+            "name": started.name,
+            "dir": started.dir.display().to_string(),
+            "worktree": started.worktree.display().to_string(),
+            "pid": started.child.id(),
+        });
+        println!("{out}");
+    } else {
+        println!(
+            "started {} (pid {}): {} on {}, {} {}{}, in {}",
+            started.name,
+            started.child.id(),
+            spec.id,
+            spec.branch,
+            spec.runner,
+            spec.model,
+            spec.effort.map(|e| format!(" {e}")).unwrap_or_default(),
+            started.worktree.display()
+        );
+    }
+    Ok(0)
 }
 
 /// One job as a line: name, state, item, runner and model, minutes, tokens and report.

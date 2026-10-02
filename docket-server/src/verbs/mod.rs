@@ -25,7 +25,7 @@ use crate::store::{ProjectRow, Tx};
 
 pub const TURNS: [&str; 2] = ["agent", "user"];
 pub const RUNNERS: [&str; 3] = ["codex", "claude", "remote"];
-pub const ROLES: [&str; 4] = ["build", "rebase", "review", "plan"];
+pub const ROLES: [&str; 5] = ["build", "rebase", "review", "plan", "audit"];
 pub const KINDS: [&str; 8] = [
     "work", "decision", "research", "audit", "story", "concept", "idea", "package",
 ];

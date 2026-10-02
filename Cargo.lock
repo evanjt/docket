@@ -990,15 +990,19 @@ dependencies = [
 name = "docket"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "clap",
  "docket-client",
  "docket-core",
+ "docket-migration",
+ "docket-server",
  "docket-tui",
  "libc",
  "regex",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]

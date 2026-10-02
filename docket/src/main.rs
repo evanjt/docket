@@ -3,6 +3,7 @@
 mod args;
 mod cmd;
 mod ctx;
+mod dispatch;
 mod fail;
 mod http;
 mod job;

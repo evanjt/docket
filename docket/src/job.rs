@@ -645,6 +645,37 @@ pub fn kill(dir: &Path) -> Result<(), String> {
     Err(format!("process group {pgid} outlived SIGKILL"))
 }
 
+/// Remove a job that has ended: its worktree, its branch in the checkout unless kept, and its
+/// directory.
+///
+/// # Errors
+/// The job is still running, or git refuses to remove the worktree or the branch.
+pub fn remove(dir: &Path, keep_branch: bool) -> Result<(), String> {
+    let at = now();
+    let r = row(dir, at).ok_or_else(|| format!("{}: no job here", dir.display()))?;
+    if r.state == State::Running {
+        return Err(format!(
+            "{} is still running: docket job kill {} first",
+            r.name, r.name
+        ));
+    }
+    let worktree = Path::new(&r.worktree);
+    if worktree.is_dir() {
+        let common = git(
+            worktree,
+            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        )?;
+        let checkout = Path::new(&common)
+            .parent()
+            .map_or_else(|| PathBuf::from(&common), Path::to_path_buf);
+        git(&checkout, &["worktree", "remove", "--force", &r.worktree])?;
+        if !keep_branch {
+            git(&checkout, &["branch", "-D", &r.branch])?;
+        }
+    }
+    fs::remove_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))
+}
+
 /// The last `n` lines of a job's event stream, then of its stderr when the stream is empty.
 #[must_use]
 pub fn tail(dir: &Path, n: usize) -> String {

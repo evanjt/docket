@@ -76,6 +76,7 @@ once as wanted:
 | `/plan` | a goal into a plan and its tickets; investigations and decided questions into tickets |
 | `/work` | the next ticket: a worktree off the branch the session started from, the failing test first, merged back and closed |
 | `/audit` | a plan whose tickets are all closed, checked once against what it asked; gaps filed as tickets |
+| `/lead` | the project's one lead: every ticket, plan and due audit dispatched as a job on a machine with a free slot, on the model its complexity gives, then merged and closed |
 
 The templates are in `skills/` and the client carries them. A skill names no project: each reads
 the project's facts with `docket skills`. `docket skills install` writes them to `~/.claude/skills`
@@ -102,6 +103,25 @@ then returns. The job's directory under `$XDG_STATE_HOME/docket/jobs` (or `DOCKE
 branch and ends its final message with `DONE <sha>`, `WAITING Q<n>` or `FAILED <reason>`; `docket`
 refuses `start`, `release`, `close`, `drop` and `reopen` inside one (`DOCKET_JOB` set), which are
 the lead's. `DOCKET_JOB_RUNNER_CLAUDE` and `DOCKET_JOB_RUNNER_CODEX` replace the program run.
+
+## Dispatch
+
+A lead moves work with three commands, run in its checkout on the branch the work merges into:
+
+```bash
+docket dispatch T14 [--on NAME] [--runner R --model M --effort E] [--role build|audit|plan]
+docket jobs [--wait] [--timeout 300] [--all]   # every machine's jobs, read where they run
+docket collect T14 [--remove]                  # the job's branch fetched here, its commits and report
+```
+
+`dispatch` claims the item on a fresh `lead/` branch, recording the runner, job, model, machine and
+role on the claim, pushes this checkout's head to the machine's checkout as that branch, and starts
+the job there with `docket job run`. The model comes from the project's `models` fact by the item's
+complexity unless given; the machine is the one with the runner and the most free slots, this one
+first among equals, unless `--on` names it. A failed push or start gives the claim back. Another
+machine is reached over ssh at its recorded address (`DOCKET_SSH` replaces the program), running
+the `docket` on its path, and its code moves only by git from the lead's machine: pushed there
+before the job, fetched back by `collect`. `jobs --wait` returns once one of the running jobs ends.
 
 ## Keys
 

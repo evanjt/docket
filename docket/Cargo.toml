@@ -17,7 +17,11 @@ docket-core = { path = "../docket-core" }
 docket-tui = { path = "../docket-tui" }
 
 [dev-dependencies]
+axum = { workspace = true }
+docket-migration = { path = "../docket-migration", features = ["scratch"] }
+docket-server = { path = "../docket-server" }
 tempfile = "3"
+tokio = { workspace = true, features = ["sync"] }
 
 [lints]
 workspace = true

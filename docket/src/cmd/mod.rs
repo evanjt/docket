@@ -1,6 +1,7 @@
 //! Each verb to its command.
 
 pub mod audit;
+pub mod dispatch;
 pub mod instructions;
 pub mod job;
 pub mod lead;
@@ -111,7 +112,12 @@ pub fn run(ctx: &mut Ctx, cmd: Option<&Cmd>) -> Result<i32> {
             },
         ),
         Cmd::Instructions { what, yes } => instructions::instructions(ctx, what, *yes),
-        Cmd::Machines | Cmd::Machine { .. } | Cmd::Lead { .. } => run_lead(ctx, cmd),
+        Cmd::Machines
+        | Cmd::Machine { .. }
+        | Cmd::Lead { .. }
+        | Cmd::Dispatch { .. }
+        | Cmd::Jobs { .. }
+        | Cmd::Collect { .. } => run_lead(ctx, cmd),
         _ => run_write(ctx, cmd),
     }
 }
@@ -139,7 +145,32 @@ fn run_lead(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             ),
         ),
         Cmd::Lead { what, session } => lead::lead(ctx, what, session.as_ref()),
-        _ => unreachable!("run_lead is given only the machine and lead commands"),
+        Cmd::Dispatch {
+            id,
+            on,
+            runner,
+            model,
+            effort,
+            role,
+        } => dispatch::dispatch(
+            ctx,
+            &dispatch::Ask {
+                id,
+                on: on.as_deref(),
+                runner: runner.as_deref(),
+                model: model.as_deref(),
+                effort: effort.as_deref(),
+                role: role.as_deref(),
+            },
+        ),
+        Cmd::Jobs {
+            wait,
+            every,
+            timeout,
+            all,
+        } => dispatch::jobs(ctx, *wait, *every, *timeout, *all),
+        Cmd::Collect { id, remove } => dispatch::collect(ctx, id, *remove),
+        _ => unreachable!("run_lead is given only the machine, lead and dispatch commands"),
     }
 }
 

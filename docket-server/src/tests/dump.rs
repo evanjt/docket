@@ -131,13 +131,6 @@ fn cited(paths: &[&str]) -> String {
     format!("- **Evidence.** {}\n", cites.join(" "))
 }
 
-fn package(paths: &[&str]) -> String {
-    format!(
-        "- **Principles.**\n  1. Shelves have one owner.\n{}",
-        cited(paths)
-    )
-}
-
 #[tokio::test]
 async fn test_dump_without_key_is_401() {
     let d = Dumped::new().await;
@@ -193,8 +186,8 @@ async fn run(d: &mut Dumped, steps: Vec<(&str, Value, &str)>) {
     }
 }
 
-/// Packages: membership, a reverse related link, a fold that re-points a waiter.
-async fn packages(d: &mut Dumped) {
+/// Plans: tickets opened under two plans, a waiter on one of them.
+async fn plans(d: &mut Dumped) {
     let steps: Vec<(&str, Value, &str)> = vec![
         (
             "new",
@@ -208,18 +201,18 @@ async fn packages(d: &mut Dumped) {
         ),
         (
             "new",
-            json!({ "key": "PK", "title": "Shelves", "body": package(&["src/shelves.ts"]) }),
-            "Open PK1",
+            json!({ "key": "A", "title": "Shelf plan" }),
+            "Open A1",
         ),
         (
             "link",
-            json!({ "a": ["B1", "B2"], "kind": "opened", "b": "PK1" }),
-            "Link 2 items to PK1",
+            json!({ "a": ["B1", "B2"], "kind": "opened", "b": "A1" }),
+            "Link 2 items to A1",
         ),
         (
             "new",
-            json!({ "key": "PK", "title": "Proofing", "body": package(&["src/proof.ts"]) }),
-            "Open PK2",
+            json!({ "key": "A", "title": "Proofing plan" }),
+            "Open A2",
         ),
         (
             "new",
@@ -228,46 +221,26 @@ async fn packages(d: &mut Dumped) {
         ),
         (
             "link",
-            json!({ "a": ["B3"], "kind": "opened", "b": "PK2" }),
+            json!({ "a": ["B3"], "kind": "opened", "b": "A2" }),
             "Link B3",
         ),
         (
-            "new",
-            json!({ "key": "A", "title": "Shelf plan" }),
-            "Open A1",
-        ),
-        (
-            "new",
-            json!({ "key": "CON", "title": "Recording" }),
-            "Open CON1",
-        ),
-        (
             "link",
-            json!({ "a": ["PK2"], "kind": "opened", "b": "A1" }),
-            "Link PK2",
-        ),
-        (
-            "link",
-            json!({ "a": ["PK2"], "kind": "related", "b": "CON1" }),
-            "Link PK2",
+            json!({ "a": ["A2"], "kind": "related", "b": "A1" }),
+            "Link A2",
         ),
         (
             "new",
             json!({ "key": "B", "title": "after shelves", "body": cited(&["src/later.ts"]) }),
             "Open B4",
         ),
-        ("wait", json!({ "id": "B4", "on": "PK2" }), "Wait B4"),
+        ("wait", json!({ "id": "B4", "on": "A2" }), "Wait B4"),
         (
             "priority",
-            json!({ "ids": ["PK2", "B1"], "tier": "high" }),
+            json!({ "ids": ["A2", "B1"], "tier": "high" }),
             "Prioritise 2 items",
         ),
         ("start", json!({ "id": "B3" }), "Start B3"),
-        (
-            "fold",
-            json!({ "into": "PK1", "ids": ["PK2"] }),
-            "Fold PK2 into PK1",
-        ),
     ];
     run(d, steps).await;
 }
@@ -334,12 +307,6 @@ async fn moves(d: &mut Dumped) {
         ),
         ("reopen", json!({ "id": "B2", "why": "back" }), "Reopen B2"),
         (
-            "defer",
-            json!({ "ids": ["B4"], "why": "not now" }),
-            "Move B4 to the later",
-        ),
-        ("pull", json!({ "ids": ["B4"] }), "Move B4 to the release"),
-        (
             "wait",
             json!({ "id": "B2", "until": "the fleet is quiet" }),
             "Wait B2",
@@ -368,7 +335,7 @@ async fn moves(d: &mut Dumped) {
 #[tokio::test]
 async fn test_dump_after_every_verb_equals_a_full_dump_and_names_the_write() {
     let mut d = Dumped::new().await;
-    packages(&mut d).await;
+    plans(&mut d).await;
     questions(&mut d).await;
     moves(&mut d).await;
     assert_eq!(messages(&d.page(0).await.events), d.named);

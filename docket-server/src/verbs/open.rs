@@ -13,7 +13,7 @@ use docket_core::word::{Kind, PRIORITIES};
 
 use crate::auth::Caller;
 use crate::store::NewItem;
-use crate::verbs::graph::{belongs_to_none, decided_like, keys_of};
+use crate::verbs::graph::{decided_like, keys_of};
 use crate::verbs::view::item_view;
 use crate::verbs::{Call, Failure, KINDS, TURNS, chars, choice, require_owner};
 
@@ -26,10 +26,10 @@ pub async fn new(
 ) -> Result<Json<Opened>, Failure> {
     require_owner(&caller, "new")?;
     let call = Call::begin(&db, &caller, &req.common).await?;
-    open_item(call, req, None, None).await.map(Json)
+    open_item(call, req, None).await.map(Json)
 }
 
-/// A ticket filed to the inbox, for the planner to place.
+/// A side finding filed as a low-priority ticket.
 ///
 /// # Errors
 /// 403 on an agent's key, 409 when the project has no work key.
@@ -51,13 +51,11 @@ pub async fn add(
         body: req.body,
         turn: None,
         complexity: None,
-        priority: None,
+        priority: Some("low".to_string()),
         theme: None,
         group: None,
     };
-    open_item(call, as_new, Some("inbox".to_string()), req.from)
-        .await
-        .map(Json)
+    open_item(call, as_new, req.from).await.map(Json)
 }
 
 fn default_work_key(call: &Call) -> Result<String, Failure> {
@@ -78,11 +76,19 @@ fn default_work_key(call: &Call) -> Result<String, Failure> {
 async fn open_item(
     mut call: Call,
     req: NewRequest,
-    scope: Option<String>,
     seen_by: Option<String>,
 ) -> Result<Opened, Failure> {
     let key = req.key.to_uppercase();
     let spec = key_spec(&call.project.rules, &key)?.clone();
+    if spec.kind.is_read_only() {
+        let plan = keys_of(&call.project, &[Kind::Audit])
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| "KEY".to_string());
+        return Err(Failure::Refused(format!(
+            "{key} is kept to read: plans group the work now. File a plan with docket new {plan} \"goal\"."
+        )));
+    }
     choice("turn", req.turn.as_deref(), &TURNS)?;
     choice("complexity", req.complexity.as_deref(), &COMPLEXITIES)?;
     choice("priority", req.priority.as_deref(), &PRIORITIES)?;
@@ -112,7 +118,7 @@ async fn open_item(
             complexity: req.complexity,
             theme: req.theme,
             group_name: req.group,
-            scope,
+            scope: None,
             tags,
         })
         .await?;
@@ -145,7 +151,6 @@ async fn open_item(
                 decision: t.decision.unwrap_or_default(),
             })
             .collect(),
-        no_concept: belongs_to_none(&call.tx.conn, &call.project, &r).await?,
     };
     call.tx.commit().await?;
     Ok(out)

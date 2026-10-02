@@ -6,7 +6,7 @@ use sea_orm::{DatabaseConnection, FromQueryResult};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use docket_core::word::{Facts, Kind, PRIORITIES, priority, word};
+use docket_core::word::{Facts, Kind, priority, word};
 
 use crate::reads::public::{Kinds, sql};
 use crate::reads::rows::{Extra, project_model, rows_with, shaped};
@@ -14,7 +14,7 @@ use crate::reads::search::{Narrow, search_rows};
 use crate::store::{self, to_item};
 use crate::verbs::Failure;
 use crate::verbs::graph::{
-    concepts_of, open_member_count, package_members, package_of, package_progress, packages_of,
+    concepts_of, open_member_count, package_members, package_of, package_progress,
 };
 
 #[derive(Deserialize)]
@@ -191,7 +191,7 @@ pub async fn context(
     let kinds = Kinds::of(&model);
     let r = store::item_of(&db, &q.project, &id).await?;
     let kind = kinds.kind(&r.key);
-    let (tier, raised_by) = raised(&db, &project, &r).await?;
+    let tier = priority(&r.tags);
     let package = match package_of(&db, &project, r.rid).await? {
         Some(p) => Some(json!({
             "id": p.id, "title": p.title,
@@ -218,34 +218,12 @@ pub async fn context(
     };
     Ok(Json(json!({
         "priority": tier,
-        "raised_by": raised_by,
         "standing": standing,
         "package": package,
         "members": members,
         "holds": holds,
         "concepts": concepts_of(&db, &project, r.rid).await?,
-        "no_concept": crate::verbs::graph::belongs_to_none(&db, &project, &r).await?,
     })))
-}
-
-/// The tier the item is worked at, and the open package that raised it above its own, if one did.
-async fn raised(
-    db: &DatabaseConnection,
-    project: &store::ProjectRow,
-    r: &docket_core::item::Item,
-) -> Result<(&'static str, Option<String>), Failure> {
-    let own = priority(&r.tags);
-    let mut best = (PRIORITIES.iter().position(|p| *p == own).unwrap_or(2), None);
-    for p in packages_of(db, project, r.rid).await? {
-        let t = PRIORITIES
-            .iter()
-            .position(|x| *x == priority(&p.tags))
-            .unwrap_or(2);
-        if t < best.0 {
-            best = (t, Some(p.id));
-        }
-    }
-    Ok((PRIORITIES[best.0], best.1))
 }
 
 async fn word_of(
@@ -263,7 +241,6 @@ async fn word_of(
         state: &r.state,
         kind,
         claimed: r.claim_branch.is_some(),
-        scope: r.scope.as_deref(),
         waiting: r.wait_on.is_some(),
         turn: r.turn.as_deref(),
     };

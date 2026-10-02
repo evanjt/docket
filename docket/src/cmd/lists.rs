@@ -43,11 +43,9 @@ pub fn next(ctx: &mut Ctx, q: &Queue) -> Result<i32> {
             ("complexity", q.complexity.clone()),
             ("key", q.key.clone()),
             ("theme", q.theme.clone()),
-            ("without_theme", q.without_theme.clone()),
             ("under", opt_id(q.under.as_ref())?),
-            ("scope", q.scope.clone()),
+            ("role", q.role.clone()),
             ("priority", q.priority.clone()),
-            ("all", q.all.then(|| "true".to_string())),
         ],
     )?;
     print_rows(ctx, &rows, "Nothing for an agent right now.");

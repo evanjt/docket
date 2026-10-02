@@ -86,32 +86,40 @@ async fn ids(path: &str) -> Vec<String> {
 }
 
 #[tokio::test]
-async fn test_next_orders_by_effective_tier_review_first_then_rank_and_age() {
-    assert_eq!(ids("/next").await, ["T5", "T2", "PK1", "T3", "T1", "Q2"]);
-    assert_eq!(ids("/next?n=2").await, ["T5", "T2"]);
+async fn test_next_orders_by_priority_then_age_alone() {
+    assert_eq!(
+        ids("/next").await,
+        ["T2", "T1", "T3", "T5", "Q2", "T8", "T9"]
+    );
+    assert_eq!(ids("/next?n=2").await, ["T2", "T1"]);
     let (_, rows) = get("/next?n=1").await;
-    assert_eq!(rows[0]["priority"], "critical");
+    assert_eq!(rows[0]["priority"], "high");
     assert_eq!(rows[0]["word"], "ready");
-    assert_eq!(rows[0]["tags"], json!([]));
+    assert_eq!(rows[0]["tags"], json!(["high"]));
     assert!(rows[0].get("eff_tier").is_none());
-    assert_eq!(get("/show/T5").await.1["priority"], "normal");
+    assert_eq!(get("/show/T8").await.1["word"], "ready");
 }
 
 #[tokio::test]
-async fn test_next_narrows_by_release_scope_key_priority_under_theme_and_complexity() {
+async fn test_next_by_role() {
     assert_eq!(
-        ids("/next?all=true").await,
-        ["T5", "T2", "PK1", "T3", "T1", "T9", "Q2"]
+        ids("/next?role=work").await,
+        ["T2", "T1", "T3", "T5", "T8", "T9"]
     );
+    assert_eq!(ids("/next?role=plan").await, ["Q2"]);
+    assert!(ids("/next?role=audit").await.is_empty());
+}
+
+#[tokio::test]
+async fn test_next_narrows_by_key_priority_under_theme_and_complexity() {
     assert_eq!(ids("/next?theme=road").await, ["T9"]);
     assert_eq!(
-        ids("/next?all=true&without_theme=ROAD").await,
-        ["T5", "T2", "PK1", "T3", "T1", "Q2"]
+        ids("/next?key=t").await,
+        ["T2", "T1", "T3", "T5", "T8", "T9"]
     );
-    assert_eq!(ids("/next?scope=inbox").await, ["T8"]);
-    assert_eq!(ids("/next?key=t").await, ["T5", "T2", "T3", "T1"]);
-    assert_eq!(ids("/next?key=CON").await, ["CON1"]);
-    assert_eq!(ids("/next?priority=high").await, ["T5", "T2"]);
+    assert!(ids("/next?key=CON").await.is_empty());
+    assert!(ids("/next?key=PK").await.is_empty());
+    assert_eq!(ids("/next?priority=high").await, ["T2"]);
     assert_eq!(ids("/next?under=A1").await, ["T2", "T3"]);
     assert_eq!(ids("/next?under=con1").await, ["T1"]);
     assert_eq!(ids("/next?complexity=low").await, ["T3"]);
@@ -119,7 +127,7 @@ async fn test_next_narrows_by_release_scope_key_priority_under_theme_and_complex
 
 #[tokio::test]
 async fn test_next_refuses_bad_choices_and_unknown_targets() {
-    assert_eq!(get("/next?scope=x").await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(get("/next?role=x").await.0, StatusCode::BAD_REQUEST);
     assert_eq!(
         get("/next?priority=urgent").await.0,
         StatusCode::BAD_REQUEST
@@ -166,8 +174,8 @@ async fn test_status_counts_tickets_in_total_and_every_key() {
     assert_eq!(body["total"], 15);
     assert_eq!(
         body["by_word"],
-        json!({"ready": 6, "done": 2, "parked": 1, "blocked": 2, "building": 1,
-               "inbox": 1, "dropped": 1, "standing": 1})
+        json!({"ready": 7, "done": 2, "parked": 1, "blocked": 2, "building": 1,
+               "dropped": 1, "standing": 1})
     );
     assert_eq!(body["by_key"]["PK"], json!({"ready": 1, "building": 1}));
     assert_eq!(body["by_key"]["CON"], json!({"standing": 1}));

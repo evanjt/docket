@@ -64,7 +64,7 @@ machine. An agent key cannot open items with `new` or `add`.
 | `GET /counts`, `/whoami` | every project's counts; the host and role of the key presented |
 | `GET /projects`, `/items`, `/events`, `/links` | the stored rows, filtered and paged |
 | `GET /dump` | the rows changed after an event `seq` (`since=N`), or every row (`since=0`), for `docket-dump` |
-| `POST /do/{verb}` | `new`, `add`, `start`, `close`, `release`, `drop`, `reopen`, `wait`, `resume`, `ask`, `reply`, `answer`, `decide`, `priority`, `rate`, `edit`, `link`, `fold`, `key`, `pull`, `defer`, `project`, `reindex` |
+| `POST /do/{verb}` | `new`, `add`, `start`, `close`, `release`, `drop`, `reopen`, `wait`, `resume`, `ask`, `reply`, `answer`, `decide`, `priority`, `rate`, `edit`, `link`, `key`, `project`, `reindex` |
 
 A refused write answers `409` with the reason, and nothing is written.
 

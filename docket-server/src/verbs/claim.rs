@@ -16,12 +16,9 @@ use docket_core::word::Kind;
 
 use crate::auth::Caller;
 use crate::store::item_opt;
-use crate::verbs::graph::{
-    belongs_to_none, is_package, live_overlaps, open_under, package_members, package_of,
-    release_waiters, settle_audits,
-};
+use crate::verbs::graph::{came_due, live_overlaps, open_under, release_waiters, settle_audits};
 use crate::verbs::view::{brief, item_view, kind};
-use crate::verbs::{Call, Failure, ROLES, RUNNERS, choice, given, some_ids};
+use crate::verbs::{Call, Failure, ROLES, RUNNERS, choice, given};
 
 /// The runner and model a close or release names, for the data it writes.
 fn run_facts(runner: Option<&str>, model: Option<&str>) -> Map<String, Json_> {
@@ -46,7 +43,7 @@ fn data_or_none(data: Map<String, Json_>) -> Option<Json_> {
 /// Claim an item on a branch.
 ///
 /// # Errors
-/// 409 when the rules refuse the claim, or a package still has open tickets.
+/// 409 when the rules refuse the claim, or the item is of a kind kept to read.
 pub async fn start(
     State(db): State<DatabaseConnection>,
     Extension(caller): Extension<Caller>,
@@ -64,22 +61,16 @@ pub async fn start(
         )));
     }
     let cols = rules::start(&r, &call.ctx)?;
-    let review = is_package(&call.project, &r.key);
-    if review {
-        let held = package_members(&call.tx.conn, r.rid, true).await?;
-        if !held.is_empty() {
-            return Err(Failure::Refused(format!(
-                "{} is built through its tickets, and {} are open: {}. docket next --under {}. It is claimed for its review once none is.",
-                r.id,
-                held.len(),
-                some_ids(&held, 8),
-                r.id
-            )));
-        }
+    let kind = kind(&call.project, &r);
+    if kind.is_read_only() {
+        return Err(Failure::Refused(format!(
+            "{} is a {} and kept to read: plans group the work now, and its tickets are claimed one by one.",
+            r.id,
+            kind.as_str()
+        )));
     }
     let mut data = Map::new();
-    let role = given(req.role.as_deref()).or(if review { Some("review") } else { None });
-    if let Some(role) = role {
+    if let Some(role) = given(req.role.as_deref()) {
         data.insert("role".into(), json!(role));
     }
     data.extend(run_facts(req.runner.as_deref(), req.model.as_deref()));
@@ -94,7 +85,7 @@ pub async fn start(
             data_or_none(data).as_ref(),
         )
         .await?;
-    let out = started(&call, &row, review).await?;
+    let out = started(&call, &row).await?;
     call.tx.commit().await?;
     Ok(Json(out))
 }
@@ -140,7 +131,7 @@ async fn claim_row(
     Ok(row)
 }
 
-async fn started(call: &Call, row: &Item, review: bool) -> Result<Started, Failure> {
+async fn started(call: &Call, row: &Item) -> Result<Started, Failure> {
     let c = &call.tx.conn;
     let shares = live_overlaps(c, &call.slug, row)
         .await?
@@ -165,14 +156,9 @@ async fn started(call: &Call, row: &Item, review: bool) -> Result<Started, Failu
     Ok(Started {
         item: item_view(c, &call.project, row).await?,
         kind: kind(&call.project, row).as_str().to_string(),
-        review,
         shares,
-        package: package_of(c, &call.project, row.rid)
-            .await?
-            .map(|p| brief(&p)),
         worktree_hint: call.project.worktree_hint.clone(),
         group_others,
-        no_concept: belongs_to_none(c, &call.project, row).await?,
     })
 }
 
@@ -216,7 +202,7 @@ pub async fn release(
 /// Done, under a sha or what it opened; releases waiters.
 ///
 /// # Errors
-/// 409 when the rules refuse it, the item is standing, gated with open work, or a package with open members.
+/// 409 when the rules refuse it, the item is standing, or a plan that never came due opened open work.
 pub async fn close(
     State(db): State<DatabaseConnection>,
     Extension(caller): Extension<Caller>,
@@ -242,29 +228,17 @@ pub async fn close(
             r.id
         )));
     }
-    if kind.gated_turn().is_some() {
-        let pending = open_under(&call.tx.conn, r.rid).await?;
-        if !pending.is_empty() {
-            return Err(Failure::Refused(format!(
-                "{} opened work that is still open: {}. It closes only when nothing it opened is open; release it and it comes back when they close.",
-                r.id,
-                some_ids(&pending, 10)
-            )));
-        }
+    if kind == Kind::Audit {
+        let pending: Vec<String> = open_under(&call.tx.conn, r.rid)
+            .await?
+            .into_iter()
+            .map(|x| x.id)
+            .collect();
+        rules::close_plan(&r, &pending, came_due(&call.tx.conn, r.rid).await?)?;
     }
     let mut data = run_facts(req.runner.as_deref(), req.model.as_deref());
     if given(req.gates.as_deref()).is_some() {
         data.insert("gates".into(), json!(gates_result(req.gates.as_deref())?));
-    }
-    if kind == Kind::Package {
-        let pending = package_members(&call.tx.conn, r.rid, true).await?;
-        if !pending.is_empty() {
-            return Err(Failure::Refused(format!(
-                "{} still holds open members: {}. Close or drop each first.",
-                r.id,
-                some_ids(&pending, 10)
-            )));
-        }
     }
     let row = call.tx.update(r.rid, &cols).await?;
     call.tx
@@ -295,19 +269,10 @@ pub async fn close(
     }
     let mut released = release_waiters(&mut call.tx, &call.slug, &row, "closed").await?;
     released.extend(settle_audits(&mut call.tx, &call.project, &[r.rid]).await?);
-    let mut review_ready = None;
-    if let Some(pkg) = package_of(&call.tx.conn, &call.project, r.rid).await?
-        && package_members(&call.tx.conn, pkg.rid, true)
-            .await?
-            .is_empty()
-    {
-        review_ready = Some(pkg.id);
-    }
     let out = Closed {
         item: item_view(&call.tx.conn, &call.project, &row).await?,
         released: released.iter().map(brief).collect(),
         opened,
-        review_ready,
     };
     call.tx.commit().await?;
     Ok(Json(out))
@@ -316,7 +281,7 @@ pub async fn close(
 /// Closed without doing: superseded, archived, will not fix.
 ///
 /// # Errors
-/// 409 when the rules refuse it, or a package still holds members.
+/// 409 when the rules refuse it.
 pub async fn drop(
     State(db): State<DatabaseConnection>,
     Extension(caller): Extension<Caller>,
@@ -334,17 +299,6 @@ pub async fn drop(
         (None, None) => None,
     };
     let cols = rules::drop(&r, &call.ctx, why.as_deref(), sup.as_ref().map(|s| s.rid))?;
-    if is_package(&call.project, &r.key) && !call.ctx.force {
-        let held = package_members(&call.tx.conn, r.rid, true).await?;
-        if !held.is_empty() {
-            return Err(Failure::Refused(format!(
-                "{} still holds {}. Fold it into another package (docket fold PKn {}), or move or drop its members first.",
-                r.id,
-                some_ids(&held, 8),
-                r.id
-            )));
-        }
-    }
     let row = call.tx.update(r.rid, &cols).await?;
     call.tx
         .event(

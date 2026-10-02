@@ -4,10 +4,9 @@
 use crate::item::{Ctx, Field, Item, KeySpec, Project, Refused};
 use crate::word::{Kind, PRIORITIES};
 
-pub const SCOPES: [&str; 2] = ["inbox", "later"];
 pub const COMPLEXITIES: [&str; 3] = ["high", "medium", "low"];
 pub const DERIVED: &str = "Derived from ";
-/// The wait an audit or a story holds while anything it opened is still open.
+/// The wait a plan holds while anything it opened is still open.
 pub const GATE: &str = "everything it opened is closed";
 
 /// Every column a claim sets, cleared together.
@@ -116,7 +115,7 @@ fn opt(v: Option<&String>) -> &str {
 }
 
 /// # Errors
-/// Refused when the item is not open, held elsewhere, out of the release, waiting, parked or in conflict.
+/// Refused when the item is not open, held elsewhere, waiting, parked or in conflict.
 pub fn start(row: &Item, ctx: &Ctx) -> Result<Vec<Field>, Refused> {
     require_open(row, "start")?;
     if let Some(branch) = &row.claim_branch {
@@ -135,12 +134,6 @@ pub fn start(row: &Item, ctx: &Ctx) -> Result<Vec<Field>, Refused> {
                 opt(row.claim_since.as_ref())
             )));
         }
-    }
-    if let Some(scope) = &row.scope {
-        return Err(Refused(format!(
-            "{} is in the {scope}, outside the release: docket pull {} first.",
-            row.id, row.id
-        )));
     }
     if let Some(on) = &row.wait_on {
         let what = if on == "condition" {
@@ -176,34 +169,6 @@ pub fn start(row: &Item, ctx: &Ctx) -> Result<Vec<Field>, Refused> {
         Field::ClaimHost(Some(ctx.host.clone())),
         Field::ClaimSince(Some(ctx.now.clone())),
     ])
-}
-
-/// An open item moved into the release (None), the inbox or the later backlog.
-///
-/// # Errors
-/// Refused when the item is not open, the scope is unknown, the item is held, or already there.
-pub fn scope(row: &Item, to: Option<&str>) -> Result<Vec<Field>, Refused> {
-    require_open(row, "move")?;
-    if let Some(to) = to {
-        if !SCOPES.contains(&to) {
-            return Err(Refused(format!(
-                "scope is the release, {}, not {}",
-                SCOPES.join(" or "),
-                crate::text::py_repr(to)
-            )));
-        }
-        if let Some(branch) = &row.claim_branch {
-            return Err(Refused(format!(
-                "{} is held by {branch}; release it before moving it out of the release.",
-                row.id
-            )));
-        }
-    }
-    if row.scope.as_deref() == to {
-        let place = to.map_or("in the release".to_string(), |t| format!("in the {t}"));
-        return Err(Refused(format!("{} is already {place}.", row.id)));
-    }
-    Ok(vec![Field::Scope(to.map(str::to_string))])
 }
 
 /// # Errors
@@ -247,6 +212,38 @@ pub fn close(
     out.extend(unclaimed());
     out.extend(unwaiting());
     Ok(out)
+}
+
+/// Whether a plan's audit is due or under way: its last gate event, `(kind, note)` oldest first, is the
+/// resume that came when everything it opened closed.
+#[must_use]
+pub fn came_due<'a>(gate_events: impl IntoIterator<Item = (&'a str, &'a str)>) -> bool {
+    gate_events
+        .into_iter()
+        .filter(|(kind, note)| {
+            (*kind == "resumed" && *note == GATE)
+                || (*kind == "waited" && note.starts_with(&format!("until: {GATE}")))
+        })
+        .last()
+        .is_some_and(|(kind, _)| kind == "resumed")
+}
+
+/// A plan closes once its audit came due, the gaps that audit filed under it still open: one round, and
+/// the gaps are worked as tickets. Before that, anything it opened that is open holds it.
+///
+/// # Errors
+/// Refused when the plan never came due and opened work that is still open.
+pub fn close_plan(row: &Item, open_under: &[String], due: bool) -> Result<(), Refused> {
+    if due || open_under.is_empty() {
+        return Ok(());
+    }
+    let shown: Vec<&str> = open_under.iter().take(10).map(String::as_str).collect();
+    let more = if open_under.len() > 10 { " ..." } else { "" };
+    Err(Refused(format!(
+        "{} opened work that is still open: {}{more}. It closes only when nothing it opened is open; release it and it comes back when they close.",
+        row.id,
+        shown.join(", ")
+    )))
 }
 
 /// The tags with one tier in place of any other; normal carries no tag.

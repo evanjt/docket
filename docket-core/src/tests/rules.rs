@@ -139,10 +139,7 @@ fn test_start_refusals() {
     assert!(start(&held_elsewhere("B1"), &forced).is_ok());
     let mut row = open("B1");
     row.scope = Some("inbox".into());
-    assert_eq!(
-        refusal(start(&row, &ctx())),
-        "B1 is in the inbox, outside the release: docket pull B1 first."
-    );
+    assert!(start(&row, &ctx()).is_ok());
     let mut row = open("B1");
     row.wait_on = Some("item".into());
     row.wait_ref = Some("Q1".into());
@@ -179,29 +176,33 @@ fn test_start_refusals() {
 }
 
 #[test]
-fn test_scope_moves_between_release_inbox_and_later() {
+fn test_a_plan_came_due_when_its_last_gate_event_is_the_resume() {
+    let waited = format!("until: {GATE} (2 open)");
+    assert!(!came_due([]));
+    assert!(!came_due([("waited", waited.as_str())]));
+    assert!(came_due([("waited", waited.as_str()), ("resumed", GATE)]));
+    assert!(!came_due([
+        ("waited", waited.as_str()),
+        ("resumed", GATE),
+        ("waited", waited.as_str()),
+    ]));
+    assert!(came_due([
+        ("waited", waited.as_str()),
+        ("resumed", GATE),
+        ("waited", "until: the owner is back"),
+        ("resumed", "Q3 closed"),
+    ]));
+}
+
+#[test]
+fn test_a_plan_closes_with_its_gaps_open_only_once_due() {
+    let plan = open("A1");
+    let gaps = vec!["B7".to_string()];
+    assert!(close_plan(&plan, &[], false).is_ok());
+    assert!(close_plan(&plan, &gaps, true).is_ok());
     assert_eq!(
-        scope(&open("B1"), Some("later")).unwrap(),
-        vec![Field::Scope(Some("later".into()))]
-    );
-    assert_eq!(
-        refusal(scope(&open("B1"), None)),
-        "B1 is already in the release."
-    );
-    let mut row = open("B1");
-    row.scope = Some("later".into());
-    assert_eq!(
-        refusal(scope(&row, Some("later"))),
-        "B1 is already in the later."
-    );
-    assert_eq!(scope(&row, None).unwrap(), vec![Field::Scope(None)]);
-    assert_eq!(
-        refusal(scope(&claimed("B1"), Some("later"))),
-        "B1 is held by audit/t-1; release it before moving it out of the release."
-    );
-    assert_eq!(
-        refusal(scope(&open("B1"), Some("shelf"))),
-        "scope is the release, inbox or later, not 'shelf'"
+        refusal(close_plan(&plan, &gaps, false)),
+        "A1 opened work that is still open: B7. It closes only when nothing it opened is open; release it and it comes back when they close."
     );
 }
 

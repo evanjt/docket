@@ -27,7 +27,7 @@ pub const FACTS: [(&str, &str); 36] = [
     ),
     (
         "release",
-        "the release that open work with no held theme makes up, its name and cut date (1.0.0 2026-10-01). Set, next lists only that work unless --all",
+        "the release open work makes up, its name and cut date (1.0.0 2026-10-01)",
     ),
     (
         "remote",

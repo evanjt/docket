@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::like;
 use crate::member::Tie;
@@ -16,135 +16,86 @@ pub struct Candidate<'a> {
     pub claimed: bool,
     pub waiting: bool,
     pub conflict: bool,
-    pub scope: Option<&'a str>,
     pub complexity: Option<&'a str>,
     pub theme: Option<&'a str>,
-    pub rank: Option<i64>,
     pub tier: usize,
     pub opened_at: &'a str,
 }
 
-/// What `docket next` narrows the queue by. `release` lists the themes inside the release.
+/// The three roles a session takes from the queue with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    /// A goal into tickets: a plan that has opened nothing yet, an investigation, a decided question.
+    Plan,
+    /// The tickets.
+    Work,
+    /// A plan whose tickets are all closed.
+    Audit,
+}
+
+impl Role {
+    pub const NAMES: [&str; 3] = ["plan", "work", "audit"];
+
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "plan" => Some(Role::Plan),
+            "work" => Some(Role::Work),
+            "audit" => Some(Role::Audit),
+            _ => None,
+        }
+    }
+}
+
+/// What `docket next` narrows the queue by.
 #[derive(Clone, Debug, Default)]
 pub struct Filter<'a> {
-    pub scope: Option<&'a str>,
+    pub role: Option<Role>,
     pub priority: Option<usize>,
     pub key: Option<&'a str>,
     pub under: Option<&'a HashSet<i64>>,
     pub complexity: Option<&'a str>,
     pub theme: Option<&'a str>,
-    pub without_theme: Option<&'a str>,
-    pub release: Option<&'a [String]>,
 }
 
-struct Graph<'a> {
-    by_rid: HashMap<i64, &'a Candidate<'a>>,
-    parents: HashMap<i64, Vec<i64>>,
-    children: HashMap<i64, Vec<i64>>,
-}
-
-impl<'a> Graph<'a> {
-    fn new(items: &'a [Candidate<'a>], ties: &[Tie]) -> Self {
-        let (mut parents, mut children): (HashMap<i64, Vec<i64>>, HashMap<i64, Vec<i64>>) =
-            (HashMap::new(), HashMap::new());
-        for t in ties.iter().filter(|t| t.opened) {
-            parents.entry(t.rid).or_default().push(t.to);
-            children.entry(t.to).or_default().push(t.rid);
-        }
-        let by_rid = items.iter().map(|c| (c.rid, c)).collect();
-        Self {
-            by_rid,
-            parents,
-            children,
-        }
-    }
-
-    /// The open packages that opened an item.
-    fn packages(&self, rid: i64) -> impl Iterator<Item = &Candidate<'a>> {
-        self.parents
-            .get(&rid)
-            .into_iter()
-            .flatten()
-            .filter_map(|p| self.by_rid.get(p).copied())
-            .filter(|p| p.open && p.kind == Kind::Package)
-    }
-
-    fn members(&self, rid: i64) -> impl Iterator<Item = &Candidate<'a>> {
-        self.children
-            .get(&rid)
-            .into_iter()
-            .flatten()
-            .filter_map(|m| self.by_rid.get(m).copied())
-    }
-
-    /// A ticket is as urgent as the most urgent open package holding it.
-    fn tier(&self, c: &Candidate) -> usize {
-        self.packages(c.rid)
-            .map(|p| p.tier)
-            .fold(c.tier, usize::min)
-    }
-
-    /// A package is ready only for its review: it holds members and none is open.
-    fn reviewable(&self, rid: i64) -> bool {
-        self.children.get(&rid).is_some_and(|m| !m.is_empty()) && self.members(rid).all(|m| !m.open)
-    }
-
-    /// Whether a package holding the item has a member closed or claimed already.
-    fn under_way(&self, rid: i64) -> bool {
-        self.packages(rid)
-            .any(|p| self.members(p.rid).any(|s| !s.open || s.claimed))
+/// The role an open item is taken by: a plan is audited once it has opened something, since it is
+/// in the queue only when all of that is closed.
+fn role_of(c: &Candidate, opened: &HashSet<i64>) -> Role {
+    match c.kind {
+        Kind::Work => Role::Work,
+        Kind::Audit if opened.contains(&c.rid) => Role::Audit,
+        _ => Role::Plan,
     }
 }
 
-fn takeable(c: &Candidate, f: &Filter) -> bool {
+fn takeable(c: &Candidate, f: &Filter, opened: &HashSet<i64>) -> bool {
     c.open
         && c.turn == Some("agent")
         && !c.claimed
         && !c.waiting
         && !c.conflict
-        && c.scope == f.scope
-        && (!c.kind.is_standing() || f.key == Some(c.key))
+        && !c.kind.is_read_only()
+        && f.role.is_none_or(|r| role_of(c, opened) == r)
         && f.under.is_none_or(|u| u.contains(&c.rid))
         && f.complexity.is_none_or(|x| c.complexity == Some(x))
         && f.key.is_none_or(|k| c.key == k)
         && f.theme
             .is_none_or(|t| c.theme.is_some_and(|mine| like::contains(mine, t)))
-        && f.without_theme
-            .is_none_or(|t| c.theme.is_none_or(|mine| !like::contains(mine, t)))
-        && f.release
-            .is_none_or(|themes| c.theme.is_none_or(|mine| themes.iter().any(|t| t == mine)))
 }
 
-/// The queue an agent takes from, most urgent first, as `(rid, effective tier)`. A review goes before
-/// a fix, a fix before research or a decision, and a fix of a package under way before the rest.
+/// The queue an agent takes from, as `(rid, tier)`: most urgent first, then oldest first.
 #[must_use]
 pub fn next(items: &[Candidate], ties: &[Tie], filter: &Filter, limit: usize) -> Vec<(i64, usize)> {
-    let graph = Graph::new(items, ties);
+    let opened: HashSet<i64> = ties.iter().filter(|t| t.opened).map(|t| t.to).collect();
     let mut rows: Vec<_> = items
         .iter()
-        .filter(|c| takeable(c, filter))
-        .filter(|c| c.kind != Kind::Package || graph.reviewable(c.rid))
-        .map(|c| (graph.tier(c), c))
-        .filter(|(tier, _)| filter.priority.is_none_or(|p| *tier <= p))
+        .filter(|c| takeable(c, filter, &opened))
+        .filter(|c| filter.priority.is_none_or(|p| c.tier <= p))
         .collect();
-    rows.sort_by_key(|(tier, c)| {
-        let class = match c.kind {
-            Kind::Package => 0,
-            Kind::Work => 1,
-            _ => 2,
-        };
-        (
-            *tier,
-            class,
-            !graph.under_way(c.rid),
-            c.rank.is_none(),
-            c.rank,
-            c.opened_at,
-        )
-    });
+    rows.sort_by_key(|c| (c.tier, c.opened_at, c.rid));
     rows.into_iter()
         .take(limit)
-        .map(|(tier, c)| (c.rid, tier))
+        .map(|c| (c.rid, c.tier))
         .collect()
 }
 

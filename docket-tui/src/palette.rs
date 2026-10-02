@@ -46,7 +46,7 @@ struct Spec {
 
 const RUN: [(&str, &str); 2] = [("--runner", "runner"), ("--model", "model")];
 
-const SPECS: [Spec; 24] = [
+const SPECS: [Spec; 21] = [
     Spec {
         names: &["new"],
         route: "new",
@@ -65,18 +65,6 @@ const SPECS: [Spec; 24] = [
         route: "add",
         slots: &[Rest("title")],
         flags: &[("--key", "key"), ("--body", "body"), ("--from", "from")],
-    },
-    Spec {
-        names: &["defer"],
-        route: "defer",
-        slots: &[Ids("ids")],
-        flags: &[("--why", "why")],
-    },
-    Spec {
-        names: &["pull"],
-        route: "pull",
-        slots: &[Ids("ids")],
-        flags: &[("--why", "why")],
     },
     Spec {
         names: &["start"],
@@ -165,12 +153,6 @@ const SPECS: [Spec; 24] = [
         names: &["priority"],
         route: "priority",
         slots: &[Ids("ids"), Word("tier")],
-        flags: &[],
-    },
-    Spec {
-        names: &["fold"],
-        route: "fold",
-        slots: &[Id("into"), Ids("ids")],
         flags: &[],
     },
     Spec {

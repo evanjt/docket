@@ -8,9 +8,9 @@ pub mod status;
 pub mod write;
 
 use docket_core::api::{
-    AnswerRequest, AskRequest, DecideRequest, DropRequest, FoldRequest, KeyRequest,
-    PriorityRequest, RateRequest, ReleaseRequest, ReopenRequest, ReplyRequest, ResumeRequest,
-    RetryRequest, StartRequest, WaitRequest,
+    AnswerRequest, AskRequest, DecideRequest, DropRequest, KeyRequest, PriorityRequest,
+    RateRequest, ReleaseRequest, ReopenRequest, ReplyRequest, ResumeRequest, RetryRequest,
+    StartRequest, WaitRequest,
 };
 
 use crate::args::{Cmd, Queue};
@@ -28,16 +28,11 @@ pub fn run(ctx: &mut Ctx, cmd: Option<&Cmd>) -> Result<i32> {
     match cmd {
         Cmd::Status => status::status(ctx),
         Cmd::Next(q) => lists::next(ctx, q),
-        Cmd::Complex {
-            n,
-            theme,
-            without_theme,
-        } => {
+        Cmd::Complex { n, theme } => {
             let q = Queue {
                 n: *n,
                 complexity: Some("high".into()),
                 theme: theme.clone(),
-                without_theme: without_theme.clone(),
                 ..Queue::default()
             };
             lists::next(ctx, &q)
@@ -135,8 +130,6 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             body,
             from,
         } => write::add(ctx, title, key.as_ref(), body.as_ref(), from.as_ref()),
-        Cmd::Defer { ids, why } => write::scope(ctx, "defer", ids, why.as_ref()),
-        Cmd::Pull { ids, why } => write::scope(ctx, "pull", ids, why.as_ref()),
         Cmd::Start {
             id,
             force,
@@ -292,14 +285,6 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
                 tier: tier.clone(),
             };
             write::priority(ctx, &req)
-        }
-        Cmd::Fold { into, ids, force } => {
-            let req = FoldRequest {
-                common: ctx.common(*force)?,
-                into: into.clone(),
-                ids: ids.clone(),
-            };
-            write::fold(ctx, &req)
         }
         Cmd::Edit {
             id,

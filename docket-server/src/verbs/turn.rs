@@ -15,7 +15,7 @@ use docket_core::item::Field;
 use docket_core::rules;
 
 use crate::auth::Caller;
-use crate::verbs::graph::{is_standing, packages_of, release_waiters, similar_rows};
+use crate::verbs::graph::{audits_over, is_standing, release_waiters, similar_rows};
 use crate::verbs::view::{brief, item_view, kind};
 use crate::verbs::{Call, Failure, chars, given};
 
@@ -50,10 +50,10 @@ pub async fn wait(
                 t.id, t.state
             )));
         }
-        if packages_of(&call.tx.conn, &call.project, r.rid)
+        if audits_over(&call.tx.conn, &call.project, &[r.rid])
             .await?
             .iter()
-            .any(|p| p.rid == t.rid)
+            .any(|p| p.rid == t.rid && p.rid != r.rid)
         {
             return Err(Failure::Refused(format!(
                 "{} holds {} and cannot close while it is open, so {} would wait forever. Wait on what blocks it, or unlink it from {} first.",

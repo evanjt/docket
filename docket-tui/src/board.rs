@@ -84,7 +84,6 @@ impl Board {
             state: &item.state,
             kind,
             claimed: item.claim_branch.is_some(),
-            scope: item.scope.as_deref(),
             waiting: item.wait_on.is_some(),
             turn: item.turn.as_deref(),
         };

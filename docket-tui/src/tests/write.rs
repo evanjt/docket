@@ -171,7 +171,7 @@ fn test_esc_drops_a_typed_line_and_leaves_the_page() {
 }
 
 #[test]
-fn test_marked_rows_are_pulled_in_one_request() {
+fn test_marked_rows_are_prioritised_in_one_request() {
     let mut a = browse(Listing::Ties("PK1".into()));
     press(&mut a, KeyCode::Char('j'));
     press(&mut a, KeyCode::Char('j'));
@@ -180,24 +180,26 @@ fn test_marked_rows_are_pulled_in_one_request() {
     press(&mut a, KeyCode::Char(' '));
     assert!(screen(&mut a).contains("2 marked"));
     assert!(screen(&mut a).contains("*T1"), "{}", screen(&mut a));
-    press(&mut a, KeyCode::Char('p'));
+    press(&mut a, KeyCode::Char('!'));
+    press(&mut a, KeyCode::Char('h'));
     let (verb, body) = only(&a);
-    assert_eq!(verb, "pull");
+    assert_eq!(verb, "priority");
     assert_eq!(body["ids"], json!(["T1", "T2"]));
     assert_eq!(a.selection(), ["T2"], "the marks go once the move lands");
 }
 
 #[test]
-fn test_a_refused_defer_keeps_the_marks_and_the_view() {
+fn test_a_refused_priority_keeps_the_marks_and_the_view() {
     let mut a = browse(Listing::Ties("PK1".into()));
     press(&mut a, KeyCode::Char('x'));
     press(&mut a, KeyCode::Char('j'));
     press(&mut a, KeyCode::Char('x'));
     let before = body(&mut a);
     refuse(&a);
-    press(&mut a, KeyCode::Char('d'));
+    press(&mut a, KeyCode::Char('!'));
+    press(&mut a, KeyCode::Char('l'));
     let (verb, body_sent) = only(&a);
-    assert_eq!(verb, "defer");
+    assert_eq!(verb, "priority");
     assert_eq!(body_sent["ids"], json!(["PK1", "A1"]));
     assert_eq!(body(&mut a), before);
     assert_eq!(foot(&mut a).trim(), REFUSAL);
@@ -253,7 +255,7 @@ fn test_rate_sends_one_request_per_marked_row() {
 }
 
 #[test]
-fn test_link_and_fold_act_on_the_selection() {
+fn test_link_acts_on_the_selection() {
     let mut a = browse(Listing::Word("ready".into()));
     press(&mut a, KeyCode::Char('L'));
     typed(&mut a, "related CON1");
@@ -263,16 +265,6 @@ fn test_link_and_fold_act_on_the_selection() {
     assert_eq!(
         (&body["a"], &body["kind"], &body["b"]),
         (&json!(["T3"]), &json!("related"), &json!("CON1"))
-    );
-
-    let mut a = browse(Listing::Ties("PK1".into()));
-    press(&mut a, KeyCode::Char('F'));
-    typed(&mut a, "PK7");
-    press(&mut a, KeyCode::Enter);
-    let (verb, body) = only(&a);
-    assert_eq!(
-        (verb.as_str(), &body["into"], &body["ids"]),
-        ("fold", &json!("PK7"), &json!(["PK1"]))
     );
 }
 

@@ -181,13 +181,13 @@ fn keys(page: &Page) -> &'static str {
             "Tab/j/k move   Enter open   / search   o yours   t plans   S settings   : verb   ? help   q quit"
         }
         Page::Browser(_) => {
-            "j/k row   Enter open   x mark   a answer   r reply   p pull   d defer   ! priority   c rate   L link   F fold   : verb   ? help"
+            "j/k row   Enter open   x mark   a answer   r reply   ! priority   c rate   L link   : verb   ? help"
         }
         Page::Queue(_) => {
-            "j/k next   a answer   r reply   R retry   x mark   p pull   d defer   ! priority   : verb   Esc back   ? help"
+            "j/k next   a answer   r reply   R retry   x mark   ! priority   : verb   Esc back   ? help"
         }
         Page::Plans(_) => {
-            "j/k move   Space open or close   x mark   p pull   d defer   ! priority   L link   F fold   : verb   ? help"
+            "j/k move   Space open or close   x mark   ! priority   L link   : verb   ? help"
         }
         Page::Settings(_) => {
             "Tab/j/k fact   Enter edit it   : verb   PgUp/PgDn scroll   Esc back   q quit"

@@ -130,17 +130,6 @@ pub fn chars(text: &str, n: usize) -> String {
     text.chars().take(n).collect()
 }
 
-/// The ids of the first n rows, with a trailing mark when there are more.
-#[must_use]
-pub fn some_ids(rows: &[Item], n: usize) -> String {
-    let shown: Vec<&str> = rows.iter().take(n).map(|r| r.id.as_str()).collect();
-    format!(
-        "{}{}",
-        shown.join(", "),
-        if rows.len() > n { " ..." } else { "" }
-    )
-}
-
 /// `Some` for a string that says something, like a Python truth test.
 #[must_use]
 pub fn given(value: Option<&str>) -> Option<&str> {
@@ -153,7 +142,7 @@ pub fn require_owner(caller: &Caller, verb: &str) -> Result<(), Failure> {
         return Ok(());
     }
     Err(Failure::Forbidden(format!(
-        "docket {verb} is refused on an agent's key. Put what you found under Observations in your report; the loop files it to the inbox."
+        "docket {verb} is refused on an agent's key. Put what you found under Observations in your report; the loop files it as a low-priority ticket."
     )))
 }
 
@@ -162,8 +151,6 @@ pub fn router() -> Router<DatabaseConnection> {
         .route("/new", post(open::new))
         .route("/add", post(open::add))
         .route("/key", post(open::key))
-        .route("/defer", post(fields::defer))
-        .route("/pull", post(fields::pull))
         .route("/start", post(claim::start))
         .route("/release", post(claim::release))
         .route("/close", post(claim::close))
@@ -181,7 +168,6 @@ pub fn router() -> Router<DatabaseConnection> {
         .route("/rate", post(fields::rate))
         .route("/edit", post(fields::edit))
         .route("/link", post(fields::link))
-        .route("/fold", post(fields::fold))
         .route("/project", post(project::project))
         .route("/reindex", post(project::reindex))
 }

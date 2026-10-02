@@ -13,7 +13,7 @@ use crate::local;
 use crate::py::{Py, cut, or_none};
 
 const FLOW: [&str; 4] = ["ready", "building", "checking", "done"];
-const ASIDE: [&str; 4] = ["blocked", "parked", "inbox", "later"];
+const ASIDE: [&str; 2] = ["blocked", "parked"];
 const WIDTH: usize = 160;
 const SHOWN: usize = 21;
 

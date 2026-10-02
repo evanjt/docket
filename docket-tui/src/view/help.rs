@@ -35,14 +35,12 @@ Pages
 
 State words, each in its colour
 
-  ready      in the release, waiting for a free slot
+  ready      waiting for someone to take it
   building   a job or a person is working on it now, or a package whose tickets are open
   checking   a package whose tickets are all done, under its review
   done       closed, with the commit that fixed it
   blocked    waiting on another item or a condition
   parked     waiting on you: something only you can do
-  inbox      filed by an agent, not yet placed by the planner
-  later      held out of this release
   dropped    closed without doing
   standing   a concept or central idea, open for good
 
@@ -78,11 +76,9 @@ Writing
   a                      answer the question; on one an agent decided, answering again overturns it
   r                      reply to a parked item: back to the agents with what happened
   R                      retry: a fresh start for what the loop parked or sent back
-  p / d                  pull into the release / defer to later
   !                      priority: then c critical, h high, n normal, l low
   c                      complexity: then h high, m medium, l low
   L                      link: then related ID or opened ID
-  F                      fold packages: then the package they go into
   :                      any verb of the command line, as close T3 abc1234 or priority high; an
                          id left out is the selected row's, ids left out are the marked rows
   Enter                  sends a typed line; Ctrl-E opens it in $EDITOR, and saving sends it;
@@ -108,8 +104,7 @@ pub fn doc() -> Doc {
         let mut segs = Vec::new();
         let mut rest = line;
         for w in [
-            "ready", "building", "checking", "done", "blocked", "parked", "inbox", "later",
-            "dropped", "standing",
+            "ready", "building", "checking", "done", "blocked", "parked", "dropped", "standing",
         ] {
             if let Some(tail) = line.strip_prefix(&format!("  {w} ")) {
                 segs.push(seg("  ", tone));

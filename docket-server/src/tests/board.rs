@@ -215,8 +215,7 @@ async fn test_deps_words_another_projects_row_by_its_own_keys() {
 async fn test_context_reads_what_show_prints_beside_the_row() {
     let s = Seeded::new().await;
     let c = s.ok("/context/T1?project=o/p").await;
-    assert_eq!(c["priority"], "critical");
-    assert_eq!(c["raised_by"], "PK1");
+    assert_eq!(c["priority"], "high");
     assert_eq!(c["package"]["id"], "PK1");
     assert_eq!(
         c["package"]["progress"],
@@ -224,7 +223,6 @@ async fn test_context_reads_what_show_prints_beside_the_row() {
     );
     assert_eq!(c["holds"], json!(["T6"]));
     assert_eq!(c["concepts"], json!(["CON1"]));
-    assert_eq!(c["no_concept"], false);
     let p = s.ok("/context/PK1?project=o/p").await;
     assert_eq!(ids(&p["members"]), ["T1", "T2", "T4"]);
     let con = s.ok("/context/CON1?project=o/p").await;

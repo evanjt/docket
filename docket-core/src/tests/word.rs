@@ -5,7 +5,6 @@ fn open(kind: Kind) -> Facts<'static> {
         state: "open",
         kind,
         claimed: false,
-        scope: None,
         waiting: false,
         turn: Some("agent"),
     }
@@ -22,10 +21,9 @@ fn test_word_closed_is_its_state() {
 }
 
 #[test]
-fn test_word_standing_kind_ignores_claim_and_scope() {
+fn test_word_standing_kind_ignores_claim() {
     let facts = Facts {
         claimed: true,
-        scope: Some("later"),
         ..open(Kind::Concept)
     };
     assert_eq!(word(&facts, 0), "standing");
@@ -53,17 +51,6 @@ fn test_word_claimed_ticket_builds_and_claimed_package_checks() {
         ),
         "checking"
     );
-}
-
-#[test]
-fn test_word_scope_comes_before_wait_and_turn() {
-    let facts = Facts {
-        scope: Some("inbox"),
-        waiting: true,
-        turn: Some("user"),
-        ..open(Kind::Work)
-    };
-    assert_eq!(word(&facts, 0), "inbox");
 }
 
 #[test]

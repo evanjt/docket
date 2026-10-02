@@ -13,7 +13,6 @@ pub fn word(w: &str) -> Style {
         "checking" => s.fg(Color::Cyan),
         "parked" => s.fg(Color::Magenta),
         "blocked" => s.fg(Color::Blue),
-        "inbox" => s.fg(Color::White),
         "dropped" | "FAILED" => s.fg(Color::Red),
         "done" => s.add_modifier(Modifier::DIM),
         _ => s,

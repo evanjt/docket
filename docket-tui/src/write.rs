@@ -6,8 +6,8 @@ use serde::Serialize;
 use serde_json::Value;
 
 use docket_core::api::{
-    AnswerRequest, Common, FactRequest, FoldRequest, LinkRequest, PriorityRequest, RateRequest,
-    ReplyRequest, RetryRequest, ScopeRequest,
+    AnswerRequest, Common, FactRequest, LinkRequest, PriorityRequest, RateRequest, ReplyRequest,
+    RetryRequest,
 };
 use docket_core::flow::DERIVED;
 
@@ -24,7 +24,6 @@ pub enum Ask {
     Reply(String),
     Fact(String),
     Link(Vec<String>),
-    Fold(Vec<String>),
     Palette(Vec<String>),
     /// One key picks the tier.
     Priority(Vec<String>),
@@ -171,12 +170,9 @@ impl<S: Source> App<S> {
             KeyCode::Char('a') => self.ask_one(Ask::Answer),
             KeyCode::Char('r') => self.ask_one(Ask::Reply),
             KeyCode::Char('R') => self.retry(),
-            KeyCode::Char('p') => self.scope("pull"),
-            KeyCode::Char('d') => self.scope("defer"),
             KeyCode::Char('!') => self.ask_many(Ask::Priority),
             KeyCode::Char('c') => self.ask_many(Ask::Rate),
             KeyCode::Char('L') => self.ask_many(Ask::Link),
-            KeyCode::Char('F') => self.ask_many(Ask::Fold),
             KeyCode::Char(':') if self.page.slug().is_some() => {
                 let selection = self.selection();
                 self.start_prompt("", Ask::Palette(selection), String::new());
@@ -236,8 +232,7 @@ impl<S: Source> App<S> {
         let label = match make(Vec::new()) {
             Ask::Priority(_) => format!("priority of {shown}: "),
             Ask::Rate(_) => format!("complexity of {shown}: "),
-            Ask::Link(_) => format!("link {shown} (related ID or opened ID): "),
-            _ => format!("fold {shown} into: "),
+            _ => format!("link {shown} (related ID or opened ID): "),
         };
         self.start_prompt(&label, make(ids), String::new());
     }
@@ -254,23 +249,6 @@ impl<S: Source> App<S> {
         };
         if self.send("retry", &body(&req)) {
             self.landed(format!("retried {id}"));
-        }
-    }
-
-    fn scope(&mut self, verb: &str) {
-        let ids = self.selection();
-        if ids.is_empty() {
-            self.flash = Some("select an item first, or mark rows with x".into());
-            return;
-        }
-        let req = ScopeRequest {
-            common: self.common(),
-            ids: ids.clone(),
-            why: None,
-        };
-        if self.send(verb, &body(&req)) {
-            let done = if verb == "pull" { "pulled" } else { "deferred" };
-            self.landed(format!("{done} {}", ids.join(", ")));
         }
     }
 
@@ -379,18 +357,6 @@ impl<S: Source> App<S> {
             }
             Ask::Fact(key) => return self.set_fact(common, &key, &text),
             Ask::Link(ids) => return self.link(common, &ids, &text),
-            Ask::Fold(ids) => {
-                let req = FoldRequest {
-                    common,
-                    into: text.clone(),
-                    ids: ids.clone(),
-                };
-                (
-                    "fold",
-                    body(&req),
-                    format!("folded {} into {text}", ids.join(", ")),
-                )
-            }
             Ask::Palette(selection) => return self.palette(&text, &selection),
             Ask::Priority(_) | Ask::Rate(_) => return,
         };

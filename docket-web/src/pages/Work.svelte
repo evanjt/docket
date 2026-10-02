@@ -40,7 +40,8 @@
   const fetched = resource<Shape[]>(() => {
     if (q) return api.search(ctx.slug, q);
     if (word) return null;
-    if (list === 'next') return api.next(ctx.slug, 200);
+    // With a release chosen, the whole queue is read: next lists the earlier releases first.
+    if (list === 'next') return api.next(ctx.slug, release ? 5000 : 200);
     if (list === 'derived') {
       return api.derived(ctx.slug).then((ds) =>
         ds.map((d) => ({ id: d.id, title: d.title, word: d.state, turn_note: `${d.chose ?? ''} (from ${d.basis})` })),
@@ -163,7 +164,7 @@
         {/each}
       </nav>
       {#if ctx.releases.length}
-        <nav class="words releases" aria-label="Releases">
+        <nav class="lists releases" aria-label="Releases">
           <a href={withParams({ release: undefined, i: undefined })} class:active={!release}>every release</a>
           {#each ctx.releases as r, i (r)}
             <a href={withParams({ release: r, i: undefined })} class:active={release === r}>{r}{i === 0 ? ' (current)' : ''}</a>
@@ -259,6 +260,10 @@
     display: flex;
     flex-wrap: wrap;
     gap: 4px;
+  }
+
+  .releases a {
+    font-variant-numeric: tabular-nums;
   }
 
   .lists a {

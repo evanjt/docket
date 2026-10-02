@@ -464,12 +464,14 @@ pub enum Cmd {
         #[arg(long)]
         all: bool,
     },
-    /// fetch a dispatched item's branch from the machine its job ran on into this repository
+    /// commit a finished job's change here, on its branch, with the message it proposed, and clear
+    /// the job from the machine it ran on
     Collect {
         id: String,
-        /// then remove the job's worktree, branch and record on that machine
+        /// clear the job without committing anything: for a job that failed, was lost, or waits on
+        /// a question
         #[arg(long)]
-        remove: bool,
+        discard: bool,
     },
     /// what a public repository must not carry: the owner's private names, read from the server
     Private {
@@ -537,6 +539,9 @@ pub enum JobCmd {
     Status { job: Option<String> },
     /// the checkout of -p SLUG on this machine, where a lead pushes a job's branch
     Where,
+    /// a finished job's change against the commit it started from, as a patch for the lead to
+    /// commit on its own machine
+    Diff { job: String },
     /// remove a finished job: its worktree, its branch in the checkout and its record
     Remove {
         job: String,

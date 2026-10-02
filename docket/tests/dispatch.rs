@@ -37,18 +37,19 @@ export DOCKET_KEY="$(cat "$home/key")"
 exec sh -c "$*"
 "#;
 
-/// The stand-in agent: one commit in its worktree, then its report as a Claude Code result.
+/// The stand-in agent: one change left in its worktree, uncommitted, then its report as a Claude
+/// Code result. `AGENT_SAYS` replaces the report, for an agent that proposes no message.
 const AGENT: &str = r#"#!/bin/sh
 echo "$DOCKET_JOB" > made-by-job
-git add made-by-job
-git -c user.name=job -c user.email=job@example.org commit -qm "Write it"
-sha=$(git rev-parse --short HEAD)
-printf '{"type":"result","result":"NOTE wrote made-by-job\\nDONE %s","usage":{"output_tokens":7}}\n' "$sha"
+said=${AGENT_SAYS:-'NOTE wrote made-by-job\nMESSAGE Write the job marker\nDONE'}
+printf '{"type":"result","result":"%s","usage":{"output_tokens":7}}\n' "$said"
 "#;
 
 /// Two machines, each a home with its key and a clone of the project bound as its root.
 struct World {
     _tmp: tempfile::TempDir,
+    /// What the stand-in agent reports instead of its usual note, message and DONE.
+    says: String,
     machines: PathBuf,
     bin: PathBuf,
     server: Server,
@@ -63,6 +64,7 @@ impl World {
         script(&bin.join("ssh"), SSH);
         script(&bin.join("agent"), AGENT);
         let w = World {
+            says: String::new(),
             machines,
             bin,
             server: serve(SEED, "alpha owner key-alpha\nbeta owner key-beta"),
@@ -121,6 +123,11 @@ impl World {
             .env("DOCKET_JOB_RUNNER_CLAUDE", self.bin.join("agent"))
             .env("DOCKET_JOB_RUNNER_CODEX", self.bin.join("agent"))
             .env("MACHINES", &self.machines)
+            .env("AGENT_SAYS", &self.says)
+            .env("GIT_AUTHOR_NAME", "lead")
+            .env("GIT_AUTHOR_EMAIL", "lead@example.org")
+            .env("GIT_COMMITTER_NAME", "lead")
+            .env("GIT_COMMITTER_EMAIL", "lead@example.org")
             .env(
                 "PATH",
                 format!(
@@ -200,10 +207,10 @@ fn test_a_lead_dispatches_to_another_machine_and_collects_the_branch() {
         "{listed}"
     );
 
-    let collected = w.lead(&["collect", "T1", "--remove"]);
+    let collected = w.lead(&["collect", "T1"]);
     assert!(collected.status.success(), "{}", text(&collected));
     assert!(
-        text(&collected).contains("Write it"),
+        text(&collected).contains("committed here as"),
         "{}",
         text(&collected)
     );
@@ -212,9 +219,18 @@ fn test_a_lead_dispatches_to_another_machine_and_collects_the_branch() {
         sh(&alpha, &format!("git show {branch}:made-by-job")),
         branch.replace('/', "-")
     );
+    assert_eq!(
+        sh(&alpha, &format!("git log -1 --format=%s {branch}")),
+        "Write the job marker"
+    );
     let beta = w.home("beta").join("src/p");
     assert_eq!(sh(&beta, "git worktree list").lines().count(), 1);
     assert_eq!(sh(&beta, &format!("git branch --list {branch}")), "");
+    assert_eq!(
+        sh(&beta, "git log --all --format=%s"),
+        "start",
+        "nothing was committed on the job's machine"
+    );
 }
 
 #[test]
@@ -228,10 +244,15 @@ fn test_a_lead_runs_a_job_on_its_own_machine_by_the_models_fact() {
     let branch = t3["claim_branch"].as_str().unwrap().to_string();
     let jobs = w.lead(&["jobs", "--wait", "--every", "1"]);
     assert!(text(&jobs).contains("large"), "{}", text(&jobs));
-    let collected = w.lead(&["collect", "T3", "--remove"]);
+    let collected = w.lead(&["collect", "T3"]);
     assert!(collected.status.success(), "{}", text(&collected));
     let alpha = w.home("alpha").join("src/p");
     assert!(sh(&alpha, &format!("git branch --list {branch}")).contains(&branch));
+    assert_eq!(
+        sh(&alpha, &format!("git log -1 --format=%s {branch}")),
+        "Write the job marker"
+    );
+    assert_eq!(sh(&alpha, "git worktree list").lines().count(), 1);
 }
 
 #[test]
@@ -266,4 +287,45 @@ fn test_a_plan_is_dispatched_as_an_audit_on_the_audit_model() {
     assert_eq!(a1["claim_runner"], "codex");
     let jobs = w.lead(&["jobs", "--wait", "--every", "1"]);
     assert!(text(&jobs).contains("middle"), "{}", text(&jobs));
+}
+
+#[test]
+fn test_a_discarded_job_is_cleared_and_nothing_is_committed() {
+    let w = World::new();
+    assert!(w.lead(&["dispatch", "T2", "--on", "beta"]).status.success());
+    let branch = w.show("T2")["claim_branch"].as_str().unwrap().to_string();
+    let _ = w.lead(&["jobs", "--wait", "--every", "1"]);
+    let out = w.lead(&["collect", "T2", "--discard"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains("discarded"), "{}", text(&out));
+    let alpha = w.home("alpha").join("src/p");
+    assert_eq!(sh(&alpha, &format!("git branch --list {branch}")), "");
+    let beta = w.home("beta").join("src/p");
+    assert_eq!(sh(&beta, "git worktree list").lines().count(), 1);
+}
+
+#[test]
+fn test_a_change_without_a_message_is_refused_and_the_job_kept() {
+    let mut w = World::new();
+    w.says = "NOTE wrote it\\nDONE".into();
+    assert!(w.lead(&["dispatch", "T2", "--on", "beta"]).status.success());
+    let _ = w.lead(&["jobs", "--wait", "--every", "1"]);
+    let out = w.lead(&["collect", "T2"]);
+    assert!(
+        text(&out).contains("committed here as"),
+        "the note serves as the message: {}",
+        text(&out)
+    );
+    w.says = "DONE".into();
+    assert!(w.lead(&["dispatch", "T1", "--on", "beta"]).status.success());
+    let _ = w.lead(&["jobs", "--wait", "--every", "1"]);
+    let out = w.lead(&["collect", "T1"]);
+    assert!(!out.status.success());
+    assert!(text(&out).contains("proposed no MESSAGE"), "{}", text(&out));
+    let beta = w.home("beta").join("src/p");
+    assert_eq!(
+        sh(&beta, "git worktree list").lines().count(),
+        2,
+        "the job is kept"
+    );
 }

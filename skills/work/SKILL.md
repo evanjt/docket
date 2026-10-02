@@ -145,8 +145,9 @@ re-read the working tree and cite `file:line`.
 
 A lead may run the same queue: it claims each ticket itself and starts a job
 for it with `docket job run`. A job follows the brief it was started with,
-not this skill: it builds and commits on the branch it was given, never
-claims, merges or closes, and ends with a one-line report the lead reads.
+not this skill: it builds on the branch it was given and leaves its change
+uncommitted for the lead to commit on its own machine, never claims, merges
+or closes, and ends with a one-line report the lead reads.
 `docket` refuses `start`, `release`, `close`, `drop` and `reopen` inside a
 job. Beside a lead, take only what `docket next --role work` still offers;
 the claims keep the two apart.

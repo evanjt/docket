@@ -31,12 +31,12 @@ make is a question with every option and its evidence; it does not hold the audi
 
 The repository may be public while the docket is private: code, tests, comments and commit
 messages never name a docket item, project, person or machine. A comment states the rule itself and
-tests use invented names. Run `docket private check --staged` before you commit.
+tests use invented names, and you commit nothing.
 
 End with your report as the last lines of your final message:
 
     NOTE audited: principles checked at <sha>, the tests run; gaps T<n>, T<m> (or clean)
-    DONE <the sha you audited>
+    DONE
 
 or `FAILED <the reason, in one line>` when the audit could not be done. Nothing after the report
 line.

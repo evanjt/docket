@@ -46,6 +46,9 @@ pub struct Meta {
     pub worktree: String,
     /// Seconds since the epoch.
     pub started: u64,
+    /// The commit the job started from, which its diff is taken against.
+    #[serde(default)]
+    pub base: Option<String>,
 }
 
 /// The brief for a role, filled in for one item on one branch.
@@ -161,7 +164,8 @@ pub fn refusal(verb: &str, job: Option<&str>) -> Option<String> {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "word", content = "what", rename_all = "UPPERCASE")]
 pub enum Report {
-    /// Done, at this commit.
+    /// Done: its change is left in its worktree for the lead to commit. A sha, from a job that
+    /// committed, is kept.
     Done(String),
     /// Waiting on this question.
     Waiting(String),
@@ -173,6 +177,7 @@ impl Report {
     #[must_use]
     pub fn line(&self) -> String {
         match self {
+            Report::Done(s) if s.is_empty() => "DONE".into(),
             Report::Done(s) => format!("DONE {s}"),
             Report::Waiting(q) => format!("WAITING {q}"),
             Report::Failed(r) => format!("FAILED {r}"),
@@ -180,9 +185,13 @@ impl Report {
     }
 }
 
-/// One line read as a report: `DONE <sha>`, `WAITING Q<n>` or `FAILED <reason>`.
+/// One line read as a report: `DONE`, `WAITING Q<n>` or `FAILED <reason>`; `DONE <sha>` from a
+/// job that committed is read too.
 fn report_line(line: &str) -> Option<Report> {
     let line = line.trim().trim_matches('`').trim();
+    if line == "DONE" {
+        return Some(Report::Done(String::new()));
+    }
     let (word, rest) = line.split_once(char::is_whitespace)?;
     let rest = rest.trim();
     match word {
@@ -215,6 +224,16 @@ pub fn report(text: &str) -> (Option<Report>, Option<String>) {
         .rfind(|l| l.starts_with("NOTE "))
         .map(|l| l["NOTE ".len()..].trim().to_string());
     (last.and_then(report_line), note)
+}
+
+/// The commit message a job proposes: the last line of its final message starting `MESSAGE `.
+#[must_use]
+pub fn message(text: &str) -> Option<String> {
+    text.lines()
+        .map(str::trim)
+        .rfind(|l| l.starts_with("MESSAGE "))
+        .map(|l| l["MESSAGE ".len()..].trim().to_string())
+        .filter(|m| !m.is_empty())
 }
 
 /// What a session's event stream says: its final message and the output tokens it spent.
@@ -357,6 +376,10 @@ pub struct Row {
     pub tokens: Option<u64>,
     pub report: Option<String>,
     pub note: Option<String>,
+    /// The one-line commit message the job proposes.
+    pub message: Option<String>,
+    /// The commit the job started from.
+    pub base: Option<String>,
     /// The final message in full: the result of a Claude session, the last message file of Codex.
     pub last: Option<String>,
     pub worktree: String,
@@ -399,6 +422,8 @@ pub fn row(dir: &Path, at: u64) -> Option<Row> {
         tokens: got.tokens,
         report: said.map(|r| r.line()),
         note,
+        message: last.as_deref().and_then(message),
+        base: meta.base,
         last,
         worktree: meta.worktree,
         dir: dir.display().to_string(),
@@ -521,13 +546,13 @@ pub fn run(
         ));
     }
     let reference = format!("refs/heads/{}", spec.branch);
-    if git(checkout, &["rev-parse", "--verify", "--quiet", &reference]).is_err() {
+    let Ok(base) = git(checkout, &["rev-parse", "--verify", "--quiet", &reference]) else {
         return Err(format!(
             "no branch {} in {}: the lead pushes it there before starting the job",
             spec.branch,
             checkout.display()
         ));
-    }
+    };
     let stem = spec.project.rsplit('/').next().unwrap_or(&spec.project);
     let parent = checkout.parent().unwrap_or(checkout);
     let worktree = parent.join(format!("{stem}-{name}"));
@@ -555,6 +580,7 @@ pub fn run(
         role: spec.role.clone(),
         worktree: worktree.display().to_string(),
         started: now(),
+        base: Some(base),
     };
     let write = |file: &str, text: &str| {
         fs::write(dir.join(file), text).map_err(|e| format!("{}: {e}", dir.join(file).display()))
@@ -617,6 +643,42 @@ fn spawn(
         });
     }
     cmd.spawn()
+}
+
+/// A job's change, against the commit it started from, as a patch `git apply` takes: what it
+/// committed and what it left in its worktree, new files and binary ones included. The worktree's
+/// changes are staged to be read; nothing is committed.
+///
+/// # Errors
+/// The job is still running, has no worktree, or git fails.
+pub fn diff(dir: &Path) -> Result<String, String> {
+    let r = row(dir, now()).ok_or_else(|| format!("{}: no job here", dir.display()))?;
+    if r.state == State::Running {
+        return Err(format!("{} is still running", r.name));
+    }
+    let worktree = Path::new(&r.worktree);
+    if !worktree.is_dir() {
+        return Err(format!("{} has no worktree at {}", r.name, r.worktree));
+    }
+    git(worktree, &["add", "-A"])?;
+    let base = r.base.unwrap_or_else(|| "HEAD".into());
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(worktree)
+        .args([
+            "diff",
+            "--cached",
+            "--binary",
+            "--no-color",
+            "--no-ext-diff",
+            &base,
+        ])
+        .output()
+        .map_err(|e| format!("git: {e}"))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 /// Stop a job's process group, the whole of it, and record that it was killed.

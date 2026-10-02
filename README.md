@@ -111,7 +111,7 @@ A lead moves work with three commands, run in its checkout on the branch the wor
 ```bash
 docket dispatch T14 [--on NAME] [--runner R --model M --effort E] [--role build|audit|plan]
 docket jobs [--wait] [--timeout 300] [--all]   # every machine's jobs, read where they run
-docket collect T14 [--remove]                  # the job's branch fetched here, its commits and report
+docket collect T14 [--discard]                 # the job's change committed here, the job cleared
 ```
 
 `dispatch` claims the item on a fresh `lead/` branch, recording the runner, job, model, machine and
@@ -120,8 +120,10 @@ the job there with `docket job run`. The model comes from the project's `models`
 complexity unless given; the machine is the one with the runner and the most free slots, this one
 first among equals, unless `--on` names it. A failed push or start gives the claim back. Another
 machine is reached over ssh at its recorded address (`DOCKET_SSH` replaces the program), running
-the `docket` on its path, and its code moves only by git from the lead's machine: pushed there
-before the job, fetched back by `collect`. `jobs --wait` returns once one of the running jobs ends.
+the `docket` on its path. Code moves only by git from the lead's machine, and commits are made
+there only: the base is pushed to the job's machine as its branch, the job leaves its change
+uncommitted and ends with a `MESSAGE` line, and `collect` takes the change (`docket job diff` on
+that machine), commits it on the lead's machine with that message, and clears the job. `jobs --wait` returns once one of the running jobs ends.
 
 ## Private names
 

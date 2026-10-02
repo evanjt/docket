@@ -169,12 +169,16 @@ pub fn jobs(ctx: &mut Ctx, wait: bool, every: u64, timeout: u64, all: bool) -> R
     Ok(0)
 }
 
-/// Fetch the branch a dispatched item's job worked on into this repository, print its commits and
-/// the job's report, and with `remove` clear the job from its machine.
+/// Bring a finished job's change to this machine and commit it here, on the job's branch, with the
+/// message the job proposed; then clear the job from its machine. Commits are only ever made on the
+/// lead's machine: a job leaves its change in its worktree. A job from before that rule, which
+/// committed on its own branch, has that branch fetched instead. With `discard`, the job is cleared
+/// and nothing is committed.
 ///
 /// # Errors
-/// The item has no job's claim, its machine is unknown or unreachable, or the fetch fails.
-pub fn collect(ctx: &mut Ctx, id: &str, remove: bool) -> Result<i32> {
+/// The item has no job's claim, its job is still running or cannot be read, it proposed no message,
+/// or git fails.
+pub fn collect(ctx: &mut Ctx, id: &str, discard: bool) -> Result<i32> {
     let slug = ctx.project()?;
     let here = ctx.host()?;
     let id = crate::ctx::id(id)?;
@@ -197,64 +201,177 @@ pub fn collect(ctx: &mut Ctx, id: &str, remove: bool) -> Result<i32> {
         )));
     };
     let via = Via::of(m, &here);
+    let row = via
+        .docket(&strings(&["-p", &slug, "job", "status", name, "--json"]))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|v| v.as_array().and_then(|a| a.first().cloned()))
+        .ok_or_else(|| Fail::refused(format!("no job {name} on {on}: docket jobs")))?;
+    if row["state"] == "running" {
+        return Err(Fail::refused(format!(
+            "{name} is still running on {on}: docket jobs --wait"
+        )));
+    }
     let checkout = via
         .docket(&strings(&["-p", &slug, "job", "where"]))
         .map_err(Fail::refused)?;
     let repo = repo()?;
     let same = via == Via::Here && same_repo(&repo, Path::new(&checkout));
-    if !same {
-        git(
-            &repo,
-            &[
-                "fetch",
-                &via.git_url(&checkout),
-                &format!("+refs/heads/{branch}:refs/heads/{branch}"),
-            ],
-        )
-        .map_err(Fail::refused)?;
-    }
-    let commits =
-        git(&repo, &["log", "--oneline", &format!("HEAD..{branch}")]).map_err(Fail::refused)?;
-    let report = via
-        .docket(&strings(&["-p", &slug, "job", "status", name, "--json"]))
-        .ok()
-        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-        .and_then(|v| v.as_array().and_then(|a| a.first().cloned()));
-    if remove {
-        let mut args = strings(&["-p", &slug, "job", "remove", name]);
-        if same {
-            args.push("--keep-branch".into());
+    let committed = if discard {
+        remove(&via, &slug, name, same)?;
+        None
+    } else if let Some(base) = row["base"].as_str() {
+        let message = row["message"]
+            .as_str()
+            .or_else(|| row["note"].as_str())
+            .filter(|m| !m.is_empty())
+            .map(str::to_string);
+        let patch = via
+            .docket(&strings(&["-p", &slug, "job", "diff", name]))
+            .map_err(Fail::refused)?;
+        if !patch.trim().is_empty() && message.is_none() {
+            return Err(Fail::refused(format!(
+                "{name} left a change but proposed no MESSAGE line to commit it with: docket job log {name} on {on}"
+            )));
         }
-        via.docket(&args).map_err(Fail::refused)?;
-    }
-    if ctx.json {
-        let out = serde_json::json!({
-            "id": id, "branch": branch, "machine": on, "job": name,
-            "commits": commits.lines().collect::<Vec<_>>(), "status": report, "removed": remove,
-        });
-        println!("{out}");
-        return Ok(0);
-    }
-    println!("{id}: {branch} from {on}, job {name}");
-    if commits.is_empty() {
-        println!("no commits ahead of HEAD");
+        remove(&via, &slug, name, same)?;
+        commit_here(&repo, base, branch, &patch, message.as_deref())?
     } else {
-        println!("{commits}");
-    }
-    if let Some(r) = report {
+        if !same {
+            git(
+                &repo,
+                &[
+                    "fetch",
+                    &via.git_url(&checkout),
+                    &format!("+refs/heads/{branch}:refs/heads/{branch}"),
+                ],
+            )
+            .map_err(Fail::refused)?;
+        }
+        remove(&via, &slug, name, same)?;
+        None
+    };
+    let reference = format!("refs/heads/{branch}");
+    let commits = if git(&repo, &["rev-parse", "--verify", "--quiet", &reference]).is_ok() {
+        git(&repo, &["log", "--oneline", &format!("HEAD..{branch}")]).map_err(Fail::refused)?
+    } else {
+        String::new()
+    };
+    let said = Collected {
+        id: &id,
+        branch,
+        on,
+        name,
+        committed: committed.as_deref(),
+        commits: &commits,
+        row: &row,
+        discard,
+    };
+    said.print(ctx.json);
+    Ok(0)
+}
+
+/// What `docket collect` did, as it prints it.
+struct Collected<'a> {
+    id: &'a str,
+    branch: &'a str,
+    on: &'a str,
+    name: &'a str,
+    committed: Option<&'a str>,
+    commits: &'a str,
+    row: &'a Value,
+    discard: bool,
+}
+
+impl Collected<'_> {
+    fn print(&self, json: bool) {
+        let (id, branch, on, name, row) = (self.id, self.branch, self.on, self.name, self.row);
+        if json {
+            let out = serde_json::json!({
+                "id": id, "branch": branch, "machine": on, "job": name, "committed": self.committed,
+                "commits": self.commits.lines().collect::<Vec<_>>(), "status": row, "discarded": self.discard,
+            });
+            println!("{out}");
+            return;
+        }
+        println!("{id}: {branch} from {on}, job {name}");
+        match self.committed {
+            Some(sha) => println!("committed here as {sha}"),
+            None if self.discard => println!("discarded: nothing committed"),
+            None if row["base"].is_string() => println!("no change to commit"),
+            None => {}
+        }
+        if !self.commits.is_empty() {
+            println!("{}", self.commits);
+        }
         println!(
             "{} {}",
-            r["state"].as_str().unwrap_or("?"),
-            r["report"].as_str().unwrap_or("no report")
+            row["state"].as_str().unwrap_or("?"),
+            row["report"].as_str().unwrap_or("no report")
         );
-        if let Some(note) = r["note"].as_str() {
+        if let Some(note) = row["note"].as_str() {
             println!("{note}");
         }
     }
-    if remove {
-        println!("removed {name} from {on}");
+}
+
+/// Clear a job from its machine: its worktree, its record, and its branch there unless the branch
+/// lives in this repository.
+fn remove(via: &Via, slug: &str, name: &str, same: bool) -> Result<()> {
+    let mut args = strings(&["-p", slug, "job", "remove", name]);
+    if same {
+        args.push("--keep-branch".into());
     }
-    Ok(0)
+    via.docket(&args).map(|_| ()).map_err(Fail::refused)
+}
+
+/// The patch applied to `base` in a worktree of this repository and committed with `message`, the
+/// branch set to the result; the branch is `base` itself when the patch is empty.
+fn commit_here(
+    repo: &Path,
+    base: &str,
+    branch: &str,
+    patch: &str,
+    message: Option<&str>,
+) -> Result<Option<String>> {
+    if patch.trim().is_empty() {
+        git(repo, &["branch", "-f", branch, base]).map_err(Fail::refused)?;
+        return Ok(None);
+    }
+    let tmp = std::env::temp_dir().join(format!(
+        "docket-collect-{}-{}",
+        crate::job::name_of(branch),
+        std::process::id()
+    ));
+    let tmp_s = tmp.display().to_string();
+    git(repo, &["worktree", "add", "--detach", &tmp_s, base]).map_err(Fail::refused)?;
+    let file = tmp.with_extension("patch");
+    let done = (|| -> std::result::Result<String, String> {
+        let mut text = patch.to_string();
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+        std::fs::write(&file, text).map_err(|e| e.to_string())?;
+        git(
+            &tmp,
+            &["apply", "--index", "--binary", &file.display().to_string()],
+        )?;
+        git(
+            &tmp,
+            &[
+                "commit",
+                "-q",
+                "-m",
+                message.unwrap_or("Work from a lead's job"),
+            ],
+        )?;
+        let sha = git(&tmp, &["rev-parse", "--short", "HEAD"])?;
+        git(repo, &["branch", "-f", branch, &sha])?;
+        Ok(sha)
+    })();
+    let _ = std::fs::remove_file(&file);
+    let _ = git(repo, &["worktree", "remove", "--force", &tmp_s]);
+    done.map(Some).map_err(Fail::refused)
 }
 
 /// What a job is started with on its machine.

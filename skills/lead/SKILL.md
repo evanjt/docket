@@ -85,9 +85,14 @@ It returns when a running job ends, or after five minutes so you renew the
 lead; run it in the foreground or in the background, and when it returns go
 on. Then, for each job that ended since you last looked, by its report:
 
-**DONE, for a ticket.** Fetch it and clear the job from its machine:
+**DONE, for a ticket.** Bring its change here and commit it:
 
-    docket collect T14 --remove
+    docket collect T14
+
+A job never commits: `collect` takes the change it left in its worktree,
+commits it here on the job's branch with the message the job proposed, and
+clears the job from its machine. Commits are made on this machine only; the
+others build and test.
 
 Merge it into your branch through a worktree, so your checkout only ever
 fast-forwards:
@@ -110,7 +115,7 @@ ticket back to run again from the new head:
 
 **DONE, for an audit.** Close the plan with the job's note:
 
-    docket collect A3 --remove
+    docket collect A3
     docket --branch <the job's branch> close A3 "<the NOTE line>"
 
 **DONE, for a plan or investigation.** Merge any commit as for a ticket, then
@@ -120,12 +125,12 @@ close it with the note, or for a decided question, with what it opened:
 **WAITING Q\<n\>.** The job filed a question and the item waits on it. Give
 the claim back, which keeps the wait, and clear the job:
 
-    docket collect T14 --remove
+    docket collect T14 --discard
     docket --branch <the job's branch> release T14 "waits on Q<n>"
 
-**FAILED, or lost, or no report.** Read why (`docket collect T14`, then
-`docket jobs` and the job's log on its machine with `docket job log NAME` if
-you are on it). Give the claim back with the reason, clear the job, and
+**FAILED, or lost, or no report.** Read why (`docket jobs`, and the job's log
+on its machine with `docket job log NAME`). Clear it with `docket collect T14
+--discard`, give the claim back with the reason, and
 dispatch it once more on the other runner. A second failure hands it to the
 owner:
 

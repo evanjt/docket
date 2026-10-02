@@ -63,6 +63,11 @@ pub fn job(flags: &Flags, what: &JobCmd) -> Result<i32> {
             println!("removed {name}");
             Ok(0)
         }
+        JobCmd::Diff { job: name } => {
+            let dir = job::find(&root, name, flags.project.as_deref()).map_err(Fail::refused)?;
+            print!("{}", job::diff(&dir).map_err(Fail::refused)?);
+            Ok(0)
+        }
         JobCmd::Kill { job: name } => {
             let dir = job::find(&root, name, flags.project.as_deref()).map_err(Fail::refused)?;
             job::kill(&dir).map_err(Fail::refused)?;

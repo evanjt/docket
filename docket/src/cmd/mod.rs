@@ -171,7 +171,7 @@ fn run_lead(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             timeout,
             all,
         } => dispatch::jobs(ctx, *wait, *every, *timeout, *all),
-        Cmd::Collect { id, remove } => dispatch::collect(ctx, id, *remove),
+        Cmd::Collect { id, discard } => dispatch::collect(ctx, id, *discard),
         _ => unreachable!("run_lead is given only the machine, lead and dispatch commands"),
     }
 }

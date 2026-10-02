@@ -25,7 +25,7 @@ fn test_each_brief_names_its_item_and_branch_and_nothing_local() {
             "{role}"
         );
         assert!(
-            text.contains("DONE <") && text.contains("FAILED <"),
+            text.contains("    DONE\n") && text.contains("FAILED <"),
             "{role}"
         );
         assert!(text.contains("NOTE "), "{role}");
@@ -36,10 +36,39 @@ fn test_each_brief_names_its_item_and_branch_and_nothing_local() {
 
 #[test]
 fn test_each_brief_keeps_the_private_docket_out_of_the_repository() {
-    for (role, _) in BRIEFS {
+    for role in ["build", "plan"] {
         let text = brief(role, "T14", "lead/t14-7").unwrap();
         assert!(text.contains("docket private check --staged"), "{role}");
     }
+    assert!(
+        brief("audit", "A3", "lead/a3-7")
+            .unwrap()
+            .contains("commit nothing")
+    );
+}
+
+#[test]
+fn test_no_brief_lets_a_job_commit() {
+    for (role, _) in BRIEFS {
+        let text = brief(role, "T14", "lead/t14-7").unwrap();
+        assert!(!text.contains("Commit on"), "{role}");
+        assert!(
+            text.contains("never commit")
+                || text.contains("commit nothing")
+                || text.contains("never committed"),
+            "{role}"
+        );
+    }
+}
+
+#[test]
+fn test_message_is_the_last_message_line() {
+    assert_eq!(
+        message("MESSAGE first\nMESSAGE Fix the sync\nDONE"),
+        Some("Fix the sync".into())
+    );
+    assert_eq!(message("NOTE x\nDONE"), None);
+    assert_eq!(message("MESSAGE \nDONE"), None);
 }
 
 #[test]
@@ -60,8 +89,12 @@ fn test_report_reads_the_three_forms_from_the_last_line() {
         report("`DONE 0123abc`").0,
         Some(Report::Done("0123abc".into()))
     );
+    assert_eq!(
+        report("NOTE x\nMESSAGE y\nDONE").0,
+        Some(Report::Done(String::new()))
+    );
+    assert_eq!(Report::Done(String::new()).line(), "DONE");
     for not in [
-        "DONE",
         "DONE xyz1234",
         "DONE abc",
         "WAITING T3",

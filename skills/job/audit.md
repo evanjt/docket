@@ -29,6 +29,10 @@ File each gap under the plan, with its Evidence, Fix and Failing case, at the pr
 A finding outside the plan is filed the same way and linked as related. A choice only the owner can
 make is a question with every option and its evidence; it does not hold the audit.
 
+The repository may be public while the docket is private: code, tests, comments and commit
+messages never name a docket item, project, person or machine. A comment states the rule itself and
+tests use invented names. Run `docket private check --staged` before you commit.
+
 End with your report as the last lines of your final message:
 
     NOTE audited: principles checked at <sha>, the tests run; gaps T<n>, T<m> (or clean)

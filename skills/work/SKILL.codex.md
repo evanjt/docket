@@ -70,6 +70,12 @@ A side finding is `docket add "title" --body -`, a low-priority ticket. Never
 weaken a test to avoid a question. Cite `file:line` from the working tree, not
 a document.
 
+The repository may be public while the docket is private. Code, tests,
+comments and commit messages never name a docket item, project, person or
+machine: a comment states the rule itself, and tests use invented names.
+`docket private check --staged` finds what slipped in, and the hooks
+`docket private hook` installs run it on every commit and push.
+
 ## Under a lead
 
 A lead may run the same queue, claiming each ticket and starting a job for it

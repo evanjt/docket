@@ -63,6 +63,13 @@ fn test_each_skill_names_itself_and_its_role() {
 }
 
 #[test]
+fn test_every_template_keeps_the_private_docket_out_of_the_repository() {
+    for (name, text) in texts() {
+        assert!(text.contains("docket private check"), "{name}");
+    }
+}
+
+#[test]
 fn test_no_template_carries_an_address() {
     let address = regex::Regex::new(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b").unwrap();
     for (name, text) in texts() {

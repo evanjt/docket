@@ -151,6 +151,12 @@ claims, merges or closes, and ends with a one-line report the lead reads.
 job. Beside a lead, take only what `docket next --role work` still offers;
 the claims keep the two apart.
 
+The repository may be public while the docket is private. Code, tests,
+comments and commit messages never name a docket item, project, person or
+machine: a comment states the rule itself, and tests use invented names.
+`docket private check --staged` finds what slipped in, and the hooks
+`docket private hook` installs run it on every commit and push.
+
 ## When you are done
 
 Say `stop`. No report and no summary of what was worked: the docket holds it.

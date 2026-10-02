@@ -31,3 +31,9 @@ fix, not even a one-line gap.
    or `clean` with no gaps. The gaps stay open as tickets.
 
 Say `stop` when done. No summary.
+The repository may be public while the docket is private. Code, tests,
+comments and commit messages never name a docket item, project, person or
+machine: a comment states the rule itself, and tests use invented names.
+`docket private check --staged` finds what slipped in, and the hooks
+`docket private hook` installs run it on every commit and push.
+

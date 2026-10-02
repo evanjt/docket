@@ -105,6 +105,12 @@ with every option, the `file:line` evidence for each, what is ruled out and
 the one fact that would settle it. A ticket that turns on it waits:
 `docket wait T14 --on Q<n>`. Never end a reply by asking the owner to choose.
 
+The repository may be public while the docket is private. Code, tests,
+comments and commit messages never name a docket item, project, person or
+machine: a comment states the rule itself, and tests use invented names.
+`docket private check --staged` finds what slipped in, and the hooks
+`docket private hook` installs run it on every commit and push.
+
 ## When you are done
 
 Say `stop`. The docket holds what was filed; no summary.

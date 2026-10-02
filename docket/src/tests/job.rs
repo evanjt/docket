@@ -35,6 +35,14 @@ fn test_each_brief_names_its_item_and_branch_and_nothing_local() {
 }
 
 #[test]
+fn test_each_brief_keeps_the_private_docket_out_of_the_repository() {
+    for (role, _) in BRIEFS {
+        let text = brief(role, "T14", "lead/t14-7").unwrap();
+        assert!(text.contains("docket private check --staged"), "{role}");
+    }
+}
+
+#[test]
 fn test_report_reads_the_three_forms_from_the_last_line() {
     assert_eq!(
         report("Built it.\nNOTE added the test\nDONE abcdef1\n"),

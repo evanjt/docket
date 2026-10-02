@@ -37,6 +37,10 @@ Something found on the way that is not this ticket is filed, never left in the r
 `docket add "title" --body -`. A part of {id} left undone is a ticket of its own, filed before you
 report and named in the note.
 
+The repository may be public while the docket is private: code, tests, comments and commit
+messages never name a docket item, project, person or machine. A comment states the rule itself and
+tests use invented names. Run `docket private check --staged` before you commit.
+
 End with your report as the last lines of your final message:
 
     NOTE what was done, in one line: the test that proves it, anything filed

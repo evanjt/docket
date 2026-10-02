@@ -33,6 +33,10 @@ option and its evidence, and the tickets that turn on it wait with `docket wait 
 Run every command in the foreground and wait for it. Commit only a measurement's script or
 fixture, on {branch}.
 
+The repository may be public while the docket is private: code, tests, comments and commit
+messages never name a docket item, project, person or machine. A comment states the rule itself and
+tests use invented names. Run `docket private check --staged` before you commit.
+
 End with your report as the last lines of your final message:
 
     NOTE opened T<n>, T<m>; measured <the number> (for an investigation)

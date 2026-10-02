@@ -48,6 +48,12 @@ Measure it with the source `docket skills measure` names, append the result
 File the tickets that carry the decision out and `docket close Q5 "opened
 T20, T21"`, which links them.
 
+The repository may be public while the docket is private. Code, tests,
+comments and commit messages never name a docket item, project, person or
+machine: a comment states the rule itself, and tests use invented names.
+`docket private check --staged` finds what slipped in, and the hooks
+`docket private hook` installs run it on every commit and push.
+
 ## Questions
 
 A choice a decided question or ordinary practice settles: `docket new Q "..."

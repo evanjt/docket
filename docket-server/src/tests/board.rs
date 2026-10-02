@@ -13,7 +13,7 @@ const SEED: &str = r#"
 INSERT INTO projects (slug, keys, themes, skills, remotes, created_at, updated_at) VALUES ('o/p',
   '[{"key":"T","kind":"work"},{"key":"Q","kind":"decision"},{"key":"A","kind":"audit"},
     {"key":"PK","kind":"package"},{"key":"CON","kind":"concept"},{"key":"CID","kind":"idea"}]',
-  '[{"name":"sync"}]', '{"stale_claim":"1"}', '["git@h:o/p.git"]', 'c', 'u'),
+  '[{"name":"sync"}]', '{"stale_claim":"1","pool":"a=2"}', '["git@h:o/p.git"]', 'c', 'u'),
   ('o/q', '[{"key":"T","kind":"work"}]', '[]', '{}', '[]', 'c', 'u');
 INSERT INTO items (rid, project, key, num, title, state, turn, tags, theme, group_name, body, opened_at, updated_at) VALUES
   (1, 'o/p', 'T', 1, 'Fix the sync', 'open', 'agent', '["high"]', NULL, 'g',
@@ -334,6 +334,11 @@ async fn test_summary_reads_claims_plans_and_due_audits() {
     ] {
         assert!(m.get(gone).is_none(), "{gone}: {m}");
     }
+    assert_eq!(
+        m["skills"],
+        json!({"stale_claim": "1"}),
+        "a retired fact is left out"
+    );
     assert_eq!(ids(&m["claims"]), ["T4", "T5"]);
     assert_eq!(m["claims"][0]["branch"], "audit/t4");
     assert_eq!(m["claims"][0]["host"], "devbox");

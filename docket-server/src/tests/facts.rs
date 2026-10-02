@@ -19,7 +19,7 @@ async fn scratch() -> (Scratch, Router) {
          VALUES ('{SLUG}', '[]', '{{\"owner\": \"Ana\", \"pool\": \"local=2\"}}', 'c', 'u')"
     ))
     .await;
-    let keys = Keys::parse("testbox owner ownerkey\nbuildbox agent agentkey").unwrap();
+    let keys = Keys::parse("hosta owner ownerkey\nhostb agent agentkey").unwrap();
     let router = app(&db.db, keys);
     (db, router)
 }
@@ -69,7 +69,7 @@ async fn stored(db: &DatabaseConnection) -> Value {
 }
 
 #[tokio::test]
-async fn test_read_returns_the_stored_facts() {
+async fn test_read_returns_the_stored_facts_without_the_retired_ones() {
     let (_db, app) = scratch().await;
     let (status, out) = send(
         &app,
@@ -82,24 +82,8 @@ async fn test_read_returns_the_stored_facts() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         out,
-        json!({ "project": SLUG, "skills": { "owner": "Ana", "pool": "local=2" }, "last_tick": null })
+        json!({ "project": SLUG, "skills": { "owner": "Ana" } })
     );
-}
-
-#[tokio::test]
-async fn test_read_formats_the_last_tick_as_a_stamp() {
-    let (db, app) = scratch().await;
-    db.seed("INSERT INTO meta (k, v) VALUES ('last_tick test/proj', '86400.5')")
-        .await;
-    let (_, out) = send(
-        &app,
-        Method::GET,
-        "/facts?project=test/proj",
-        "ownerkey",
-        None,
-    )
-    .await;
-    assert_eq!(out["last_tick"], "1970-01-02T00:00:00Z");
 }
 
 #[tokio::test]
@@ -120,12 +104,13 @@ async fn test_read_an_unknown_project_is_not_found() {
 #[tokio::test]
 async fn test_set_stores_the_fact_and_marks_the_project_for_the_dump() {
     let (db, app) = scratch().await;
-    let (status, out) = set_as(&app, "agentkey", "land", "make land BRANCH=$BRANCH").await;
+    let (status, out) = set_as(&app, "agentkey", "gates", "make test").await;
     assert_eq!(status, StatusCode::OK, "{out}");
-    assert_eq!(out["skills"]["land"], "make land BRANCH=$BRANCH");
+    assert_eq!(out["skills"], json!({"gates": "make test", "owner": "Ana"}));
     assert_eq!(
         stored(&db.db).await,
-        json!({"land": "make land BRANCH=$BRANCH", "owner": "Ana", "pool": "local=2"})
+        json!({"gates": "make test", "owner": "Ana", "pool": "local=2"}),
+        "a retired fact stays stored"
     );
     let row = db
         .db
@@ -147,8 +132,17 @@ async fn test_set_an_empty_value_unsets_the_fact() {
     let (db, app) = scratch().await;
     let (status, out) = set_as(&app, "ownerkey", "owner", "").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(out["skills"], json!({ "pool": "local=2" }));
+    assert_eq!(out["skills"], json!({}));
     assert_eq!(stored(&db.db).await, json!({"pool": "local=2"}));
+}
+
+#[tokio::test]
+async fn test_set_stores_models_that_read() {
+    let (db, app) = scratch().await;
+    let models = "high=claude:opus-x:high medium=codex:gpt-x";
+    let (status, out) = set_as(&app, "agentkey", "models", models).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(stored(&db.db).await["models"], models);
 }
 
 #[tokio::test]
@@ -156,16 +150,25 @@ async fn test_set_refuses_a_value_the_fact_does_not_hold_and_changes_nothing() {
     let (db, app) = scratch().await;
     for (fact, value, why) in [
         ("mode", "go", "mode is one of run, drain, pause, not 'go'"),
-        ("poll", "0", "poll is a whole number above 0, not '0'"),
+        (
+            "job_timeout",
+            "0",
+            "job_timeout is a whole number above 0, not '0'",
+        ),
         (
             "flow",
             "ticket",
             "flow is written by docket, not set by hand",
         ),
         (
+            "models",
+            "high=gemini:m",
+            "models: 'high=gemini:m' runs on gemini, not one of claude, codex",
+        ),
+        (
             "pool",
-            "local",
-            "pool is host=slots pairs separated by spaces, as \"local=4 devbox=16\", not 'local'",
+            "a=4",
+            "pool was a fact of the old loop and is no longer read",
         ),
     ] {
         let (status, out) = set_as(&app, "ownerkey", fact, value).await;
@@ -184,38 +187,4 @@ async fn test_set_refuses_a_value_the_fact_does_not_hold_and_changes_nothing() {
         stored(&db.db).await,
         json!({"owner": "Ana", "pool": "local=2"})
     );
-}
-
-#[tokio::test]
-async fn test_set_pool_max_is_refused_on_an_agent_key() {
-    let (db, app) = scratch().await;
-    let (status, out) = set_as(&app, "agentkey", "pool_max", "8").await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(
-        out["error"],
-        "pool_max is the owner's ceiling on the pool, and a fleet job does not set it"
-    );
-    let (status, _) = set_as(&app, "agentkey", "pool_max", "").await;
-    assert_eq!(
-        status,
-        StatusCode::FORBIDDEN,
-        "unsetting the ceiling is the owner's too"
-    );
-    let (status, _) = set_as(&app, "ownerkey", "pool_max", "8").await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(stored(&db.db).await["pool_max"], "8");
-}
-
-#[tokio::test]
-async fn test_set_refuses_a_pool_above_the_ceiling() {
-    let (_db, app) = scratch().await;
-    set_as(&app, "ownerkey", "pool_max", "4").await;
-    let (status, out) = set_as(&app, "agentkey", "pool", "local=3 devbox=2").await;
-    assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(
-        out["refused"],
-        "the pool would hold 5 slots, above pool_max 4, the owner's ceiling"
-    );
-    let (status, _) = set_as(&app, "agentkey", "pool", "local=2 devbox=2").await;
-    assert_eq!(status, StatusCode::OK);
 }

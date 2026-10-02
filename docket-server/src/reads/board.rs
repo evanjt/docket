@@ -496,8 +496,17 @@ pub async fn summary(
     let model = project_model(&db, &q.project).await?;
     let project = store::project(&db, &q.project).await?;
     let now = i64::try_from(now_secs()).unwrap_or(0);
+    let stored: std::collections::BTreeMap<String, String> = model
+        .skills
+        .as_object()
+        .map(|m| {
+            m.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
     Ok(Json(json!({
-        "skills": model.skills,
+        "skills": docket_core::fact::known(&stored),
         "pace": pace(&db, &q.project, &project, now).await?,
         "claims": claims(&db, &q.project, &model).await?,
         "plans": plans(&db, &q.project, &project).await?,

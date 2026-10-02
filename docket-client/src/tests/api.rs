@@ -170,7 +170,10 @@ fn test_facts_read_and_set_through_their_routes() {
     let api = served();
     let facts = api.facts("o/p").unwrap();
     assert_eq!(facts.skills["mode"], "run");
-    assert_eq!(facts.last_tick, None);
+    assert!(
+        !facts.skills.contains_key("land"),
+        "a retired fact is left out"
+    );
     let set = api.set_fact("o/p", "owner", "Ana").unwrap();
     assert_eq!(set.skills["owner"], "Ana");
     assert_eq!(api.facts("o/p").unwrap().skills["owner"], "Ana");

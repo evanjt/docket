@@ -48,30 +48,42 @@ fn test_read_args_set_and_get_pass_through() {
         owned("set", Some("mode"), Some("run"))
     );
     assert_eq!(
-        args(Some("get"), Some("land"), None),
-        owned("get", Some("land"), None)
+        args(Some("get"), Some("gates"), None),
+        owned("get", Some("gates"), None)
     );
 }
 
 #[test]
 fn test_values_layer_set_over_default_and_mark_the_rest() {
     let set: BTreeMap<String, String> = [
-        ("poll".to_string(), "30".to_string()),
-        ("land".into(), String::new()),
+        ("job_timeout".to_string(), "30".to_string()),
+        ("gates".into(), String::new()),
     ]
     .into_iter()
     .collect();
-    let v = values(&set, Some("2026-10-01T00:00:00Z"));
-    assert_eq!(v["poll"], "30");
+    let v = values(&set);
+    assert_eq!(v["job_timeout"], "30");
     assert_eq!(v["owner"], "the owner");
-    assert_eq!(v["land"], "(not set: docket skills set land \"...\")");
-    assert_eq!(v["last_tick"], "2026-10-01T00:00:00Z");
+    assert_eq!(v["gates"], "(not set: docket skills set gates \"...\")");
+    assert_eq!(v.len(), FACTS.len());
+}
+
+#[test]
+fn test_values_leave_out_a_retired_fact_still_stored() {
+    let set: BTreeMap<String, String> = [
+        ("pool".to_string(), "a=2".to_string()),
+        ("land".into(), "make land".into()),
+    ]
+    .into_iter()
+    .collect();
+    let v = values(&set);
+    assert!(!v.contains_key("pool") && !v.contains_key("land"), "{v:?}");
     assert_eq!(v.len(), FACTS.len());
 }
 
 #[test]
 fn test_facts_text_hangs_a_value_s_lines_under_it() {
-    let mut v = values(&BTreeMap::new(), None);
+    let mut v = values(&BTreeMap::new());
     v.insert("traps".into(), "one\ntwo".into());
     let text = facts_text(&v);
     assert!(
@@ -82,7 +94,7 @@ fn test_facts_text_hangs_a_value_s_lines_under_it() {
         text.contains("  traps     one\n            two\n"),
         "{text}"
     );
-    assert!(text.contains("  model_build (not set"), "{text}");
+    assert!(text.contains("  stale_claim 120\n"), "{text}");
 }
 
 #[test]

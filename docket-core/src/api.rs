@@ -458,12 +458,11 @@ pub struct Reindexed {
     pub items: usize,
 }
 
-/// A project's facts as stored, and when the loop last ticked for it.
+/// The facts a project sets that docket reads; a retired fact still stored is left out.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Facts {
     pub project: String,
     pub skills: BTreeMap<String, String>,
-    pub last_tick: Option<String>,
 }
 
 /// One fact written: the facts as they stand after it.

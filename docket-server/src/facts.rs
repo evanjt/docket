@@ -11,7 +11,6 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use docket_core::api::{FactRequest, FactSet, Facts};
-use docket_core::clock;
 use docket_core::fact;
 
 use crate::auth::Caller;
@@ -20,7 +19,6 @@ use crate::verbs::Failure;
 
 const SKILLS: &str = "SELECT skills FROM projects WHERE slug=?";
 const WRITE: &str = "UPDATE projects SET skills=?, updated_at=? WHERE slug=?";
-const TICK: &str = "SELECT v FROM meta WHERE k=?";
 
 pub fn router() -> Router<DatabaseConnection> {
     Router::new()
@@ -55,19 +53,8 @@ fn parse(skills: Value) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// When the loop last ticked for the project, from the epoch seconds it records in `meta`.
-async fn last_tick<C: ConnectionTrait>(c: &C, slug: &str) -> Result<Option<String>, Failure> {
-    let raw: Option<String> = scalar(c, TICK, vec![format!("last_tick {slug}").into()]).await?;
-    Ok(raw
-        .and_then(|v| v.trim().parse::<f64>().ok())
-        .filter(|t| t.is_finite() && *t >= 0.0)
-        .map(|t| {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            clock::stamp(t as u64)
-        }))
-}
-
-/// `docket skills`: the facts a project sets, and the loop's last tick.
+/// `docket skills`: the facts a project sets that docket reads. A retired fact stays stored and is left
+/// out.
 ///
 /// # Errors
 /// 404 for an unknown project.
@@ -75,20 +62,17 @@ pub async fn read(
     State(db): State<DatabaseConnection>,
     Query(q): Query<InProject>,
 ) -> Result<Json<Facts>, Failure> {
-    let skills = stored(&db, &q.project).await?;
-    let last_tick = last_tick(&db, &q.project).await?;
+    let skills = fact::known(&stored(&db, &q.project).await?);
     Ok(Json(Facts {
         project: q.project,
         skills,
-        last_tick,
     }))
 }
 
 /// `docket skills set KEY "value"`: one fact set, or unset by an empty value.
 ///
 /// # Errors
-/// 409 for a value the fact does not hold or a pool above its ceiling, 403 for a fact the owner keeps
-/// set on an agent's key, 404 for an unknown project.
+/// 409 for a value the fact does not hold or a retired fact, 404 for an unknown project.
 pub async fn set(
     State(db): State<DatabaseConnection>,
     Extension(caller): Extension<Caller>,
@@ -98,10 +82,6 @@ pub async fn set(
     let mut tx = Tx::begin(&db, &caller.host).await?;
     let skills = stored(&tx.conn, &slug).await?;
     fact::check(&key, &value)?;
-    if let Some(why) = fact::owner_only(&key).filter(|_| !caller.owner) {
-        return Err(Failure::Forbidden(why));
-    }
-    fact::ceiling(&skills, &key, &value)?;
     let skills = fact::with(&skills, &key, &value);
     let stored = json(serde_json::to_value(&skills).unwrap_or_default());
     tx.execute(
@@ -114,7 +94,7 @@ pub async fn set(
     Ok(Json(FactSet {
         project: slug,
         key,
-        skills,
+        skills: fact::known(&skills),
     }))
 }
 

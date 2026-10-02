@@ -325,29 +325,29 @@ fn colour_of(a: &mut App<Fixture>, text: &str) -> Option<Color> {
 #[test]
 fn test_settings_enter_edits_a_fact_in_place() {
     let mut a = app();
-    settings_on(&mut a, "land");
+    settings_on(&mut a, "gates");
     press(&mut a, KeyCode::Enter);
-    typed(&mut a, "make land");
+    typed(&mut a, "make test");
     assert!(
         lines(&mut a, 160, 120)
             .iter()
-            .any(|l| l.starts_with("  land            make land_"))
+            .any(|l| l.starts_with("  gates           make test_"))
     );
     press(&mut a, KeyCode::Enter);
     let (verb, body) = only(&a);
     assert_eq!(verb, "fact");
     assert_eq!(
         (&body["key"], &body["value"]),
-        (&json!("land"), &json!("make land"))
+        (&json!("gates"), &json!("make test"))
     );
     let all = lines(&mut a, 160, 120);
     assert!(
         all.iter()
-            .any(|l| l.trim_end() == "  land            make land"),
+            .any(|l| l.trim_end() == "  gates           make test"),
         "{}",
         all.join("\n")
     );
-    assert!(foot(&mut a).contains("set land"));
+    assert!(foot(&mut a).contains("set gates"));
 }
 
 #[test]
@@ -360,7 +360,7 @@ fn test_settings_a_refused_value_is_named_under_the_fact_and_nothing_changes() {
     press(&mut a, KeyCode::Enter);
     assert_eq!(only(&a).0, "fact");
     let s = lines(&mut a, 160, 120).join("\n");
-    assert!(s.contains("  mode            pause (default)"), "{s}");
+    assert!(s.contains("  mode            run (default)"), "{s}");
     assert!(
         s.contains("refused: mode is one of run, drain, pause, not 'go'"),
         "{s}"

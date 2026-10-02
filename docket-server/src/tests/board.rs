@@ -294,6 +294,56 @@ async fn test_graph_holds_nodes_and_edges_once_each() {
     );
 }
 
+fn node<'a>(g: &'a Value, id: &str) -> &'a Value {
+    g["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["id"] == id)
+        .unwrap()
+}
+
+#[tokio::test]
+async fn test_graph_nodes_carry_progress_and_due_as_the_core_counts_them() {
+    let s = Seeded::new().await;
+    let g = s.ok("/graph?project=o/p").await;
+    assert_eq!(
+        node(&g, "A1")["progress"],
+        json!({ "done": 1, "total": 3, "live": 1 })
+    );
+    assert_eq!(node(&g, "A1")["due"], false);
+    assert_eq!(
+        node(&g, "A2")["progress"],
+        json!({ "done": 1, "total": 1, "live": 0 })
+    );
+    assert_eq!(node(&g, "A2")["due"], true);
+    assert_eq!(
+        node(&g, "PK1")["progress"],
+        json!({ "done": 1, "total": 3, "live": 1 })
+    );
+    assert!(node(&g, "T1").get("progress").is_none(), "{g}");
+    assert!(node(&g, "T1").get("due").is_none(), "{g}");
+}
+
+#[tokio::test]
+async fn test_graph_counts_what_a_plans_tickets_opened_in_turn() {
+    let s = Seeded::new().await;
+    s.db.seed(
+        "INSERT INTO items (rid, project, key, num, title, state, turn, tags, opened_at, updated_at) VALUES \
+         (13, 'o/p', 'T', 8, 'Opened by the due work', 'open', 'agent', '[]', '2026-01-01T00:00:00Z', 'u13'); \
+         INSERT INTO links (rid, kind, to_rid) VALUES (13, 'opened', 12);",
+    )
+    .await;
+    let g = s.ok("/graph?project=o/p").await;
+    assert_eq!(
+        node(&g, "A2")["progress"],
+        json!({ "done": 1, "total": 2, "live": 0 })
+    );
+    assert_eq!(node(&g, "A2")["due"], false);
+    let m = s.ok("/summary?project=o/p").await;
+    assert_eq!(m["due"], json!([]));
+}
+
 #[tokio::test]
 async fn test_check_finds_an_open_audit_and_bare_bodies() {
     let s = Seeded::new().await;

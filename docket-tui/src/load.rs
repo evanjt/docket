@@ -7,10 +7,10 @@ use docket_core::rows::{EventRow, Row};
 use docket_core::word::Kind;
 
 use crate::app::App;
-use crate::board::Board;
 use crate::doc::{Listing, Route};
 use crate::page::{Detail, Entry, HomeRow, Page, PlanRow, ProjectData};
 use crate::source::Source;
+use docket_core::board::Board;
 
 /// How many closes the pace is read over.
 const RECENT_CLOSES: u64 = 20;

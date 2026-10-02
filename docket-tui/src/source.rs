@@ -7,7 +7,7 @@ use docket_core::member::Tie;
 use docket_core::rows::{Derived, EventRow, ProjectRow, Row, Shown, Status};
 use serde_json::Value;
 
-use crate::board::Board;
+use docket_core::board::Board;
 
 pub type Result<T> = std::result::Result<T, String>;
 

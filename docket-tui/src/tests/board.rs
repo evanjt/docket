@@ -1,6 +1,6 @@
 use crate::tests_fixture::Fixture;
 
-fn board() -> super::Board {
+fn board() -> docket_core::board::Board {
     Fixture::default().board_now()
 }
 
@@ -71,7 +71,7 @@ fn test_children_tied_and_owner_counts() {
 
 #[test]
 fn test_empty_board_has_nothing_under_way() {
-    let b = super::Board::default();
+    let b = docket_core::board::Board::default();
     assert!(b.plans_under_way().is_empty());
     assert!(b.due_audits().is_empty());
     assert!(b.with_word("ready").is_empty());

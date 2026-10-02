@@ -12,7 +12,7 @@ one place a claim is decided, so two machines never take the same item.
 |---|---|
 | `docket-core` | the rules: status words, claims, refusals, the queue order and the API types |
 | `docket-migration` | the schema as migrations, applied by the server before it listens |
-| `docket-server` | axum and sea-orm over the database: read routes, the write verbs under `/do`, key auth, the import from SQLite |
+| `docket-server` | axum and sea-orm over the database: read routes, the write verbs under `/do`, key auth, the import from SQLite and the move onto plans |
 | `docket` | the command line: every verb as a request to the server, printed as the text an agent reads |
 | `docket-dump` | the database written one way into a git checkout, and rebuilt from one |
 
@@ -96,6 +96,18 @@ sqlite3 docket.db ".backup docket-copy.db"
 DATABASE_URL=postgres://... docket-server import --from docket-copy.db
 ```
 
+Data from before plans were the one grouping is moved onto that model with `docket-server simplify`.
+Each package key holds plans from then on, ids unchanged, and every open plan waits on what it opened.
+A review claim on a package is given back, and a plan that already held its audit round is closed.
+The inbox, later and the release fold into priority: normal work there goes to low, and the release
+fact is removed. Every change writes an event naming A7. Without `--write` it prints what each
+project changes and writes nothing; a second run changes nothing.
+
+```bash
+DATABASE_URL=postgres://... docket-server simplify
+DATABASE_URL=postgres://... docket-server simplify --write
+```
+
 ## Docker
 
 ```bash
@@ -129,6 +141,7 @@ sqlite3 /path/to/docket.db ".backup $PWD/docket-copy.db"
 docker compose build docket-server
 docker compose up -d postgres
 docker compose run --rm -v "$PWD/docket-copy.db:/import/docket.db:ro" docket-server import --from /import/docket.db
+docker compose run --rm docket-server simplify --write
 docker compose up -d
 ```
 

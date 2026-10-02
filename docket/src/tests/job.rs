@@ -264,6 +264,7 @@ fn test_run_starts_the_session_in_its_worktree_and_reads_its_report() {
     assert_eq!(r.state, State::Done);
     assert_eq!(r.report.as_deref(), Some("DONE abcdef1"));
     assert_eq!(r.note.as_deref(), Some("built"));
+    assert_eq!(r.last.as_deref(), Some("NOTE built\nDONE abcdef1"));
     assert_eq!(r.tokens, Some(5));
     assert_eq!((r.id.as_str(), r.project.as_str()), ("T14", "o/sample"));
     let brief = fs::read_to_string(started.dir.join("brief.md")).unwrap();

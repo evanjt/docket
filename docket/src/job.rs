@@ -357,6 +357,8 @@ pub struct Row {
     pub tokens: Option<u64>,
     pub report: Option<String>,
     pub note: Option<String>,
+    /// The final message in full: the result of a Claude session, the last message file of Codex.
+    pub last: Option<String>,
     pub worktree: String,
     pub dir: String,
 }
@@ -397,6 +399,7 @@ pub fn row(dir: &Path, at: u64) -> Option<Row> {
         tokens: got.tokens,
         report: said.map(|r| r.line()),
         note,
+        last,
         worktree: meta.worktree,
         dir: dir.display().to_string(),
     })

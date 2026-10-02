@@ -2,6 +2,7 @@
   import { api } from '../lib/api';
   import { provide } from '../lib/context';
   import { board } from '../lib/flow';
+  import { releaseList } from '../lib/releases';
   import { resource } from '../lib/live.svelte';
   import { href, type Tab } from '../lib/route';
   import { at, go, withParams } from '../lib/router.svelte';
@@ -22,6 +23,8 @@
   const graph = resource(() => api.graph(slug));
   const todo = resource(() => api.list('todo', slug));
   const questions = resource(() => api.list('questions', slug));
+  const facts = resource(() => api.facts(slug));
+  const releases = $derived(facts.data?.project === slug ? releaseList(facts.data.skills) : []);
   const b = $derived(graph.data?.project === slug ? board(graph.data) : undefined);
   const yours = $derived(new Set([...(todo.data ?? []), ...(questions.data ?? [])].map((r) => r.id)).size);
   const open = $derived(at.params.get('i'));
@@ -35,6 +38,9 @@
     },
     get board() {
       return b;
+    },
+    get releases() {
+      return releases;
     },
     item(id: string) {
       const q = new URLSearchParams(at.params);

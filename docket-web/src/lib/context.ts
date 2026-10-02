@@ -6,6 +6,8 @@ export interface ProjectContext {
   readonly slug: string;
   readonly row: ProjectRow | undefined;
   readonly board: Board | undefined;
+  /** The releases in the order they ship, the current first; empty when the project sets none. */
+  readonly releases: string[];
   /** The current page with an item open beside it. */
   item: (id: string) => string;
 }

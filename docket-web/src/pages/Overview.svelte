@@ -3,6 +3,7 @@
   import { project } from '../lib/context';
   import { MOVE_KINDS, daily, moves, plans, verbWord } from '../lib/flow';
   import { jobLine, leadLine, machineUse } from '../lib/fleet';
+  import { releaseRows } from '../lib/releases';
   import { clock, resource } from '../lib/live.svelte';
   import { session } from '../lib/session.svelte';
   import { href } from '../lib/route';
@@ -49,6 +50,8 @@
     events.data && ctx.board ? moves(events.data, (rid) => ctx.board?.byRid.get(rid)?.id).slice(0, MOVES) : [],
   );
   const plansOpen = $derived(ctx.board ? plans(ctx.board, 'audit') : []);
+  const releases = $derived(ctx.board && ctx.releases.length ? releaseRows(ctx.board.nodes.values(), ctx.releases) : []);
+  const OPEN_WORDS = ['ready', 'building', 'blocked', 'parked'];
   const host = (h: string | null | undefined) => (h ?? '').split('.')[0];
   const use = $derived(machines.data && wip.data ? machineUse(machines.data, wip.data, session.me?.host ?? '') : []);
   const COUNTED = ['claimed', 'released'];
@@ -150,6 +153,27 @@
           <p class="empty">Nothing is parked on you and no question is open.</p>
         {/if}
       </section>
+
+      {#if releases.length}
+        <section>
+          <header>
+            <h2>Releases</h2>
+            <a class="more" href={href(ctx.slug, 'settings')}>Order</a>
+          </header>
+          <ul class="list compact">
+            {#each releases as r (r.name)}
+              <li class="release">
+                <a class="name" href={href(ctx.slug, 'work', { list: 'next', release: r.name })}>{r.name}</a>
+                <span class="state faint">{r.current ? 'current' : ''}</span>
+                <span class="counts faint">
+                  {OPEN_WORDS.filter((w) => r.words[w]).map((w) => `${r.words[w]} ${w}`).join(', ') || 'nothing open'}
+                </span>
+                <span class="progress"><Bar tally={r} /></span>
+              </li>
+            {/each}
+          </ul>
+        </section>
+      {/if}
 
       <section>
         <header>
@@ -319,6 +343,25 @@
   .branch {
     font-weight: 500;
     color: var(--w-building);
+  }
+
+  .release {
+    display: grid;
+    grid-template-columns: minmax(4ch, auto) 7ch minmax(0, 1fr) auto;
+    align-items: baseline;
+    gap: 4px 10px;
+  }
+
+  .release .name {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .release .counts {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12.5px;
   }
 
   .lead {

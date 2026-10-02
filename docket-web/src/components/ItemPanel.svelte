@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { releaseOf } from '../lib/releases';
   import { api } from '../lib/api';
   import { project } from '../lib/context';
   import { tally, verbWord } from '../lib/flow';
@@ -52,7 +53,11 @@
       <div><dt>Opened</dt><dd title={item.opened_at}>{stamp(item.opened_at)}</dd></div>
       <div><dt>Moved</dt><dd title={item.updated_at}>{ago(item.updated_at)}</dd></div>
       {#if item.group}<div><dt>Group</dt><dd>{item.group}</dd></div>{/if}
-      {#if item.theme}<div><dt>Theme</dt><dd>{item.theme}</dd></div>{/if}
+      {#if ctx.releases.length && item.key && ctx.board?.nodes.get(item.id)?.kind === 'work'}
+        {@const rel = releaseOf(item.theme, ctx.releases)}
+        <div><dt>Release</dt><dd>{rel}{rel === ctx.releases[0] ? ' (current)' : ''}</dd></div>
+      {/if}
+      {#if item.theme && !ctx.releases.includes(item.theme)}<div><dt>Theme</dt><dd>{item.theme}</dd></div>{/if}
       {#if item.claim_branch}
         <div><dt>Claimed</dt><dd><span class="id">{item.claim_branch}</span> on {host(item.claim_on ?? item.claim_host)}, {ago(item.claim_since)}</dd></div>
       {/if}

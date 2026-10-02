@@ -1,0 +1,47 @@
+import type { GraphNode } from './types';
+
+/** The releases a project's `releases` fact lists, in the order they ship, the current first. */
+export function releaseList(skills: Record<string, string> | undefined): string[] {
+  return (skills?.releases ?? '').split(/\s+/).filter(Boolean);
+}
+
+/**
+ * The release an item belongs to: its theme when the releases list it, and the current release for
+ * no theme or a theme they leave out, as `docket next` orders them. Nothing when no releases are set.
+ */
+export function releaseOf(theme: string | null | undefined, releases: string[]): string | null {
+  if (!releases.length) return null;
+  return theme && releases.includes(theme) ? theme : releases[0];
+}
+
+export interface ReleaseRow {
+  name: string;
+  current: boolean;
+  /** Tickets closed as done. */
+  done: number;
+  /** Tickets in the release, done and open; dropped ones are left out. */
+  total: number;
+  /** Tickets being worked now. */
+  live: number;
+  /** Open tickets by their word. */
+  words: Record<string, number>;
+}
+
+/** Each release with its tickets counted: a ticket is an item of the work kind. */
+export function releaseRows(nodes: Iterable<GraphNode>, releases: string[]): ReleaseRow[] {
+  const rows = releases.map((name, i) => ({ name, current: i === 0, done: 0, total: 0, live: 0, words: {} as Record<string, number> }));
+  const at = new Map(rows.map((r) => [r.name, r]));
+  for (const n of nodes) {
+    if (n.kind !== 'work' || n.state === 'dropped') continue;
+    const r = at.get(releaseOf(n.theme, releases) ?? '');
+    if (!r) continue;
+    r.total++;
+    if (n.state === 'done') {
+      r.done++;
+      continue;
+    }
+    if (n.word === 'building') r.live++;
+    r.words[n.word] = (r.words[n.word] ?? 0) + 1;
+  }
+  return rows;
+}

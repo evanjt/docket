@@ -10,6 +10,7 @@
     marked,
     onmark,
     aside,
+    release,
   }: {
     row: Pick<Row, 'id' | 'title' | 'word'> & Partial<Row>;
     href: string;
@@ -17,6 +18,8 @@
     marked?: boolean;
     onmark?: () => void;
     aside?: string;
+    /** The release the item belongs to, shown when it is not the current one. */
+    release?: string;
   } = $props();
 
   const why = $derived(note(row as Row));
@@ -31,12 +34,24 @@
     <span class="word"><Word word={row.word} /></span>
     <span class="title">{row.title}</span>
     {#if row.priority && row.priority !== 'normal'}<span class="pri pri-{row.priority}">{row.priority}</span>{/if}
+    {#if release}<span class="release" title="Release {release}">{release}</span>{/if}
     {#if aside}<span class="aside faint">{aside}</span>{/if}
     {#if why}<span class="why">{why}</span>{/if}
   </a>
 </li>
 
 <style>
+  .release {
+    flex: none;
+    font-size: 11.5px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--muted);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 0 5px;
+  }
+
   .row {
     display: flex;
     align-items: flex-start;

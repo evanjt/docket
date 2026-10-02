@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { project } from '../lib/context';
   import { LEVELS, PRIORITIES } from '../lib/flow';
+  import { releaseOf } from '../lib/releases';
   import { panel } from '../lib/here.svelte';
   import { act, session } from '../lib/session.svelte';
   import type { Kind, Shown } from '../lib/types';
@@ -108,6 +110,14 @@
     await act('priority', { ...common(), ids: [item.id], tier }, `Priority ${tier}`);
   }
 
+  const ctx = project();
+  const release = $derived(releaseOf(item.theme, ctx.releases));
+
+  async function setRelease(name: string) {
+    if (name === release) return;
+    await act('edit', { ...common(), id: item.id, set: [{ field: 'theme', value: name }] }, `Moved to ${name}`);
+  }
+
   async function setLevel(level: string) {
     if (level === item.complexity) return;
     await act('rate', { ...common(), id: item.id, level }, `Rated ${level}`);
@@ -160,6 +170,14 @@
         {#each LEVELS as l (l)}<option value={l}>{l}</option>{/each}
       </select>
     </label>
+    {#if ctx.releases.length && kind === 'work' && item.state === 'open'}
+      <label class="pick">
+        <span class="faint">Release</span>
+        <select value={release} onchange={(e) => setRelease(e.currentTarget.value)}>
+          {#each ctx.releases as r (r)}<option value={r}>{r}</option>{/each}
+        </select>
+      </label>
+    {/if}
   </div>
 
   {#if form}

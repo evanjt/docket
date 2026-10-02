@@ -3,6 +3,7 @@
   import { project } from '../lib/context';
   import { ASIDE, FLOW, PRIORITIES, byId } from '../lib/flow';
   import { resource } from '../lib/live.svelte';
+  import { releaseOf } from '../lib/releases';
   import { at, go, withParams } from '../lib/router.svelte';
   import { act } from '../lib/session.svelte';
   import type { Row } from '../lib/types';
@@ -30,6 +31,7 @@
   const word = $derived(at.params.get('word'));
   const list = $derived(q || word ? null : (at.params.get('list') ?? 'next'));
   const selected = $derived(at.params.get('i'));
+  const release = $derived(at.params.get('release'));
 
   let typed = $state(at.params.get('q') ?? '');
   let searchBox: HTMLInputElement | undefined = $state();
@@ -56,10 +58,17 @@
       return [...ctx.board.nodes.values()]
         .filter((n) => n.word === word)
         .sort((a, b) => byId(a.id, b.id))
-        .map((n) => ({ id: n.id, title: n.title, word: n.word }));
+        .map((n) => ({ id: n.id, title: n.title, word: n.word, theme: n.theme }));
     }
     return fetched.data ?? [];
   });
+
+  /** The rows of the release chosen, each with its release when the project sets releases. */
+  const shown = $derived(
+    rows
+      .map((r) => ({ ...r, release: releaseOf(r.theme ?? ctx.board?.nodes.get(r.id)?.theme, ctx.releases) }))
+      .filter((r) => !release || r.release === release),
+  );
 
   const loading = $derived(word ? !ctx.board : fetched.loading && !fetched.data);
   const heading = $derived(q ? `Search: ${q}` : word ? `Every item ${word}` : LISTS.find((l) => l.name === list)?.label);
@@ -77,11 +86,11 @@
   }
 
   function move(by: number) {
-    if (!rows.length) return;
-    const at = rows.findIndex((r) => r.id === selected);
-    const next = at < 0 ? 0 : Math.min(rows.length - 1, Math.max(0, at + by));
-    choose(rows[next].id);
-    document.querySelector(`.rows [data-id="${rows[next].id}"]`)?.scrollIntoView({ block: 'nearest' });
+    if (!shown.length) return;
+    const at = shown.findIndex((r) => r.id === selected);
+    const next = at < 0 ? 0 : Math.min(shown.length - 1, Math.max(0, at + by));
+    choose(shown[next].id);
+    document.querySelector(`.rows [data-id="${shown[next].id}"]`)?.scrollIntoView({ block: 'nearest' });
   }
 
   function toggle(id: string) {
@@ -129,7 +138,7 @@
   });
 
   $effect(() => {
-    if (!selected && rows.length && wide) choose(rows[0].id);
+    if (!selected && shown.length && wide) choose(shown[0].id);
   });
 </script>
 
@@ -153,6 +162,14 @@
             onclick={() => (typed = '')}>{l.label}</a>
         {/each}
       </nav>
+      {#if ctx.releases.length}
+        <nav class="words releases" aria-label="Releases">
+          <a href={withParams({ release: undefined, i: undefined })} class:active={!release}>every release</a>
+          {#each ctx.releases as r, i (r)}
+            <a href={withParams({ release: r, i: undefined })} class:active={release === r}>{r}{i === 0 ? ' (current)' : ''}</a>
+          {/each}
+        </nav>
+      {/if}
       <nav class="words" aria-label="Words">
         {#each [...FLOW, ...ASIDE, 'done', 'dropped'] as w (w)}
           <a href={withParams({ word: w, q: undefined, list: undefined, i: undefined })} class:active={word === w}
@@ -163,7 +180,7 @@
 
     <div class="caption">
       <h2>{heading}</h2>
-      <span class="faint">{loading ? 'Reading' : `${rows.length}`}</span>
+      <span class="faint">{loading ? 'Reading' : `${shown.length}`}</span>
     </div>
 
     {#if marks.size}
@@ -179,15 +196,16 @@
 
     {#if fetched.error && !word}
       <p class="error">{fetched.error}</p>
-    {:else if !loading && rows.length === 0}
+    {:else if !loading && shown.length === 0}
       <p class="empty">
         {q ? 'No item matches. Search reads whole words; try fewer of them.' : 'This list is empty.'}
       </p>
     {/if}
     <ul class="rows">
-      {#each rows as r (r.id)}
+      {#each shown as r (r.id)}
         <ItemRow row={r} href={withParams({ i: r.id })} selected={r.id === selected} marked={marks.has(r.id)}
-          onmark={() => toggle(r.id)} aside={r.aside} />
+          onmark={() => toggle(r.id)} aside={r.aside}
+          release={r.release && r.release !== ctx.releases[0] ? r.release : undefined} />
       {/each}
     </ul>
   </div>

@@ -10,6 +10,7 @@ fn private() -> Private {
         ],
         hosts: vec!["gamma.example.org".into()],
         keys: vec!["T".into(), "A".into(), "PK".into()],
+        titles: vec![],
     }
 }
 
@@ -61,11 +62,19 @@ fn test_hits_match_whole_words_in_any_case() {
 }
 
 #[test]
+fn test_a_name_with_a_capital_is_matched_as_written() {
+    let t = strings(&["ORBIT", "Ada"]);
+    assert!(hits(&t, "an orbit of the orbit log").is_empty());
+    assert_eq!(hits(&t, "ORBIT/webapp by Ada"), ["ORBIT", "Ada"]);
+    assert!(hits(&t, "ada and orbit").is_empty());
+}
+
+#[test]
 fn test_ids_finds_keys_followed_by_a_number() {
     let keys = strings(&["T", "A", "PK"]);
     assert_eq!(
-        ids(&keys, "// A7 principle 3, as PK12 said (T43)"),
-        ["A7", "PK12", "T43"]
+        ids(&keys, "// A3 principle 2, as PK12 said (T9)"),
+        ["A3", "PK12", "T9"]
     );
     assert!(ids(&keys, "// sha256 and AT7 and A and T-1").is_empty());
 }
@@ -76,4 +85,39 @@ fn test_comments_are_told_from_code() {
     assert!(is_comment("# a heading"));
     assert!(is_comment("let x = 1; // see why"));
     assert!(!is_comment("let x = \"T1\";"));
+}
+
+#[test]
+fn test_titles_are_found_when_long_enough_to_be_an_items_own() {
+    let t = Titles::new(&strings(&[
+        "The sync loses a record when two devices write at once",
+        "Fix it",
+    ]));
+    assert_eq!(
+        t.hits("// The sync loses a record when two devices write at once."),
+        ["The sync loses a record when two devices write at once"]
+    );
+    assert!(t.hits("Fix it now").is_empty());
+}
+
+#[test]
+fn test_shapes_find_private_addresses_and_tokens() {
+    // Built here, so the source carries no private address or token for the check to find.
+    let ten = format!("{}.0.12.4", 10);
+    let home = format!("{}.168.1.20", 192);
+    let inside = format!("{}.20.0.1", 172);
+    let token = format!("{}_{}", "ghp", "abcdefghijklmnopqrstuvwx1234");
+    assert_eq!(
+        shapes(&format!("ssh to {ten} or {home}")),
+        [ten.clone(), home]
+    );
+    assert_eq!(shapes(&format!("{inside} but not 172.32.0.1")), [inside]);
+    assert_eq!(shapes(&format!("token {token}")), [token]);
+    assert!(shapes("version 1.10.0.4, 8.8.8.8 and 203.0.113.7").is_empty());
+}
+
+#[test]
+fn test_ssh_hosts_are_every_alias_but_patterns() {
+    let config = "Host alpha alpha-vpn\n  HostName 203.0.113.7\nHost *.lan\nhost beta\nMatch all\n";
+    assert_eq!(ssh_hosts(config), ["alpha", "alpha-vpn", "beta"]);
 }

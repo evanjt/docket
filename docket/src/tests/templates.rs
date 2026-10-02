@@ -3,19 +3,9 @@ use std::path::Path;
 
 use super::*;
 
-/// Project and owner names a template must never carry: every fact comes from `docket skills`.
-const NAMED: [&str; 10] = [
-    "sample",
-    "sample-audit",
-    "evanjt",
-    "sample-costs",
-    "sample-snow",
-    "sample-lake",
-    "Ada",
-    "{{",
-    "~/projects/",
-    "/home/",
-];
+/// What a template must never carry: a project's own path or an unfilled placeholder. Real project
+/// and owner names are kept out of every tracked file by `docket private check`.
+const NAMED: [&str; 3] = ["{{", "~/projects/", "/home/"];
 
 fn texts() -> Vec<(String, &'static str)> {
     let mut out = vec![("docket-block.md".to_string(), BLOCK)];

@@ -17,6 +17,7 @@ const OWNERS: &str = "SELECT DISTINCT skills->>'owner' FROM projects \
                       WHERE skills->>'owner' IS NOT NULL AND skills->>'owner' <> '' ORDER BY 1";
 const HOSTS: &str = "SELECT host FROM events UNION SELECT claim_host FROM items \
                      WHERE claim_host IS NOT NULL UNION SELECT host FROM leads ORDER BY 1";
+const TITLES: &str = "SELECT DISTINCT title FROM items WHERE length(title) >= $1 ORDER BY 1";
 const KEYS: &str =
     "SELECT DISTINCT k->>'key' FROM projects, jsonb_array_elements(keys) k ORDER BY 1";
 
@@ -48,6 +49,12 @@ pub async fn read(
         machines,
         hosts: column(&db, HOSTS, vec![]).await?,
         keys: column(&db, KEYS, vec![]).await?,
+        titles: column(
+            &db,
+            &TITLES.replace("$1", &docket_core::private::TITLE_LEAST.to_string()),
+            vec![],
+        )
+        .await?,
     }))
 }
 

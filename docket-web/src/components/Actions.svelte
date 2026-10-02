@@ -126,7 +126,7 @@
     drop: { label: 'Why', field: 'line', placeholder: 'Why it is no longer wanted (optional)' },
     note: { label: 'Note', field: 'area', placeholder: 'Appended to the body under today’s date' },
     edit: { label: 'Title', field: 'line', placeholder: '' },
-    link: { label: '', field: 'line', placeholder: 'An id, like A7' },
+    link: { label: '', field: 'line', placeholder: 'An id, like A3' },
   };
 </script>
 

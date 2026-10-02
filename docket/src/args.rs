@@ -496,7 +496,11 @@ pub enum PrivateCmd {
         /// a commit message file, as a commit-msg hook passes it
         #[arg(long, value_name = "FILE")]
         message: Option<String>,
-        /// also report docket item ids cited in code comments
+        /// every commit of a git range (`origin/main..HEAD`, `--all`): its message and what it adds
+        #[arg(long, value_name = "RANGE", allow_hyphen_values = true)]
+        range: Option<String>,
+        /// also list the docket item ids code comments cite, for a person to read: an invented
+        /// example id looks the same as a citation, so the hooks leave this out
         #[arg(long)]
         ids: bool,
         paths: Vec<String>,

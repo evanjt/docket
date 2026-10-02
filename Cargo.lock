@@ -1023,6 +1023,7 @@ dependencies = [
 name = "docket-core"
 version = "0.1.0"
 dependencies = [
+ "aho-corasick",
  "regex",
  "serde",
  "serde_json",

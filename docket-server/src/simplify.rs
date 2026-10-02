@@ -1,4 +1,4 @@
-//! The data moved onto the simple model of A7, after an import: packages become plans, a review claim
+//! The data moved onto the simple model, after an import: packages become plans, a review claim
 //! is given back, a plan that held its audit round closes, every plan is gated on what it opened, and
 //! the inbox, later and the release fold into priority. Ids and keys never change. A dry run makes the
 //! same writes inside a transaction it rolls back, so its report is the write's.
@@ -17,8 +17,7 @@ use crate::verbs::Failure;
 use crate::verbs::graph::{keys_of, release_waiters, settle_audits};
 
 /// The note on a package turned into a plan; it also marks a plan whose round audits are a package's.
-const BECAME_A_PLAN: &str =
-    "a plan now: A7 makes plans the one grouping, audited once when everything it opened is closed";
+const BECAME_A_PLAN: &str = "a plan now: the simple model makes plans the one grouping, audited once when everything it opened is closed";
 
 /// What the step changes in one project, by id in key and number order.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -222,7 +221,7 @@ async fn packages_to_plans(
                 slug,
                 Some(p.rid),
                 "released",
-                Some("a package's review claim given back: A7 audits a plan once, when everything it opened is closed"),
+                Some("a package's review claim given back: the simple model audits a plan once, when everything it opened is closed"),
                 Some(branch),
                 None,
             )
@@ -277,7 +276,7 @@ async fn close_held_rounds(
         } else {
             format!("its audit round held, gaps {}", gaps.join(", "))
         };
-        let resolution = format!("{held}: A7 audits a plan once, in one round");
+        let resolution = format!("{held}: the simple model audits a plan once, in one round");
         let cols = rules::close(&a, &forced, Some(&resolution), Kind::Audit)?;
         let row = tx.update(a.rid, &cols).await?;
         tx.event(slug, Some(a.rid), "closed", Some(&resolution), None, None)
@@ -332,9 +331,9 @@ async fn fold_scopes(tx: &mut Tx, slug: &str, c: &mut Change) -> Result<(), Fail
         tx.update(r.rid, &cols).await?;
         let place = r.scope.as_deref().unwrap_or_default();
         let note = if low.is_empty() {
-            format!("out of the {place}: A7 has no inbox or later, priority kept")
+            format!("out of the {place}: the simple model has no inbox or later, priority kept")
         } else {
-            format!("out of the {place}: A7 has no inbox or later, priority low")
+            format!("out of the {place}: the simple model has no inbox or later, priority low")
         };
         tx.event(slug, Some(r.rid), "edited", Some(&note), None, None)
             .await?;

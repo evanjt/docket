@@ -125,16 +125,22 @@ before the job, fetched back by `collect`. `jobs --wait` returns once one of the
 
 ## Private names
 
-A repository may be public while its docket is private. `docket private check` reads every private
-name from the server on the owner's key (`GET /private`: project slugs, owners, machines and their
-addresses, the hosts on keys, events and claims) and searches the tracked files for them, or the
-staged change (`--staged`), or a commit message (`--message FILE`); `--ids` also reports a docket
-item id cited in a code comment. A hit prints `file:line: name` and exits 1. The names are never
-written into the repository: a name that is public (a product's name, a public dependency) is listed
-one a line in `$XDG_CONFIG_HOME/docket/public`, outside it, and the owner and name of `origin` are
-public already. `docket private hook` installs pre-commit, commit-msg and pre-push hooks that run the
-check, and `docket private terms` prints the names, for a history rewrite's replace file kept outside
-the repository.
+A repository may be public while its docket is private. `docket private check` reads the private
+names from the server on the owner's key (`GET /private`: project slugs, owners, machines and their
+addresses, the hosts on keys, events and claims, and every item title long enough to be its own),
+adds this machine's user name, home and ssh host aliases, and searches the tracked files, the staged
+change (`--staged`), a commit message (`--message FILE`) or every commit of a range (`--range
+origin/main..HEAD`, `--range --all`). It also finds an address on a private network and an access
+token by their shape. A name in lower case is matched in any case, one with a capital as written. A
+hit prints `file:line: name` and exits 1. `--ids` also lists the docket item ids that code comments
+cite, for a person to read.
+
+The names are never written into the repository. A name that is public (a product's name, a public
+dependency) is listed one a line in `$XDG_CONFIG_HOME/docket/public`, outside it; the owner and name
+of `origin` are public already, and a licence, which names its holder by design, is not searched.
+`docket private hook` installs a pre-commit hook (the staged change), a commit-msg hook and a
+pre-push hook (every commit the push adds, then the tree). `docket private terms` prints the names,
+for a history rewrite's replace file kept outside the repository.
 
 ## Keys
 

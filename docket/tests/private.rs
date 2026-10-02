@@ -15,6 +15,8 @@ use common::{Server, serve};
 const SEED: &str = r#"
 INSERT INTO projects (slug, keys, skills, created_at, updated_at) VALUES
   ('acme/widgets', '[{"key":"T","kind":"work"},{"key":"A","kind":"audit"}]', '{"owner":"Ada Lovelace"}', 'c', 'u');
+INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, opened_at, updated_at)
+  VALUES (1, 'acme/widgets', 'T', 1, 'The proofing timer drifts after every restart', 'open', 'agent', '[]', '', 'o', 'u');
 INSERT INTO machines (name, ssh, slots, runners, note, updated_at)
   VALUES ('alpha', 'user@203.0.113.7', 2, '["claude"]', NULL, 'u');
 "#;
@@ -92,8 +94,12 @@ fn text(out: &Output) -> String {
 fn test_check_reports_each_private_name_in_the_tracked_files() {
     let c = Checkout::new();
     c.write("src/a.rs", "fn main() {}\n// built on alpha for Ada\n");
-    c.write("notes.md", "Deploy to 203.0.113.7, see the widgets tracker.\n");
+    c.write(
+        "notes.md",
+        "Deploy to 203.0.113.7, see the widgets tracker.\n",
+    );
     c.write("clean.rs", "fn nothing() {}\n");
+    c.write("LICENSE", "Copyright (c) Ada Lovelace\n");
     sh(&c.repo, "git add -A");
     let out = c.check(&[]);
     assert_eq!(out.status.code(), Some(1), "{}", text(&out));
@@ -107,6 +113,7 @@ fn test_check_reports_each_private_name_in_the_tracked_files() {
         assert!(said.contains(want), "{want} not in {said}");
     }
     assert!(!said.contains("clean.rs"), "{said}");
+    assert!(!said.contains("LICENSE"), "{said}");
 }
 
 #[test]
@@ -148,14 +155,14 @@ fn test_the_staged_change_and_the_message_are_checked_with_item_ids() {
     );
     c.write(
         "src/a.rs",
-        "fn a() {}\n// as A7 decided\nfn b() {} // on alpha\n",
+        "fn a() {}\n// as A3 decided\nfn b() {} // on alpha\n",
     );
     sh(&c.repo, "git add -A");
     let out = c.check(&["--staged", "--ids"]);
     assert_eq!(out.status.code(), Some(1));
     let said = text(&out);
     assert!(
-        said.contains("src/a.rs:2: A7 (a docket item cited in a comment)"),
+        said.contains("src/a.rs:2: A3 (a docket item cited in a comment)"),
         "{said}"
     );
     assert!(said.contains("src/a.rs:3: alpha"), "{said}");
@@ -186,4 +193,54 @@ fn test_hook_installs_the_three_hooks_and_keeps_anothers() {
     let again = c.docket("key-owner", &["private", "hook"]);
     assert!(!again.status.success());
     assert!(text(&again).contains("--force"), "{}", text(&again));
+}
+
+#[test]
+fn test_titles_and_private_addresses_are_found() {
+    let c = Checkout::new();
+    c.write(
+        "notes.md",
+        &format!(
+            "Fixes: The proofing timer drifts after every restart.\nOn {}.168.4.5 only.\n",
+            192
+        ),
+    );
+    sh(&c.repo, "git add -A");
+    let out = c.check(&[]);
+    assert_eq!(out.status.code(), Some(1));
+    let said = text(&out);
+    assert!(
+        said.contains(
+            "notes.md:1: \"The proofing timer drifts after every restart\" (a docket item's title)"
+        ),
+        "{said}"
+    );
+    assert!(
+        said.contains(&format!(
+            "notes.md:2: {}.168.4.5 (a private address or a token)",
+            192
+        )),
+        "{said}"
+    );
+}
+
+#[test]
+fn test_a_range_checks_every_commits_message_and_changes() {
+    let c = Checkout::new();
+    let commit = "git -c user.name=t -c user.email=t@example.org commit -qm";
+    c.write("a.rs", "// runs on alpha\n");
+    sh(
+        &c.repo,
+        &format!("git add -A && {commit} 'Sync the widgets'"),
+    );
+    c.write("a.rs", "// runs anywhere\n");
+    sh(&c.repo, &format!("git add -A && {commit} 'Generalise'"));
+    assert_eq!(c.check(&[]).status.code(), Some(0), "the tree is clean");
+    let out = c.check(&["--range", "main"]);
+    assert_eq!(out.status.code(), Some(1));
+    let said = text(&out);
+    assert!(said.contains(" message:1: widgets"), "{said}");
+    assert!(said.contains(" a.rs:1: alpha"), "{said}");
+    let newest = c.check(&["--range", "HEAD~1..HEAD"]);
+    assert_eq!(newest.status.code(), Some(0), "{}", text(&newest));
 }

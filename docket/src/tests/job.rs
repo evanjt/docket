@@ -7,18 +7,10 @@ use super::*;
 
 /// Words a rendered brief must never carry: a project, an owner, a path on some machine, a
 /// placeholder left unfilled.
-const NAMED: [&str; 11] = [
-    "sample",
-    "sample-audit",
-    "evanjt",
-    "Ada",
-    "~/",
-    "/home/",
-    "{id}",
-    "{branch}",
-    "{{",
-    "o/sample",
-    "\u{2014}",
+/// What a brief must never carry: a home path, an unfilled placeholder, the sample project, an em
+/// dash. Real project and owner names are kept out of every tracked file by `docket private check`.
+const NAMED: [&str; 7] = [
+    "~/", "/home/", "{id}", "{branch}", "{{", "o/sample", "\u{2014}",
 ];
 
 #[test]

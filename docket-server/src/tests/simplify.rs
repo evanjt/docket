@@ -161,7 +161,7 @@ async fn test_packages_become_plans_and_the_ceremony_closes_out() {
         item(&s, "A1").await["resolution"]
             .as_str()
             .unwrap()
-            .contains("A7")
+            .contains("simple model")
     );
     assert_eq!(item(&s, "A2").await["wait_ref"], GATE);
     assert_eq!(next(&s, "audit").await, ["PK2", "PK3"]);
@@ -190,7 +190,7 @@ async fn test_packages_become_plans_and_the_ceremony_closes_out() {
 
     let notes = rows(
         &s,
-        "SELECT jsonb_agg(note) FROM events WHERE note LIKE '%A7%'",
+        "SELECT jsonb_agg(note) FROM events WHERE note LIKE '%simple model%'",
     )
     .await;
     assert!(notes[0].as_array().unwrap().len() >= 6, "{}", notes[0]);

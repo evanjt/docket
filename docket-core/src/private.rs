@@ -17,6 +17,71 @@ pub struct Private {
     pub hosts: Vec<String>,
     /// Every key in any project's matrix, the letters item ids start with.
     pub keys: Vec<String>,
+    /// Every item title long enough to be its own, which a copied sentence would carry.
+    #[serde(default)]
+    pub titles: Vec<String>,
+}
+
+/// A title this long or longer is the item's own, not a phrase any text might share.
+pub const TITLE_LEAST: usize = 24;
+
+/// Finds every private title in a text at once.
+pub struct Titles(Option<aho_corasick::AhoCorasick>, Vec<String>);
+
+impl Titles {
+    #[must_use]
+    pub fn new(titles: &[String]) -> Self {
+        let kept: Vec<String> = titles
+            .iter()
+            .filter(|t| t.chars().count() >= TITLE_LEAST)
+            .cloned()
+            .collect();
+        Titles(aho_corasick::AhoCorasick::new(&kept).ok(), kept)
+    }
+
+    /// The titles a line carries, as written.
+    #[must_use]
+    pub fn hits(&self, line: &str) -> Vec<&str> {
+        let Some(ac) = &self.0 else {
+            return Vec::new();
+        };
+        let mut out: Vec<&str> = ac
+            .find_overlapping_iter(line)
+            .map(|m| self.1[m.pattern().as_usize()].as_str())
+            .collect();
+        out.dedup();
+        out
+    }
+}
+
+/// What a line carries that is private by its shape whatever the docket holds: an address on a
+/// private network, or an access token.
+#[must_use]
+pub fn shapes(line: &str) -> Vec<String> {
+    static SHAPES: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = SHAPES.get_or_init(|| {
+        regex::Regex::new(
+            r"\b(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|github_pat_\w{8,}|gh[pousr]_\w{20,}|sk-ant-[\w-]{16,})",
+        )
+        .unwrap_or_else(|_| regex::Regex::new("$^").unwrap_or_else(|_| unreachable!()))
+    });
+    re.find_iter(line).map(|m| m.as_str().to_string()).collect()
+}
+
+/// The host aliases an ssh config names, each a machine's private name; patterns are left out.
+#[must_use]
+pub fn ssh_hosts(config: &str) -> Vec<String> {
+    config
+        .lines()
+        .filter_map(|l| {
+            let l = l.trim();
+            let (word, rest) = l.split_once(char::is_whitespace)?;
+            word.eq_ignore_ascii_case("host").then_some(rest)
+        })
+        .flat_map(str::split_whitespace)
+        .filter(|h| !h.contains(['*', '?', '!']))
+        .map(str::to_string)
+        .collect()
 }
 
 /// Shorter than this, a term is too common a word to tell anything apart.
@@ -68,17 +133,24 @@ fn host_terms(host: &str) -> Vec<String> {
     out
 }
 
-/// The terms a line carries, each once, matched in any case where neither neighbour is a letter or a
-/// digit, so `alpha` is found in `alpha-1` and `alpha.local` but not in `alphabet`.
+/// The terms a line carries, each once, where neither neighbour is a letter or a digit, so `alpha` is
+/// found in `alpha-1` and `alpha.local` but not in `alphabet`. A term in lower case is matched in any
+/// case; one with a capital only as written, so a name like `ORBIT` is not found in the word
+/// `orbit`.
 #[must_use]
 pub fn hits<'a>(terms: &'a [String], line: &str) -> Vec<&'a str> {
     let lower = line.to_lowercase();
     let mut out = Vec::new();
     for term in terms {
-        let t = term.to_lowercase();
-        let found = lower.match_indices(&t).any(|(at, _)| {
-            let before = lower[..at].chars().next_back();
-            let after = lower[at + t.len()..].chars().next();
+        let exact = term.chars().any(char::is_uppercase);
+        let (hay, t) = if exact {
+            (line, term.clone())
+        } else {
+            (lower.as_str(), term.to_lowercase())
+        };
+        let found = hay.match_indices(&t).any(|(at, _)| {
+            let before = hay[..at].chars().next_back();
+            let after = hay[at + t.len()..].chars().next();
             !before.is_some_and(char::is_alphanumeric) && !after.is_some_and(char::is_alphanumeric)
         });
         if found {
@@ -100,7 +172,7 @@ pub fn is_comment(line: &str) -> bool {
 }
 
 /// The item ids a line cites: a key from any project's matrix followed directly by a number, standing
-/// alone, as `A7` or `PK12`.
+/// alone, as `A3` or `PK12`.
 #[must_use]
 pub fn ids(keys: &[String], line: &str) -> Vec<String> {
     let mut out = Vec::new();

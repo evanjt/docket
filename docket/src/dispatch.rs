@@ -103,11 +103,19 @@ impl Via {
         }
     }
 
-    /// The git address of a repository at `path` on the machine.
+    /// The git address of a repository at `path` on the machine: `user@host:path`, or a URL for an
+    /// address given as `ssh://user@host:port`, the form that carries a port.
     #[must_use]
     pub fn git_url(&self, path: &str) -> String {
         match self {
             Via::Here => path.to_string(),
+            Via::Ssh(addr) if addr.starts_with("ssh://") => {
+                format!(
+                    "{}/{}",
+                    addr.trim_end_matches('/'),
+                    path.trim_start_matches('/')
+                )
+            }
             Via::Ssh(addr) => format!("{addr}:{path}"),
         }
     }

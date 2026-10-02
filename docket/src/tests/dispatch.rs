@@ -89,3 +89,13 @@ fn test_via_is_here_for_this_machine_and_ssh_for_another() {
     assert_eq!(Via::Here.git_url("/r"), "/r");
     assert_eq!(Via::Ssh("user@alpha".into()).git_url("/r"), "user@alpha:/r");
 }
+
+#[test]
+fn test_an_ssh_url_with_a_port_keeps_its_form_for_git() {
+    let via = Via::Ssh("ssh://user@host:2222".into());
+    assert_eq!(via.git_url("/srv/r"), "ssh://user@host:2222/srv/r");
+    assert_eq!(
+        Via::Ssh("ssh://user@host:2222/".into()).git_url("/srv/r"),
+        "ssh://user@host:2222/srv/r"
+    );
+}

@@ -133,7 +133,7 @@ machine. An agent key cannot open items with `new` or `add`.
 
 The machines jobs run on are rows on the server, so every machine reads the same list and none of
 them is named in a repository or a skill. Each has a name, which is the host on its key, the ssh
-address the other machines reach it at, its job slots (1 to 64) and the runners it has (`claude`,
+address the other machines reach it at (`user@host`, or `ssh://user@host:port` for another port), its job slots (1 to 64) and the runners it has (`claude`,
 `codex`). The owner's key sets them:
 
 ```bash

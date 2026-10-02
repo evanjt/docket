@@ -411,7 +411,7 @@ pub enum Cmd {
         what: String,
         /// the host its key names
         name: String,
-        /// the ssh address the other machines reach it at
+        /// the ssh address the other machines reach it at: user@host, or ssh://user@host:port
         #[arg(long)]
         ssh: Option<String>,
         /// the most jobs it runs at once, 1 to 64

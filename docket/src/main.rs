@@ -8,6 +8,7 @@ mod http;
 mod local;
 mod py;
 mod row;
+mod templates;
 
 use std::io::IsTerminal;
 use std::process::ExitCode;

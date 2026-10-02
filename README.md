@@ -46,6 +46,23 @@ on this machine (`~/.config/docket/roots`, written by `docket bind` and by the f
 a checkout), then the outermost git repository, matched to a project by its remote's slug, a shared
 remote or its directory name, or created with the default keys.
 
+## Skills
+
+Work is done by sessions, each taking one role with its skill, for Claude Code or Codex, as many at
+once as wanted:
+
+| Skill | What |
+|---|---|
+| `/plan` | a goal into a plan and its tickets; investigations and decided questions into tickets |
+| `/work` | the next ticket: a worktree off the branch the session started from, the failing test first, merged back and closed |
+| `/audit` | a plan whose tickets are all closed, checked once against what it asked; gaps filed as tickets |
+
+The templates are in `skills/` and the client carries them. A skill names no project: each reads
+the project's facts with `docket skills`. `docket skills install` writes them to `~/.claude/skills`
+and `~/.agents/skills` and removes the skills they replace, after listing each change and asking
+(`--yes` with no terminal; `docket skills diff` only lists). `docket instructions install` puts the
+short docket block, `skills/docket-block.md`, into the AGENTS.md at the project's root the same way.
+
 ## Keys
 
 The keys file has one line per key, `host role key`, where role is `owner` or `agent`. The host is

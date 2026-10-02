@@ -376,12 +376,21 @@ pub enum Cmd {
         key: Option<String>,
         /// set: the text; omit it to unset the fact
         value: Option<String>,
-        /// install: only ~/.claude/skills
+        /// install and diff: only ~/.claude/skills
         #[arg(long)]
         claude: bool,
-        /// install: only ~/.agents/skills
+        /// install and diff: only ~/.agents/skills
         #[arg(long)]
         codex: bool,
+        /// install without asking, for a run with no terminal
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+    /// the docket block in the AGENTS.md at the project's root: install writes it, diff lists what
+    /// install would change
+    Instructions {
+        #[arg(value_parser = ["install", "diff"], default_value = "diff")]
+        what: String,
         /// install without asking, for a run with no terminal
         #[arg(short = 'y', long)]
         yes: bool,

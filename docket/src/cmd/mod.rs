@@ -1,6 +1,7 @@
 //! Each verb to its command.
 
 pub mod audit;
+pub mod instructions;
 pub mod lists;
 pub mod show;
 pub mod skills;
@@ -89,8 +90,24 @@ pub fn run(ctx: &mut Ctx, cmd: Option<&Cmd>) -> Result<i32> {
         Cmd::Stale { open_only } => audit::stale(ctx, *open_only),
         Cmd::Bind { slug, root } => write::bind(ctx, slug.as_ref(), root.as_ref()),
         Cmd::Skills {
-            what, key, value, ..
-        } => skills::skills(ctx, what.as_ref(), key.as_ref(), value.as_ref()),
+            what,
+            key,
+            value,
+            claude,
+            codex,
+            yes,
+        } => skills::skills(
+            ctx,
+            what.as_ref(),
+            key.as_ref(),
+            value.as_ref(),
+            skills::Install {
+                claude: *claude,
+                codex: *codex,
+                yes: *yes,
+            },
+        ),
+        Cmd::Instructions { what, yes } => instructions::instructions(ctx, what, *yes),
         _ => run_write(ctx, cmd),
     }
 }

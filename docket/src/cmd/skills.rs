@@ -8,6 +8,7 @@ use docket_core::fact::{self, COMPUTED, DEFAULTS, FACTS};
 
 use crate::ctx::Ctx;
 use crate::fail::{Fail, Result};
+use crate::templates::{self, Action, Step};
 
 /// The two user-level skill directories, by tool.
 const TOOLS: [(&str, &str); 2] = [
@@ -46,6 +47,24 @@ pub fn read_args(
     (what.into(), own(key), own(value))
 }
 
+/// Which tools an install writes for: the one named, or both.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Install {
+    pub claude: bool,
+    pub codex: bool,
+    pub yes: bool,
+}
+
+impl Install {
+    fn tools(self) -> Vec<&'static str> {
+        match (self.claude, self.codex) {
+            (true, false) => vec!["claude"],
+            (false, true) => vec!["codex"],
+            _ => vec!["claude", "codex"],
+        }
+    }
+}
+
 /// # Errors
 /// The project cannot be resolved, a fact is unset or refused, or the server refuses.
 pub fn skills(
@@ -53,6 +72,7 @@ pub fn skills(
     what: Option<&String>,
     key: Option<&String>,
     value: Option<&String>,
+    install: Install,
 ) -> Result<i32> {
     let (what, key, value) = read_args(
         what.map(String::as_str),
@@ -60,9 +80,15 @@ pub fn skills(
         value.map(String::as_str),
     );
     match what.as_str() {
-        "install" | "diff" => Err(Fail::refused(format!(
-            "docket skills {what} copies the skill templates, which this client does not carry: run it with the Python docket"
-        ))),
+        "install" | "diff" => {
+            let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
+            let steps = templates::skill_steps(&home, &install.tools());
+            if what == "diff" {
+                list(&steps, &home.display().to_string());
+                return Ok(i32::from(changes(&steps)));
+            }
+            write_steps(&steps, &home.display().to_string(), install.yes)
+        }
         "get" => get(ctx, key.as_deref()),
         "set" => set(ctx, key.as_deref(), value.as_deref().unwrap_or_default()),
         _ => show(ctx),
@@ -74,7 +100,7 @@ fn all_facts() -> String {
 }
 
 /// The project's shortest root on this machine.
-fn root_of(ctx: &Ctx, slug: &str) -> Option<String> {
+pub fn root_of(ctx: &Ctx, slug: &str) -> Option<String> {
     ctx.roots.of(slug).into_iter().next()
 }
 
@@ -214,6 +240,61 @@ fn show(ctx: &mut Ctx) -> Result<i32> {
     }
     println!("\n  docket skills set KEY \"value\"    docket skills install    docket skills diff");
     Ok(0)
+}
+
+fn changes(steps: &[Step]) -> bool {
+    steps.iter().any(|s| s.action != Action::Current)
+}
+
+/// Each step that changes something, as `new  ~/.claude/skills/work/SKILL.md`; the rest counted.
+pub fn list(steps: &[Step], home: &str) {
+    let current = steps.iter().filter(|s| s.action == Action::Current).count();
+    for s in steps.iter().filter(|s| s.action != Action::Current) {
+        let path = home_relative(&s.path.display().to_string(), home);
+        let why = if s.action == Action::Skip {
+            "  (a symlink, never written through)"
+        } else {
+            ""
+        };
+        println!("  {:<10} {path}{why}", s.action.word());
+    }
+    if current > 0 {
+        println!("  {current} current, left as they are");
+    }
+}
+
+/// The steps listed, then written once the person says so, or at once with `yes`.
+///
+/// # Errors
+/// Nobody can be asked and `yes` is not given, or a file cannot be written.
+pub fn write_steps(steps: &[Step], home: &str, yes: bool) -> Result<i32> {
+    if !changes(steps) {
+        println!("Everything is current.");
+        return Ok(0);
+    }
+    list(steps, home);
+    if !yes && !confirmed()? {
+        println!("Nothing written.");
+        return Ok(1);
+    }
+    let written = templates::apply(steps).map_err(|e| Fail::refused(e.to_string()))?;
+    println!("Written: {} paths.", written.len());
+    Ok(0)
+}
+
+/// `y` typed at the prompt; a run with no terminal is refused rather than guessed.
+fn confirmed() -> Result<bool> {
+    use std::io::{BufRead, IsTerminal, Write as _};
+    if !std::io::stdin().is_terminal() {
+        return Err(Fail::refused(
+            "nothing written: there is no terminal to ask on. Read the list, then pass --yes",
+        ));
+    }
+    print!("Write these? [y/N] ");
+    std::io::stdout().flush().ok();
+    let mut answer = String::new();
+    std::io::stdin().lock().read_line(&mut answer).ok();
+    Ok(matches!(answer.trim(), "y" | "Y" | "yes"))
 }
 
 /// A path under the home directory written from `~`.

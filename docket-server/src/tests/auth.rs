@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn test_parse_reads_hosts_and_roles() {
-    let keys = Keys::parse("# keys\n\nbuildbox agent abc\nlaptop owner xyz\n").unwrap();
+    let keys = Keys::parse("# keys\n\ndevbox agent abc\nlaptop owner xyz\n").unwrap();
     assert_eq!(
         keys.caller("abc"),
         Some(&Caller {

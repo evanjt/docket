@@ -25,7 +25,7 @@ impl Scratch {
             "INSERT INTO projects (slug, keys, created_at, updated_at) VALUES ('{SLUG}', '{KEYS}', 'c', 'u')"
         ))
         .await;
-        let keys = Keys::parse("testbox owner ownerkey\nbuildbox agent agentkey").unwrap();
+        let keys = Keys::parse("testbox owner ownerkey\ndevbox agent agentkey").unwrap();
         Self {
             app: app(&db.db, keys),
             db,

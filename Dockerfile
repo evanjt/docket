@@ -55,16 +55,28 @@ COPY docket-server docket-server
 COPY docket-tui docket-tui
 RUN cargo build --release --locked -p docket-server
 
-# ---- Stage 3: runtime ----------------------------------------------------
+# ---- Stage 3: web client -------------------------------------------------
+# The page the server serves at /ui/. Its dependencies land in a layer that only invalidates when the
+# lockfile changes.
+FROM node:24-alpine AS web
+WORKDIR /web
+COPY docket-web/package.json docket-web/package-lock.json ./
+RUN npm ci
+COPY docket-web ./
+RUN npm run build
+
+# ---- Stage 4: runtime ----------------------------------------------------
 FROM alpine:3.21
 RUN apk --no-cache upgrade && \
     apk add --no-cache ca-certificates tzdata libgcc && \
     adduser -D -u 10001 docket && \
     install -d -o docket -g docket /etc/docket
 COPY --from=builder /build/target/release/docket-server /usr/local/bin/docket-server
+COPY --from=web /web/dist /usr/share/docket/web
 # The database is the Postgres DATABASE_URL names; the keys file is mounted at /etc/docket.
 ENV DOCKET_KEYS=/etc/docket/keys \
-    DOCKET_LISTEN=0.0.0.0:7878
+    DOCKET_LISTEN=0.0.0.0:7878 \
+    DOCKET_WEB=/usr/share/docket/web
 USER 10001
 EXPOSE 7878
 ENTRYPOINT ["/usr/local/bin/docket-server"]

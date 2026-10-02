@@ -16,6 +16,8 @@ one place a claim is decided, so two machines never take the same item.
 | `docket` | the command line: every verb as a request to the server, printed as the text an agent reads |
 | `docket-dump` | the database written one way into a git checkout, and rebuilt from one |
 
+`docket-web` is the web client, a Svelte page the server serves.
+
 ## Quick Start
 
 ```bash
@@ -46,6 +48,24 @@ on this machine (`~/.config/docket/roots`, written by `docket bind` and by the f
 a checkout), then the outermost git repository, matched to a project by its remote's slug, a shared
 remote or its directory name, or created with the default keys.
 
+## Web
+
+`docket-web` does in the browser what the screen does: every project, a project's flow with what is running and what
+waits on you, the lists beside an item in full, the plans with their progress, the log and the facts. Every verb is a
+button on the item, and the page reads again whenever the database moves. `Ctrl K` goes to an item, a page or a
+project, and `?` lists the keys.
+
+The server serves it at `/ui/` from the directory `DOCKET_WEB` names, and sends `/` there. The Docker image builds it
+and sets `DOCKET_WEB`. The page asks for a key once and keeps it in the browser:
+
+```bash
+cd docket-web && npm ci && npm run build
+DOCKET_WEB=$PWD/dist DATABASE_URL=postgres://... DOCKET_KEYS=keys cargo run -p docket-server
+```
+
+`npm run dev` serves it at `http://localhost:5190/ui/` and passes `/api` on to the server `DOCKET_SERVER` names
+(`http://docket.localhost` by default), so writes made there land in that server's database.
+
 ## Keys
 
 The keys file has one line per key, `host role key`, where role is `owner` or `agent`. The host is
@@ -64,6 +84,7 @@ machine. An agent key cannot open items with `new` or `add`.
 | `GET /counts`, `/whoami` | every project's counts; the host and role of the key presented |
 | `GET /projects`, `/items`, `/events`, `/links` | the stored rows, filtered and paged |
 | `GET /dump` | the rows changed after an event `seq` (`since=N`), or every row (`since=0`), for `docket-dump` |
+| `GET /ui/` | the web client when `DOCKET_WEB` is set, with `/` sent to it; neither asks for a key |
 | `POST /do/{verb}` | `new`, `add`, `start`, `close`, `release`, `drop`, `reopen`, `wait`, `resume`, `ask`, `reply`, `answer`, `decide`, `priority`, `rate`, `edit`, `link`, `fold`, `key`, `pull`, `defer`, `project`, `reindex` |
 
 A refused write answers `409` with the reason, and nothing is written.
@@ -108,7 +129,8 @@ The keys file must be readable by uid 10001.
 ## Docker Compose
 
 `compose.yaml` runs the server and Postgres behind Traefik at `http://docket.localhost`, on port 80 of
-this machine only. Postgres keeps its data in the named volume `postgres` and is not published.
+this machine only, with the web client at `http://docket.localhost/ui/`. Postgres keeps its data in the
+named volume `postgres` and is not published.
 Set the database password and the keys file in a `.env` file beside it:
 
 ```bash
@@ -145,8 +167,15 @@ docker run -d --name docket-test-pg -e POSTGRES_PASSWORD=pg -p 127.0.0.1:5433:54
 DATABASE_URL=postgres://postgres:pg@127.0.0.1:5433/postgres cargo test
 ```
 
+The web client's tests need no server:
+
+```bash
+cd docket-web && npm test && npm run check
+```
+
 ## Caveats
 
+- The web client keeps its key in the browser's local storage until you sign out, so sign out on a machine you share.
 - Writes take one advisory lock for their transaction, so they commit one at a time and their events
   become visible in `seq` order, which the dump's cursor relies on. Reads run side by side.
 - Search ranks with Postgres `ts_rank` over title, id, cited paths and body, weighted in that order,

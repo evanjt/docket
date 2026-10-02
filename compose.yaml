@@ -1,5 +1,6 @@
-# docket-server and its Postgres behind Traefik. Settings come from the environment or a .env file beside
-# this one:
+# docket-server and its Postgres behind Traefik. The server's image holds the web client, served at
+# http://docket.localhost/ui/ (and / sends you there). Settings come from the environment or a .env file
+# beside this one:
 #   POSTGRES_PASSWORD  the docket database user's password, letters and digits only (required)
 #   DOCKET_KEYS_FILE   the keys file, `host role key` lines (default ./keys)
 #   DOCKET_HOST        hostname Traefik routes to the server (default docket.localhost)

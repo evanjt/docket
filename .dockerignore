@@ -3,3 +3,5 @@ deploy
 Dockerfile
 .dockerignore
 .gitignore
+docket-web/node_modules
+docket-web/dist

@@ -1,5 +1,5 @@
 import type {
-  Context, Count, Derived, EventRow, Facts, Graph, ProjectRow, Row, Shown, Status, Whoami,
+  Context, Count, Derived, EventRow, Facts, Graph, LeadState, Machine, ProjectRow, Row, Shown, Status, Whoami,
 } from './types';
 
 const KEY = 'docket.key';
@@ -127,6 +127,8 @@ export const api = {
   context: (p: string, id: string) => get<Context>(`/context/${encodeURIComponent(id)}`, of(p)),
   graph: (p: string) => get<Graph>('/graph', of(p)),
   facts: (p: string) => get<Facts>('/facts', of(p)),
+  machines: () => get<{ machines: Machine[] }>('/machines').then((m) => m.machines),
+  lead: (p: string) => get<LeadState>('/lead', of(p)),
   events: (p: string, n: number, kinds?: string[]) =>
     get<EventRow[]>('/events', {
       filter: JSON.stringify(kinds ? { project: p, kind: kinds } : { project: p }),

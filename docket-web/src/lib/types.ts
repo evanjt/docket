@@ -113,6 +113,32 @@ export interface Facts {
   last_tick: string | null;
 }
 
+export interface Machine {
+  name: string;
+  ssh: string;
+  slots: number;
+  runners: string[];
+  note: string | null;
+  updated_at: string;
+}
+
+export interface Lead {
+  project: string;
+  host: string;
+  session: string;
+  branch: string | null;
+  since: string;
+  renewed_at: string;
+}
+
+export interface LeadState {
+  project: string;
+  lead: Lead | null;
+  lapsed: boolean;
+  lapses_at: string | null;
+  lapse_minutes: number;
+}
+
 export interface Whoami {
   host: string;
   owner: boolean;

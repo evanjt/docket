@@ -2,7 +2,9 @@
   import { api } from '../lib/api';
   import { project } from '../lib/context';
   import { MOVE_KINDS, daily, moves, plans, verbWord } from '../lib/flow';
+  import { jobLine, leadLine, machineUse } from '../lib/fleet';
   import { clock, resource } from '../lib/live.svelte';
+  import { session } from '../lib/session.svelte';
   import { href } from '../lib/route';
   import { ago, duration, epoch, stamp } from '../lib/time';
   import Bar from '../components/Bar.svelte';
@@ -25,6 +27,8 @@
   const todo = resource(() => api.list('todo', ctx.slug));
   const questions = resource(() => api.list('questions', ctx.slug));
   const events = resource(() => api.events(ctx.slug, READ, MOVE_KINDS));
+  const lead = resource(() => api.lead(ctx.slug));
+  const machines = resource(() => api.machines());
   const start = $derived.by(() => {
     const d = new Date(clock.now * 1000);
     d.setHours(0, 0, 0, 0);
@@ -46,6 +50,7 @@
   );
   const plansOpen = $derived(ctx.board ? plans(ctx.board, 'audit') : []);
   const host = (h: string | null | undefined) => (h ?? '').split('.')[0];
+  const use = $derived(machines.data && wip.data ? machineUse(machines.data, wip.data, session.me?.host ?? '') : []);
   const COUNTED = ['claimed', 'released'];
 </script>
 
@@ -67,6 +72,9 @@
     <div class="col">
       <section>
         <header><h2>Running now</h2></header>
+        {#if lead.data}
+          <p class="lead" class:lapsed={lead.data.lapsed} class:none={!lead.data.lead}>{leadLine(lead.data, now)}</p>
+        {/if}
         {#if wip.data?.length}
           <ul class="list">
             {#each wip.data as r (r.id)}
@@ -74,13 +82,27 @@
               <li class="run">
                 <a class="id" href={ctx.item(r.id)}>{r.id}</a>
                 <a class="title" href={ctx.item(r.id)}>{r.title}</a>
-                <span class="where"><span class="id branch">{r.claim_branch}</span> on {host(r.claim_on ?? r.claim_host)}</span>
+                <span class="where"><span class="id branch">{r.claim_branch}</span> on {host(r.claim_on ?? r.claim_host)}{#if jobLine(r)}<span class="job">{jobLine(r)}</span>{/if}</span>
                 <span class="since" title={r.claim_since ?? ''}>{since ? duration(now - since) : ''}</span>
               </li>
             {/each}
           </ul>
         {:else if wip.data}
           <p class="empty">No item is claimed. Agents claim from Next up.</p>
+        {/if}
+        {#if use.length}
+          <ul class="machines" aria-label="Machines">
+            {#each use as m (m.name)}
+              <li>
+                <span class="name">{m.name}{#if m.here}<span class="here"> (this browser's key)</span>{/if}</span>
+                <span class="slots" aria-label="{m.used} of {m.slots} slots in use">
+                  {#each Array.from({ length: m.slots }, (_, i) => i < m.used) as busy, i (i)}<i class:busy></i>{/each}
+                </span>
+                <span class="count">{m.used}/{m.slots}</span>
+                <span class="runners">{m.runners.join(', ')}</span>
+              </li>
+            {/each}
+          </ul>
         {/if}
       </section>
 
@@ -297,6 +319,76 @@
   .branch {
     font-weight: 500;
     color: var(--w-building);
+  }
+
+  .lead {
+    margin: 0 0 6px;
+    font-size: 13.5px;
+  }
+
+  .lead.none {
+    color: var(--muted);
+  }
+
+  .lead.lapsed {
+    color: var(--w-blocked);
+  }
+
+  .job {
+    margin-left: 8px;
+    color: var(--ink);
+  }
+
+  .machines {
+    margin: 12px 0 0;
+    padding: 0;
+    list-style: none;
+    font-size: 13px;
+  }
+
+  .machines li {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto 4ch auto;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 0;
+  }
+
+  .machines .name {
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .machines .here {
+    font-weight: 400;
+    color: var(--muted);
+  }
+
+  .slots {
+    display: flex;
+    gap: 2px;
+  }
+
+  .slots i {
+    width: 8px;
+    height: 12px;
+    border-radius: 2px;
+    background: var(--rule);
+  }
+
+  .slots i.busy {
+    background: var(--w-building);
+  }
+
+  .count {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .runners {
+    color: var(--muted);
   }
 
   .since {

@@ -137,7 +137,8 @@ cite, for a person to read.
 
 The names are never written into the repository. A name that is public (a product's name, a public
 dependency) is listed one a line in `$XDG_CONFIG_HOME/docket/public`, outside it; the owner and name
-of `origin` are public already, and a licence, which names its holder by design, is not searched.
+of `origin` are public already. A private name the docket cannot know (another machine's alias for
+this one) is listed the same way in `$XDG_CONFIG_HOME/docket/private`. A licence, which names its holder by design, is not searched.
 `docket private hook` installs a pre-commit hook (the staged change), a commit-msg hook and a
 pre-push hook (every commit the push adds, then the tree). `docket private terms` prints the names,
 for a history rewrite's replace file kept outside the repository.

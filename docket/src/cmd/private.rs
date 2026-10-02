@@ -1,7 +1,7 @@
 //! `docket private`: the owner's private names, read from the server on the owner's key, searched for
 //! in a checkout so a public repository never carries one. The names are never written to a file in
-//! the repository; terms a public repository may carry are listed outside it, in
-//! `$XDG_CONFIG_HOME/docket/public`. A licence, which names its holder by design, is not searched.
+//! the repository; names a public repository may carry are listed outside it, in
+//! `$XDG_CONFIG_HOME/docket/public`, and private names the docket cannot know in `.../private`. A licence, which names its holder by design, is not searched.
 
 use std::path::{Path, PathBuf};
 
@@ -80,7 +80,8 @@ fn read(ctx: &mut Ctx) -> Result<Look> {
             &std::fs::read_to_string(config).unwrap_or_default(),
         ));
     }
-    let mut allowed = allowed_file();
+    local.extend(listed("private"));
+    let mut allowed = listed("public");
     allowed.extend(origin_names());
     Ok(Look {
         terms: terms(&private, &local, &allowed),
@@ -89,9 +90,11 @@ fn read(ctx: &mut Ctx) -> Result<Look> {
     })
 }
 
-/// The terms a public repository may carry, one a line, `#` starting a comment.
-fn allowed_file() -> Vec<String> {
-    let Some(path) = public_path() else {
+/// The names listed one a line in `$XDG_CONFIG_HOME/docket/NAME`, `#` starting a comment: `public`
+/// for names a public repository may carry, `private` for private names the docket cannot know, as
+/// another machine's alias for this one.
+fn listed(name: &str) -> Vec<String> {
+    let Some(path) = config_path(name) else {
         return Vec::new();
     };
     std::fs::read_to_string(path)
@@ -102,12 +105,12 @@ fn allowed_file() -> Vec<String> {
         .collect()
 }
 
-fn public_path() -> Option<PathBuf> {
+fn config_path(name: &str) -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("docket").join("public"))
+    Some(base.join("docket").join(name))
 }
 
 /// The owner and name of the repository's `origin`, which its address already makes public.
@@ -294,7 +297,7 @@ fn check(ctx: &mut Ctx, scope: &Scope) -> Result<i32> {
         "docket private: {} private name{} found. Take each out; a name that is public goes in {}",
         found.len(),
         if found.len() == 1 { "" } else { "s" },
-        public_path().map_or_else(|| "docket/public".into(), |p| p.display().to_string())
+        config_path("public").map_or_else(|| "docket/public".into(), |p| p.display().to_string())
     );
     Ok(1)
 }

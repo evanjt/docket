@@ -131,6 +131,21 @@ fn test_a_name_listed_as_public_is_left_out() {
 }
 
 #[test]
+fn test_a_name_listed_as_private_is_found() {
+    let c = Checkout::new();
+    fs::write(
+        c.config.join("docket/private"),
+        "zeta  # another machine's alias for this one\n",
+    )
+    .unwrap();
+    c.write("notes.md", "built on zeta\n");
+    sh(&c.repo, "git add -A");
+    let out = c.check(&[]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(text(&out).contains("notes.md:1: zeta"), "{}", text(&out));
+}
+
+#[test]
 fn test_a_clean_tree_passes_and_an_agent_key_is_refused() {
     let c = Checkout::new();
     c.write(

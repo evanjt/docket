@@ -13,7 +13,7 @@ const SEED: &str = r#"
 INSERT INTO projects (slug, keys, themes, skills, created_at, updated_at) VALUES ('o/p',
   '[{"key":"T","kind":"work"},{"key":"Q","kind":"decision"},{"key":"A","kind":"audit"},
     {"key":"PK","kind":"package"},{"key":"CON","kind":"concept"}]',
-  '[{"name":"sync"}]', '{"release":"1.0 2026-01-01"}', 'c', 'u');
+  '[{"name":"sync"}]', '{}', 'c', 'u');
 INSERT INTO items (rid, project, key, num, title, state, turn, tags, rank, complexity, scope, theme,
                    group_name, body, opened_at, updated_at) VALUES
   (1, 'o/p', 'T', 1, 'Plain fix', 'open', 'agent', '[]', NULL, NULL, NULL, NULL, NULL, '', 'o01', 'u01'),

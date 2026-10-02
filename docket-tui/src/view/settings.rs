@@ -1,5 +1,5 @@
-//! Every fact of a project with its value and its meaning, the ones the loop needs and lacks in red. Each
-//! name is a hot spot: Enter edits its value in place.
+//! Every fact of a project with its value and its meaning. Each name is a hot spot: Enter edits its value
+//! in place.
 
 use docket_core::fact::{self, FACTS, Value};
 use docket_core::rows::ProjectRow;
@@ -38,10 +38,6 @@ impl Editing {
 pub fn doc(project: &ProjectRow, width: usize, editing: &Editing) -> Doc {
     let mut d = Doc::default();
     d.plain(format!("SETTINGS  {}", project.slug), style::bold());
-    if fact::gaps(&project.skills).is_empty() {
-        d.plain("  The facts let the loop dispatch.", style::word("ready"));
-    }
-    crate::view::project::why(&mut d, &project.skills, width);
     d.plain(
         "  Enter edits the selected fact in place; an empty value unsets it.",
         style::dim(),
@@ -56,8 +52,8 @@ pub fn doc(project: &ProjectRow, width: usize, editing: &Editing) -> Doc {
     d
 }
 
-/// A fact's name and its whole value, wrapped under the value's column; red when the loop lacks it. The
-/// value being typed stands in its place, and a refusal of it shows beneath.
+/// A fact's name and its whole value, wrapped under the value's column. The value being typed stands in
+/// its place, and a refusal of it shows beneath.
 fn fact_lines(d: &mut Doc, project: &ProjectRow, key: &str, width: usize, editing: &Editing) {
     let (text, tone) = match (&editing.typing, fact::value(&project.skills, key)) {
         (Some((k, typed)), _) if k == key => (format!("{typed}_"), style::bold()),
@@ -65,11 +61,7 @@ fn fact_lines(d: &mut Doc, project: &ProjectRow, key: &str, width: usize, editin
         (_, Value::Default(v)) => (format!("{v} (default)"), style::dim()),
         (_, Value::Unset) => ("(not set)".to_string(), style::dim()),
     };
-    let (name_tone, value_tone) = if fact::blocks(&project.skills, key) {
-        (style::alarm(), style::alarm())
-    } else {
-        (style::bold(), tone)
-    };
+    let (name_tone, value_tone) = (style::bold(), tone);
     for (i, part) in wrap(&text, width.saturating_sub(NAME + 4))
         .into_iter()
         .enumerate()

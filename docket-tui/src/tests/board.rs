@@ -27,7 +27,7 @@ fn test_word_follows_the_server_rule() {
 fn test_with_word_leaves_packages_out_as_the_flow_does() {
     let b = board();
     assert_eq!(ids(&b.with_word("building")), ["T2"]);
-    assert_eq!(ids(&b.with_word("ready")), ["T3"]);
+    assert_eq!(ids(&b.with_word("ready")), ["A2", "T3"]);
 }
 
 #[test]
@@ -47,16 +47,15 @@ fn test_progress_by_kind() {
 }
 
 #[test]
-fn test_packages_under_way_and_membership() {
+fn test_plans_under_way_and_due_audits() {
     let b = board();
     let under: Vec<String> = b
-        .packages_under_way()
+        .plans_under_way()
         .iter()
         .map(|(p, _)| p.id.clone())
         .collect();
-    assert_eq!(under, ["PK1"]);
-    assert_eq!(b.package_of(2).map(|p| p.id.as_str()), Some("PK1"));
-    assert_eq!(b.package_of(3), None);
+    assert_eq!(under, ["A1", "A2"]);
+    assert_eq!(ids(&b.due_audits()), ["A2"]);
 }
 
 #[test]
@@ -73,7 +72,8 @@ fn test_children_tied_and_owner_counts() {
 #[test]
 fn test_empty_board_has_nothing_under_way() {
     let b = super::Board::default();
-    assert!(b.packages_under_way().is_empty());
+    assert!(b.plans_under_way().is_empty());
+    assert!(b.due_audits().is_empty());
     assert!(b.with_word("ready").is_empty());
     assert_eq!(b.on_owner(), 0);
 }

@@ -1,5 +1,5 @@
-//! A fixed project for the tests: a plan, a package half done, tickets in each word, a question, a
-//! concept, and a second project whose facts let the loop run.
+//! A fixed project for the tests: a plan waiting on its work, a plan due for audit, a package half
+//! done, tickets in each word, a question, a concept, and a second project.
 
 use std::sync::Mutex;
 
@@ -88,6 +88,8 @@ fn items() -> Vec<ItemRow> {
         item(6, "CON1", "Crusts", "open"),
         blocked,
         plan,
+        item(9, "A2", "Orders print at the till", "open"),
+        item(10, "T4", "Cache the oven buns", "done"),
     ]
 }
 
@@ -102,6 +104,7 @@ fn ties() -> Vec<Tie> {
         opened(2, 4),
         opened(4, 8),
         opened(3, 8),
+        opened(10, 9),
         Tie {
             rid: 3,
             opened: false,
@@ -350,8 +353,12 @@ impl Source for Fixture {
             ..EventRow::default()
         };
         Ok(vec![
-            event(3, 2, "2026-10-01T09:00:00Z", "claimed"),
-            event(2, 1, "2026-10-01T08:30:00Z", "closed"),
+            event(9, 2, "2026-10-01T09:00:00Z", "claimed"),
+            event(8, 1, "2026-10-01T08:30:00Z", "closed"),
+            event(7, 10, "2026-10-01T08:20:00Z", "closed"),
+            event(6, 10, "2026-10-01T08:10:00Z", "claimed"),
+            event(5, 9, "2026-10-01T08:00:00Z", "opened"),
+            event(4, 10, "2026-09-30T09:00:00Z", "opened"),
             event(1, 3, "2026-09-30T08:00:00Z", "opened"),
         ])
     }

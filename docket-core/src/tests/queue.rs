@@ -135,16 +135,25 @@ fn test_next_by_role() {
         item(4, "B", Kind::Work),
         item(5, "I", Kind::Research),
         item(6, "Q", Kind::Decision),
+        item(7, "A", Kind::Audit),
+        Candidate {
+            open: false,
+            ..item(8, "Q", Kind::Decision)
+        },
+        item(9, "B", Kind::Work),
     ];
+    let mut ties = opened(3, 2);
+    ties.extend(opened(8, 7));
+    ties.extend(opened(9, 8));
     let by = |role| {
         let f = Filter {
             role: Some(role),
             ..Filter::default()
         };
-        ids(next(&items, &opened(3, 2), &f, 10))
+        ids(next(&items, &ties, &f, 10))
     };
     assert_eq!(by(Role::Audit), vec![2]);
-    assert_eq!(by(Role::Work), vec![4]);
+    assert_eq!(by(Role::Work), vec![4, 9]);
     assert_eq!(by(Role::Plan), vec![1, 5, 6]);
     assert_eq!(Role::parse("audit"), Some(Role::Audit));
     assert_eq!(Role::parse("review"), None);
@@ -174,19 +183,4 @@ fn test_next_filters_by_theme_and_under() {
         ..Filter::default()
     };
     assert_eq!(ids(next(&items, &[], &below, 10)), vec![3]);
-}
-
-#[test]
-fn test_release_of_needs_a_name_and_a_date() {
-    assert_eq!(
-        release_of(Some("1.0.0 2026-10-01")),
-        Some(("1.0.0".to_string(), "2026-10-01".to_string()))
-    );
-    assert_eq!(
-        release_of(Some("spring  cut 2026-10-01")),
-        Some(("spring cut".to_string(), "2026-10-01".to_string()))
-    );
-    assert_eq!(release_of(Some("2026-10-01")), None);
-    assert_eq!(release_of(Some("1.0.0 soon")), None);
-    assert_eq!(release_of(None), None);
 }

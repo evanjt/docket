@@ -38,9 +38,9 @@ pub fn doc<S: Source>(app: &App<S>) -> Doc {
     let board = app.page.slug().and_then(|s| app.boards.get(s));
     match &app.page {
         Page::Home(h) => home::doc(&h.rows, full),
-        Page::Project(p) => {
-            board.map_or_else(Doc::default, |b| project::doc(b, p.data.as_ref(), full))
-        }
+        Page::Project(p) => board.map_or_else(Doc::default, |b| {
+            project::doc(b, p.data.as_ref(), full, p.all_moves)
+        }),
         Page::Browser(b) => b.detail.as_ref().map_or_else(Doc::default, |d| {
             item::doc(board, d, side, crate::load::now())
         }),
@@ -178,7 +178,7 @@ fn keys(page: &Page) -> &'static str {
     match page {
         Page::Home(_) => "j/k move   Enter open a project   ? what everything means   q quit",
         Page::Project(_) => {
-            "Tab/j/k move   Enter open   / search   o yours   t plans   S settings   : verb   ? help   q quit"
+            "Tab/j/k move   Enter open   m all moves   / search   o yours   t plans   S settings   : verb   ? help   q quit"
         }
         Page::Browser(_) => {
             "j/k row   Enter open   x mark   a answer   r reply   ! priority   c rate   L link   : verb   ? help"

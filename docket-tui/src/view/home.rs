@@ -1,6 +1,4 @@
-//! Every project on one page: its loop mode, its open tickets, what waits on the owner, and its flow.
-
-use docket_core::fact;
+//! Every project on one page: its open tickets, what waits on the owner, and its flow.
 
 use crate::doc::{Doc, Seg, Target, seg, spot};
 use crate::page::HomeRow;
@@ -20,10 +18,7 @@ pub fn doc(rows: &[HomeRow], width: usize) -> Doc {
         + 2;
     let mut d = Doc::default();
     let mut head = vec![seg(
-        format!(
-            "{:<name$}{:<7}{:>6}{:>7}  ",
-            "PROJECT", "MODE", "OPEN", "YOURS"
-        ),
+        format!("{:<name$}{:>6}{:>7}  ", "PROJECT", "OPEN", "YOURS"),
         style::bold(),
     )];
     head.extend(WORDS.iter().map(|w| seg(format!("{w:>9}"), style::word(w))));
@@ -39,10 +34,6 @@ pub fn doc(rows: &[HomeRow], width: usize) -> Doc {
     }
     d.blank();
     d.plain(
-        "  MODE is the loop's: run, drain or pause. Red when the project lacks a fact the loop needs (S on its page).",
-        style::dim(),
-    );
-    d.plain(
         "  YOURS is what waits on the owner: docket todo.",
         style::dim(),
     );
@@ -51,8 +42,6 @@ pub fn doc(rows: &[HomeRow], width: usize) -> Doc {
 
 fn row(r: &HomeRow, name: usize) -> Vec<Seg> {
     let slug: String = r.project.slug.chars().take(name - 2).collect();
-    let mode = fact::effective(&r.project.skills, "mode").unwrap_or_default();
-    let blocked = !fact::gaps(&r.project.skills).is_empty();
     let mut segs = vec![
         spot(
             slug.clone(),
@@ -60,14 +49,6 @@ fn row(r: &HomeRow, name: usize) -> Vec<Seg> {
             Target::Project(r.project.slug.clone()),
         ),
         seg(" ".repeat(name - slug.chars().count()), style::dim()),
-        seg(
-            format!("{mode:<7}"),
-            if blocked {
-                style::alarm()
-            } else {
-                style::word("ready")
-            },
-        ),
     ];
     let Some(s) = &r.status else {
         let why = r.error.as_deref().unwrap_or("not read");

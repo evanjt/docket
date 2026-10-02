@@ -224,7 +224,7 @@ fn test_priority_takes_one_key_for_the_tier() {
     assert_eq!(verb, "priority");
     assert_eq!(
         (&body["ids"], &body["tier"]),
-        (&json!(["T3"]), &json!("high"))
+        (&json!(["A2"]), &json!("high"))
     );
 }
 
@@ -236,7 +236,7 @@ fn test_rate_sends_one_request_per_marked_row() {
     let (verb, body) = only(&a);
     assert_eq!(
         (verb.as_str(), &body["id"], &body["level"]),
-        ("rate", &json!("T3"), &json!("low"))
+        ("rate", &json!("A2"), &json!("low"))
     );
 
     let mut a = browse(Listing::Ties("PK1".into()));
@@ -264,7 +264,7 @@ fn test_link_acts_on_the_selection() {
     assert_eq!(verb, "link");
     assert_eq!(
         (&body["a"], &body["kind"], &body["b"]),
-        (&json!(["T3"]), &json!("related"), &json!("CON1"))
+        (&json!(["A2"]), &json!("related"), &json!("CON1"))
     );
 }
 
@@ -323,10 +323,9 @@ fn colour_of(a: &mut App<Fixture>, text: &str) -> Option<Color> {
 }
 
 #[test]
-fn test_settings_enter_edits_a_fact_in_place_and_it_stops_being_red() {
+fn test_settings_enter_edits_a_fact_in_place() {
     let mut a = app();
     settings_on(&mut a, "land");
-    assert_eq!(colour_of(&mut a, "  land  "), Some(Color::Red));
     press(&mut a, KeyCode::Enter);
     typed(&mut a, "make land");
     assert!(
@@ -348,7 +347,6 @@ fn test_settings_enter_edits_a_fact_in_place_and_it_stops_being_red() {
         "{}",
         all.join("\n")
     );
-    assert_ne!(colour_of(&mut a, "  land  "), Some(Color::Red));
     assert!(foot(&mut a).contains("set land"));
 }
 
@@ -367,7 +365,7 @@ fn test_settings_a_refused_value_is_named_under_the_fact_and_nothing_changes() {
         s.contains("refused: mode is one of run, drain, pause, not 'go'"),
         "{s}"
     );
-    assert_eq!(colour_of(&mut a, "  mode  "), Some(Color::Red));
+    assert_eq!(colour_of(&mut a, "refused: mode"), Some(Color::Red));
 }
 
 #[test]
@@ -401,7 +399,7 @@ fn test_palette_runs_a_verb_on_the_selected_row() {
     assert_eq!(verb, "close");
     assert_eq!(
         (&body["id"], &body["resolution"]),
-        (&json!("T3"), &json!("abc1234"))
+        (&json!("A2"), &json!("abc1234"))
     );
 }
 

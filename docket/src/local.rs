@@ -119,35 +119,6 @@ pub fn expand(root: &str, rel: &str) -> PathBuf {
     Path::new(root).join(rel)
 }
 
-/// This machine's cores, load and memory, from `/proc`.
-#[must_use]
-pub fn stats() -> Option<(u64, f64, u64, u64)> {
-    let mem = fs::read_to_string("/proc/meminfo").ok()?;
-    let field = |name: &str| {
-        mem.lines()
-            .find(|l| l.split(':').next() == Some(name))
-            .and_then(|l| l.split_whitespace().nth(1))
-            .and_then(|n| n.parse::<u64>().ok())
-    };
-    let load: f64 = fs::read_to_string("/proc/loadavg")
-        .ok()?
-        .split_whitespace()
-        .next()?
-        .parse()
-        .ok()?;
-    let cores = fs::read_to_string("/proc/cpuinfo")
-        .map_or(1, |t| {
-            t.lines().filter(|l| l.starts_with("processor")).count() as u64
-        })
-        .max(1);
-    Some((
-        cores,
-        load,
-        field("MemAvailable")? / 1024,
-        field("MemTotal")? / 1024,
-    ))
-}
-
 #[cfg(test)]
 #[path = "tests/local.rs"]
 mod tests;

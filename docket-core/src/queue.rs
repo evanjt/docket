@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use crate::like;
-use crate::member::Tie;
+use crate::member::{Tie, opened_under};
 use crate::word::Kind;
 
 /// The stored facts the ready queue filters and orders by; `tier` is the item's own, 0 for critical.
@@ -58,24 +58,33 @@ pub struct Filter<'a> {
     pub theme: Option<&'a str>,
 }
 
-/// The role an open item is taken by: a plan is audited once it has opened something, since it is
-/// in the queue only when all of that is closed.
-fn role_of(c: &Candidate, opened: &HashSet<i64>) -> Role {
+/// The role an open item is taken by. A plan that has opened something is due for its audit once
+/// everything it opened, at any depth, is closed; before that it belongs to no role.
+fn role_of(c: &Candidate, ties: &[Tie], open: &HashSet<i64>) -> Option<Role> {
     match c.kind {
-        Kind::Work => Role::Work,
-        Kind::Audit if opened.contains(&c.rid) => Role::Audit,
-        _ => Role::Plan,
+        Kind::Work => Some(Role::Work),
+        Kind::Audit => {
+            let under = opened_under(ties, c.rid);
+            if under.is_empty() {
+                Some(Role::Plan)
+            } else if under.is_disjoint(open) {
+                Some(Role::Audit)
+            } else {
+                None
+            }
+        }
+        _ => Some(Role::Plan),
     }
 }
 
-fn takeable(c: &Candidate, f: &Filter, opened: &HashSet<i64>) -> bool {
+fn takeable(c: &Candidate, f: &Filter, ties: &[Tie], open: &HashSet<i64>) -> bool {
     c.open
         && c.turn == Some("agent")
         && !c.claimed
         && !c.waiting
         && !c.conflict
         && !c.kind.is_read_only()
-        && f.role.is_none_or(|r| role_of(c, opened) == r)
+        && f.role.is_none_or(|r| role_of(c, ties, open) == Some(r))
         && f.under.is_none_or(|u| u.contains(&c.rid))
         && f.complexity.is_none_or(|x| c.complexity == Some(x))
         && f.key.is_none_or(|k| c.key == k)
@@ -86,10 +95,10 @@ fn takeable(c: &Candidate, f: &Filter, opened: &HashSet<i64>) -> bool {
 /// The queue an agent takes from, as `(rid, tier)`: most urgent first, then oldest first.
 #[must_use]
 pub fn next(items: &[Candidate], ties: &[Tie], filter: &Filter, limit: usize) -> Vec<(i64, usize)> {
-    let opened: HashSet<i64> = ties.iter().filter(|t| t.opened).map(|t| t.to).collect();
+    let open: HashSet<i64> = items.iter().filter(|c| c.open).map(|c| c.rid).collect();
     let mut rows: Vec<_> = items
         .iter()
-        .filter(|c| takeable(c, filter, &opened))
+        .filter(|c| takeable(c, filter, ties, &open))
         .filter(|c| filter.priority.is_none_or(|p| c.tier <= p))
         .collect();
     rows.sort_by_key(|c| (c.tier, c.opened_at, c.rid));
@@ -97,29 +106,6 @@ pub fn next(items: &[Candidate], ties: &[Tie], filter: &Filter, limit: usize) ->
         .take(limit)
         .map(|c| (c.rid, c.tier))
         .collect()
-}
-
-/// `(name, cut date)` from the release fact, or `None` when it is unset or carries no date.
-#[must_use]
-pub fn release_of(fact: Option<&str>) -> Option<(String, String)> {
-    let parts: Vec<&str> = fact.unwrap_or_default().split_whitespace().collect();
-    let (&cut, name) = parts.split_last()?;
-    if name.is_empty() || !is_date(cut) {
-        return None;
-    }
-    Some((name.join(" "), cut.to_string()))
-}
-
-fn is_date(text: &str) -> bool {
-    let b = text.as_bytes();
-    b.len() == 10
-        && b.iter().enumerate().all(|(i, c)| {
-            if i == 4 || i == 7 {
-                *c == b'-'
-            } else {
-                c.is_ascii_digit()
-            }
-        })
 }
 
 #[cfg(test)]

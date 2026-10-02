@@ -10,7 +10,6 @@ use serde_json::{Map, Value, json};
 
 use docket_core::clock::stamp;
 use docket_core::pace::epoch;
-use docket_core::queue::release_of;
 use docket_core::rules::GATE;
 use docket_core::word::{Kind, word};
 
@@ -19,7 +18,7 @@ use crate::reads::public::{Kinds, facts, open_members, sql};
 use crate::reads::rows::{marks, project_model, rows};
 use crate::store::{self, column, to_item};
 use crate::verbs::Failure;
-use crate::verbs::graph::{audits_over, live_overlaps, open_under, package_of, package_progress};
+use crate::verbs::graph::{audits_over, live_overlaps, open_under};
 
 #[derive(Deserialize)]
 pub struct InProject {
@@ -184,7 +183,6 @@ pub async fn problems(db: &DatabaseConnection, slug: &str) -> Result<Vec<Value>,
     out.extend(undefined_keys(db, slug, &project).await?);
     out.extend(database_checks(db).await?);
     out.extend(cycles(db, slug).await?);
-    out.extend(two_packages(db, slug, &project).await?);
     out.extend(audits_held(db, slug, &project).await?);
     let cutoff = stamp(now_secs().saturating_sub(30 * 86_400));
     let stale = rows(
@@ -308,56 +306,6 @@ async fn cycles(db: &DatabaseConnection, slug: &str) -> Result<Vec<Value>, Failu
         }
     }
     Ok(out)
-}
-
-#[derive(FromQueryResult)]
-struct Holder {
-    rid: i64,
-    id: String,
-    pid: String,
-}
-
-/// Items opened by more than one open package, by rid, each with its packages.
-async fn two_packages(
-    db: &DatabaseConnection,
-    slug: &str,
-    project: &store::ProjectRow,
-) -> Result<Vec<Value>, Failure> {
-    let mut pk = crate::verbs::graph::keys_of(project, &[Kind::Package]);
-    if pk.is_empty() {
-        return Ok(Vec::new());
-    }
-    pk.sort();
-    let mut values: Vec<sea_orm::Value> = vec![slug.into()];
-    values.extend(pk.iter().map(|k| k.clone().into()));
-    let found = Holder::find_by_statement(sql(
-        &format!(
-            "SELECT i.rid, i.id, p.id AS pid FROM links l JOIN items i ON i.rid=l.rid \
-             JOIN items p ON p.rid=l.to_rid WHERE i.project=? AND l.kind='opened' AND p.state='open' \
-             AND p.key IN ({}) ORDER BY i.rid, p.rid",
-            marks(pk.len())
-        ),
-        values,
-    ))
-    .all(db)
-    .await?;
-    let mut held: Vec<(i64, String, Vec<String>)> = Vec::new();
-    for h in found {
-        match held.last_mut() {
-            Some((rid, _, pkgs)) if *rid == h.rid => pkgs.push(h.pid),
-            _ => held.push((h.rid, h.id, vec![h.pid])),
-        }
-    }
-    Ok(held
-        .into_iter()
-        .filter(|(_, _, pkgs)| pkgs.len() > 1)
-        .map(|(_, id, pkgs)| {
-            problem(
-                "two_packages",
-                json!({ "id": id, "packages": pkgs.join(", ") }),
-            )
-        })
-        .collect())
 }
 
 async fn audits_held(
@@ -536,24 +484,13 @@ fn fact_int(model: &crate::entities::project::Model, key: &str, default: i64) ->
         .unwrap_or(default)
 }
 
-#[derive(FromQueryResult)]
-struct ClaimRow {
-    rid: i64,
-    id: String,
-    title: String,
-    claim_host: Option<String>,
-    claim_on: Option<String>,
-    claim_since: Option<String>,
-}
-
-/// What the status text reads beside the flow and the queue: the release, the themes held out, the
-/// last hour, the pace, the claims and their jobs, the packages under way and the check.
+/// What the status text reads beside the flow and the queue: the pace, the claims, the plans under
+/// way, the plans due for audit and the check.
 ///
 /// # Errors
 /// 404 for an unknown project.
 pub async fn summary(
     State(db): State<DatabaseConnection>,
-    Extension(caller): Extension<Caller>,
     Query(q): Query<InProject>,
 ) -> Result<Json<Value>, Failure> {
     let model = project_model(&db, &q.project).await?;
@@ -561,138 +498,12 @@ pub async fn summary(
     let now = i64::try_from(now_secs()).unwrap_or(0);
     Ok(Json(json!({
         "skills": model.skills,
-        "release": release(&db, &q.project, &model, &project, now).await?,
-        "held_themes": held_themes(&db, &q.project, &model).await?,
-        "hour": last_hour(&db, &q.project, now).await?,
         "pace": pace(&db, &q.project, &project, now).await?,
-        "busy": busy(&db, &caller.host).await?,
-        "running": running(&db, &q.project, &caller.host).await?,
-        "jobs": jobs(&db, &q.project, &model, &project).await?,
-        "claims": claims(&db, &q.project).await?,
-        "packages": packages(&db, &q.project, &project).await?,
+        "claims": claims(&db, &q.project, &model).await?,
+        "plans": plans(&db, &q.project, &project).await?,
+        "due": due(&db, &q.project, &project).await?,
         "problems": problems(&db, &q.project).await?,
     })))
-}
-
-async fn release(
-    db: &DatabaseConnection,
-    slug: &str,
-    model: &crate::entities::project::Model,
-    project: &store::ProjectRow,
-    now: i64,
-) -> Result<Value, Failure> {
-    let Some((name, cut)) = release_of(model.skills["release"].as_str()) else {
-        return Ok(Value::Null);
-    };
-    let mut themes: Vec<String> = declared_themes(model);
-    themes.sort();
-    let mut standing = crate::verbs::graph::keys_of(project, &[Kind::Concept, Kind::Idea]);
-    standing.sort();
-    let skip = if standing.is_empty() {
-        String::new()
-    } else {
-        format!(" AND key NOT IN ({})", marks(standing.len()))
-    };
-    let base = format!(
-        "FROM items WHERE project=? AND (theme IS NULL OR theme IN ({})){skip}",
-        marks(themes.len())
-    );
-    let mut args: Vec<sea_orm::Value> = vec![slug.into()];
-    args.extend(themes.iter().map(|t| t.clone().into()));
-    args.extend(standing.iter().map(|k| k.clone().into()));
-    let count = async |tail: &str, extra: Option<String>| -> Result<i64, Failure> {
-        let mut values = args.clone();
-        values.extend(extra.map(Into::into));
-        let text = format!("SELECT COUNT(*) AS n {base} {tail}");
-        Ok(store::scalar::<_, i64>(db, &text, values)
-            .await?
-            .unwrap_or_default())
-    };
-    let closed =
-        "AND state='done' AND rid IN (SELECT rid FROM events WHERE kind='closed' AND at >= ?)";
-    let day = stamp(u64::try_from(now - 86_400).unwrap_or(0));
-    Ok(json!({
-        "name": name,
-        "cut": cut,
-        "open": count("AND state='open'", None).await?,
-        "since_cut": count(closed, Some(cut.clone())).await?,
-        "last_day": count(closed, Some(day)).await?,
-    }))
-}
-
-fn declared_themes(model: &crate::entities::project::Model) -> Vec<String> {
-    model
-        .themes
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|t| t["name"].as_str().map(str::to_string))
-        .collect()
-}
-
-async fn held_themes(
-    db: &DatabaseConnection,
-    slug: &str,
-    model: &crate::entities::project::Model,
-) -> Result<Value, Failure> {
-    let declared = declared_themes(model);
-    let themes: Vec<String> = column(
-        db,
-        "SELECT theme FROM items WHERE project=? AND state='open' AND theme IS NOT NULL",
-        vec![slug.into()],
-    )
-    .await?;
-    let mut counts: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
-    for t in themes.into_iter().filter(|t| !declared.contains(t)) {
-        *counts.entry(t).or_default() += 1;
-    }
-    Ok(json!(counts.into_iter().collect::<Vec<_>>()))
-}
-
-#[derive(FromQueryResult)]
-struct HourEvent {
-    kind: String,
-    at: String,
-    data: Option<Value>,
-}
-
-/// The tickets observed by fleet jobs and the tickets closed in the last hour.
-async fn last_hour(db: &DatabaseConnection, slug: &str, now: i64) -> Result<Value, Failure> {
-    let hour = stamp(u64::try_from(now - 3600).unwrap_or(0));
-    let today = stamp(u64::try_from(now).unwrap_or(0))[..10].to_string();
-    let from = if hour < today { hour.clone() } else { today };
-    let evs = HourEvent::find_by_statement(sql(
-        "SELECT kind, at, data FROM events WHERE project=? AND at >= ? AND kind IN ('opened', 'closed', 'claimed')",
-        vec![slug.into(), from.into()],
-    ))
-    .all(db)
-    .await?;
-    let observed = evs
-        .iter()
-        .filter(|e| e.kind == "opened" && e.at >= hour)
-        .filter(|e| {
-            e.data
-                .as_ref()
-                .and_then(|d| d.get("observed_by"))
-                .is_some_and(truthy)
-        })
-        .count();
-    let closed = evs
-        .iter()
-        .filter(|e| e.kind == "closed" && e.at >= hour)
-        .count();
-    Ok(json!({ "observed": observed, "closed": closed }))
-}
-
-fn truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::String(s) => !s.is_empty(),
-        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
-    }
 }
 
 #[derive(FromQueryResult)]
@@ -739,136 +550,57 @@ async fn pace(
     Ok(json!({ "closed": p.closed, "working": p.working }))
 }
 
-/// `{build host: jobs running there}` for every job the caller's host dispatched, in any project.
-async fn busy(db: &DatabaseConnection, host: &str) -> Result<Value, Failure> {
-    let on: Vec<Option<String>> = column(
-        db,
-        "SELECT claim_on FROM items WHERE state='open' AND claim_job IS NOT NULL AND claim_host=?",
-        vec![host.into()],
-    )
-    .await?;
-    let mut out: Map<String, Value> = Map::new();
-    for h in on {
-        let h = h.unwrap_or_else(|| "local".to_string());
-        let n = out.get(&h).and_then(Value::as_u64).unwrap_or(0);
-        out.insert(h, json!(n + 1));
-    }
-    Ok(Value::Object(out))
-}
-
-async fn running(db: &DatabaseConnection, slug: &str, host: &str) -> Result<i64, Failure> {
-    Ok(store::scalar::<_, i64>(
-        db,
-        "SELECT COUNT(*) FROM items WHERE project=? AND state='open' AND claim_job IS NOT NULL AND claim_host=?",
-        vec![slug.into(), host.into()],
-    )
-    .await?
-    .unwrap_or(0))
-}
-
-/// Every claim in the project, oldest first, with its role, model, build host, flag and package.
-async fn jobs(
+/// Every claim in the project, oldest first: its branch, the host it was claimed on, since when, and
+/// a flag when nothing has moved on it for longer than `stale_claim`.
+async fn claims(
     db: &DatabaseConnection,
     slug: &str,
     model: &crate::entities::project::Model,
-    project: &store::ProjectRow,
 ) -> Result<Value, Failure> {
-    let text = "SELECT * FROM items WHERE project=? AND claim_branch IS NOT NULL ORDER BY claim_since, rid";
-    let claims = ClaimRow::find_by_statement(sql(text, vec![slug.into()]))
-        .all(db)
-        .await?;
+    let text = "SELECT * FROM items WHERE project=? AND state='open' AND claim_branch IS NOT NULL \
+                ORDER BY claim_since, rid";
     let claimed = rows(db, text, vec![slug.into()]).await?;
     let flags = idle_flags(db, slug, model, &claimed).await?;
-    let mut out = Vec::new();
-    for c in claims {
-        let data: Option<Value> = store::scalar(
-            db,
-            "SELECT data FROM events WHERE rid=? AND kind='claimed' ORDER BY at DESC, seq DESC LIMIT 1",
-            vec![c.rid.into()],
-        )
-        .await?
-        .flatten();
-        let d = match data {
-            Some(Value::Object(m)) => m,
-            _ => Map::new(),
-        };
-        let host = c
-            .claim_on
-            .clone()
-            .filter(|h| !h.is_empty())
-            .unwrap_or_else(|| {
-                c.claim_host
-                    .clone()
-                    .unwrap_or_default()
-                    .split('.')
-                    .next()
-                    .unwrap_or_default()
-                    .to_string()
-            });
-        let pkg = package_of(db, project, c.rid).await?.map(|p| p.id);
-        out.push(json!({
-            "id": c.id, "title": c.title,
-            "role": d.get("role").filter(|v| truthy(v)).cloned().unwrap_or(json!("build")),
-            "host": host, "model": d.get("model"), "since": c.claim_since.as_deref().and_then(epoch),
-            "flag": flags.get(&c.rid), "package": pkg,
-        }));
-    }
-    Ok(Value::Array(out))
-}
-
-/// Every claim's id and when it was made, in the order the stalled list reads them.
-async fn claims(db: &DatabaseConnection, slug: &str) -> Result<Value, Failure> {
-    let found = ClaimRow::find_by_statement(sql(
-        "SELECT * FROM items WHERE project=? AND state='open' AND claim_branch IS NOT NULL ORDER BY rid",
-        vec![slug.into()],
-    ))
-    .all(db)
-    .await?;
     Ok(json!(
-        found
-            .into_iter()
-            .map(|c| json!({ "id": c.id, "since": c.claim_since.as_deref().and_then(epoch) }))
+        claimed
+            .iter()
+            .map(|c| {
+                let host = c.claim_host.as_deref().unwrap_or_default();
+                json!({
+                    "id": c.id, "title": c.title, "branch": c.claim_branch,
+                    "host": host.split('.').next().unwrap_or_default(),
+                    "since": c.claim_since.as_deref().and_then(epoch),
+                    "flag": flags.get(&c.rid),
+                })
+            })
             .collect::<Vec<_>>()
     ))
 }
 
-/// Open packages under way, those with claims first, then the nearest done.
-async fn packages(
+/// Open plans that opened anything: done, total and claimed of all they opened at any depth, those
+/// being worked first, then the nearest done.
+async fn plans(
     db: &DatabaseConnection,
     slug: &str,
     project: &store::ProjectRow,
 ) -> Result<Value, Failure> {
-    let pk = crate::verbs::graph::keys_of(project, &[Kind::Package]);
-    if pk.is_empty() {
-        return Ok(json!([]));
-    }
-    let mut pk_sorted = pk.clone();
-    pk_sorted.sort();
-    let mut values: Vec<sea_orm::Value> = vec![slug.into()];
-    values.extend(pk_sorted.iter().map(|k| k.clone().into()));
-    let found = rows(
-        db,
-        &format!(
-            "SELECT * FROM items WHERE project=? AND state='open' AND key IN ({}) ORDER BY rid",
-            vec!["?"; pk_sorted.len()].join(",")
-        ),
-        values,
-    )
-    .await?;
     let mut out: Vec<(String, String, usize, usize, usize)> = Vec::new();
-    for p in found {
-        let pr = package_progress(db, p.rid).await?;
-        if pr.total > 0 && (pr.live > 0 || pr.done > 0) {
-            out.push((p.id, p.title, pr.done, pr.total, pr.live));
+    for p in open_plans(db, slug, project).await? {
+        let mut g = (0, 0, 0);
+        for rid in crate::verbs::graph::opened_under(db, p.rid).await? {
+            if let Some(m) = store::by_rid(db, rid).await? {
+                g.0 += usize::from(m.state != "open");
+                g.1 += 1;
+                g.2 += usize::from(m.claim_branch.is_some());
+            }
+        }
+        if g.1 > 0 {
+            out.push((p.id, p.title, g.0, g.1, g.2));
         }
     }
-    #[allow(clippy::cast_precision_loss)]
     out.sort_by(|a, b| {
-        let ra = a.2 as f64 / a.3 as f64;
-        let rb = b.2 as f64 / b.3 as f64;
-        b.4.cmp(&a.4)
-            .then(rb.total_cmp(&ra))
-            .then((a.3 - a.2).cmp(&(b.3 - b.2)))
+        let near = |x: &(String, String, usize, usize, usize)| x.2 * 1000 / x.3;
+        (b.4, near(b), a.3 - a.2, &a.0).cmp(&(a.4, near(a), b.3 - b.2, &b.0))
     });
     Ok(json!(
         out.into_iter()
@@ -877,6 +609,49 @@ async fn packages(
             }))
             .collect::<Vec<_>>()
     ))
+}
+
+/// Plans due for audit: open, nobody's claim, waiting on nothing, and everything they opened, at any
+/// depth, closed.
+async fn due(
+    db: &DatabaseConnection,
+    slug: &str,
+    project: &store::ProjectRow,
+) -> Result<Value, Failure> {
+    let mut out = Vec::new();
+    for p in open_plans(db, slug, project).await? {
+        if p.claim_branch.is_some() || p.wait_on.is_some() || p.turn.as_deref() != Some("agent") {
+            continue;
+        }
+        let opened = crate::verbs::graph::opened_under(db, p.rid).await?;
+        if !opened.is_empty() && open_under(db, p.rid).await?.is_empty() {
+            out.push(json!({ "id": p.id, "title": p.title }));
+        }
+    }
+    Ok(json!(out))
+}
+
+async fn open_plans(
+    db: &DatabaseConnection,
+    slug: &str,
+    project: &store::ProjectRow,
+) -> Result<Vec<docket_core::item::Item>, Failure> {
+    let mut keys = crate::verbs::graph::keys_of(project, &[Kind::Audit]);
+    if keys.is_empty() {
+        return Ok(Vec::new());
+    }
+    keys.sort();
+    let mut values: Vec<sea_orm::Value> = vec![slug.into()];
+    values.extend(keys.iter().map(|k| k.clone().into()));
+    Ok(store::items(
+        db,
+        &format!(
+            "SELECT * FROM items WHERE project=? AND state='open' AND key IN ({}) ORDER BY key, num",
+            marks(keys.len())
+        ),
+        values,
+    )
+    .await?)
 }
 
 #[cfg(test)]

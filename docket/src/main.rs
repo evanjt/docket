@@ -5,6 +5,7 @@ mod cmd;
 mod ctx;
 mod fail;
 mod http;
+mod job;
 mod local;
 mod py;
 mod row;
@@ -62,8 +63,22 @@ fn main() -> ExitCode {
         );
         return ExitCode::from(2);
     }
-    let code = Ctx::new(cli.json, cli.project.clone(), cli.branch.clone())
-        .and_then(|mut ctx| cmd::run(&mut ctx, cli.cmd.as_ref()));
+    if let Some(Cmd::Job { what }) = &cli.cmd {
+        let flags = cmd::job::Flags {
+            json: cli.json,
+            project: cli.project.clone(),
+            branch: cli.branch.clone(),
+        };
+        return finish(cmd::job::job(&flags, what));
+    }
+    finish(
+        Ctx::new(cli.json, cli.project.clone(), cli.branch.clone())
+            .and_then(|mut ctx| cmd::run(&mut ctx, cli.cmd.as_ref())),
+    )
+}
+
+/// The exit code a command ends on, with its refusal on stderr.
+fn finish(code: fail::Result<i32>) -> ExitCode {
     match code {
         Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
         Err(Fail::Refused(text)) => {

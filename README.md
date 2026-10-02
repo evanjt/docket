@@ -83,6 +83,26 @@ and `~/.agents/skills` and removes the skills they replace, after listing each c
 (`--yes` with no terminal; `docket skills diff` only lists). `docket instructions install` puts the
 short docket block, `skills/docket-block.md`, into the AGENTS.md at the project's root the same way.
 
+## Jobs
+
+A lead claims an item and starts a job for it on a machine, locally or over ssh, once the job's
+branch is in that machine's checkout of the project:
+
+```bash
+docket -p OWNER/REPO --branch lead/t14-123 job run --id T14 --runner claude --model MODEL --effort high --role build
+docket job status            # every job here: running, done, failed or lost, and its report
+docket job log lead-t14-123  # the last lines of its event stream
+docket job kill lead-t14-123 # stops its whole process group
+```
+
+`run` adds a worktree beside the checkout on that branch, writes the role's brief from `skills/job/`
+(build, audit or plan) and starts `claude -p` or `codex exec` headless in a process group of its own,
+then returns. The job's directory under `$XDG_STATE_HOME/docket/jobs` (or `DOCKET_JOB_STATE`) holds
+`meta.json`, the brief, the event stream, the pid and the exit code. A job builds and commits on its
+branch and ends its final message with `DONE <sha>`, `WAITING Q<n>` or `FAILED <reason>`; `docket`
+refuses `start`, `release`, `close`, `drop` and `reopen` inside one (`DOCKET_JOB` set), which are
+the lead's. `DOCKET_JOB_RUNNER_CLAUDE` and `DOCKET_JOB_RUNNER_CODEX` replace the program run.
+
 ## Keys
 
 The keys file has one line per key, `host role key`, where role is `owner` or `agent`. The host is

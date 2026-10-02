@@ -10,6 +10,7 @@ const RUNNERS: [&str; 3] = ["codex", "claude", "remote"];
 const ROLES: [&str; 4] = ["build", "rebase", "review", "plan"];
 const WAITS: [&str; 2] = ["item", "condition"];
 const QUEUE_ROLES: [&str; 3] = ["plan", "work", "audit"];
+const JOB_ROLES: [&str; 3] = ["build", "audit", "plan"];
 const KINDS: [&str; 8] = [
     "work", "decision", "research", "audit", "story", "concept", "idea", "package",
 ];
@@ -397,10 +398,45 @@ pub enum Cmd {
     },
     /// give an item the loop parked or sent back a fresh start
     Retry { id: String, note: Option<String> },
+    /// a job under a lead on this machine: run one, list them, stop one, read its events
+    Job {
+        #[command(subcommand)]
+        what: JobCmd,
+    },
     /// bind this directory to a project by hand
     Bind {
         slug: Option<String>,
         #[arg(long)]
         root: Option<String>,
+    },
+}
+
+/// `docket job`: the jobs a lead starts on this machine, here or over ssh.
+#[derive(Subcommand, Debug)]
+pub enum JobCmd {
+    /// start a job for -p SLUG on --branch NAME, which the lead pushed to this machine's checkout:
+    /// a worktree beside the checkout, the brief, and the session detached
+    Run {
+        /// the item the job works
+        #[arg(long)]
+        id: String,
+        #[arg(long, value_parser = crate::job::RUNNERS)]
+        runner: String,
+        #[arg(long)]
+        model: String,
+        #[arg(long)]
+        effort: Option<String>,
+        #[arg(long, value_parser = JOB_ROLES, default_value = "build")]
+        role: String,
+    },
+    /// every job on this machine, or the one named: running, done, failed or lost, and its report
+    Status { job: Option<String> },
+    /// stop a job's whole process group
+    Kill { job: String },
+    /// the last lines of a job's event stream
+    Log {
+        job: String,
+        #[arg(short = 'n', long, default_value_t = 20)]
+        n: usize,
     },
 }

@@ -2,6 +2,7 @@
 
 pub mod audit;
 pub mod instructions;
+pub mod job;
 pub mod lists;
 pub mod show;
 pub mod skills;

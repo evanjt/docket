@@ -63,16 +63,15 @@ pub fn read_body(spec: Option<&String>) -> Result<Option<String>> {
         .map_err(|e| Fail::refused(format!("{spec}: {e}")))
 }
 
-/// A fleet job reports what it found and never files it: the loop files observations as low-priority tickets.
+/// A job under a lead files what it finds and builds its ticket, and leaves the lead's verbs (claim,
+/// release, close, drop, reopen) to the lead.
 ///
 /// # Errors
-/// `DOCKET_JOB` names the fleet job this runs in.
+/// `DOCKET_JOB` names the job this runs in, and the verb is the lead's.
 pub fn refuse_in_job(verb: &str) -> Result<()> {
-    match std::env::var("DOCKET_JOB").ok().filter(|j| !j.is_empty()) {
-        Some(job) => Err(Fail::refused(format!(
-            "docket {verb} is refused inside a fleet job ({job}). Put what you found under Observations \
-             in your report; the loop files it as a low-priority ticket."
-        ))),
+    let job = std::env::var("DOCKET_JOB").ok();
+    match crate::job::refusal(verb, job.as_deref()) {
+        Some(why) => Err(Fail::refused(why)),
         None => Ok(()),
     }
 }
@@ -89,9 +88,8 @@ pub struct New<'a> {
 }
 
 /// # Errors
-/// Inside a fleet job, or the server refuses.
+/// The server refuses.
 pub fn new(ctx: &mut Ctx, n: &New) -> Result<i32> {
-    refuse_in_job("new")?;
     let common = ctx.common(false)?;
     let body = read_body(n.body)?;
     let req = NewRequest {
@@ -149,7 +147,7 @@ fn opened(ctx: &Ctx, out: &Opened, body: Option<&str>) {
 }
 
 /// # Errors
-/// Inside a fleet job, or the server refuses.
+/// The server refuses.
 pub fn add(
     ctx: &mut Ctx,
     title: &str,
@@ -158,7 +156,6 @@ pub fn add(
     from: Option<&String>,
 ) -> Result<i32> {
     let common = ctx.common(false)?;
-    refuse_in_job("new")?;
     let body = read_body(body)?;
     let req = AddRequest {
         common,
@@ -173,8 +170,9 @@ pub fn add(
 }
 
 /// # Errors
-/// The server refuses the claim.
+/// Inside a job, or the server refuses the claim.
 pub fn start(ctx: &mut Ctx, req: &StartRequest) -> Result<i32> {
+    refuse_in_job("start")?;
     let out: Started = ctx.api.post("start", req)?;
     print_item(ctx, &out.item);
     if ctx.json {
@@ -215,8 +213,9 @@ pub fn start(ctx: &mut Ctx, req: &StartRequest) -> Result<i32> {
 }
 
 /// # Errors
-/// The server refuses.
+/// Inside a job, or the server refuses.
 pub fn release(ctx: &mut Ctx, req: &ReleaseRequest) -> Result<i32> {
+    refuse_in_job("release")?;
     let out: Moved = ctx.api.post("release", req)?;
     print_item(ctx, &out.item);
     Ok(0)
@@ -262,8 +261,10 @@ pub struct Close<'a> {
 /// none is given. Then the close.
 ///
 /// # Errors
-/// The repository is mid-merge or mid-rebase, no resolution is found, or the server refuses.
+/// Inside a job, the repository is mid-merge or mid-rebase, no resolution is found, or the server
+/// refuses.
 pub fn close(ctx: &mut Ctx, c: &Close) -> Result<i32> {
+    refuse_in_job("close")?;
     let slug = ctx.project()?;
     let item = id(c.id)?;
     let v = ctx.read(&format!("/show/{item}"), &[])?;
@@ -315,8 +316,9 @@ pub fn close(ctx: &mut Ctx, c: &Close) -> Result<i32> {
 }
 
 /// # Errors
-/// The server refuses.
+/// Inside a job, or the server refuses.
 pub fn drop(ctx: &mut Ctx, req: &DropRequest) -> Result<i32> {
+    refuse_in_job("drop")?;
     let out: Dropped = ctx.api.post("drop", req)?;
     print_item(ctx, &out.item);
     print_released(ctx, &out.released);
@@ -326,8 +328,9 @@ pub fn drop(ctx: &mut Ctx, req: &DropRequest) -> Result<i32> {
 /// `reopen`, `wait`, `resume`, `reply`, `decide`, `rate` and `edit`: one row moved.
 ///
 /// # Errors
-/// The server refuses.
+/// Inside a job for `reopen`, or the server refuses.
 pub fn moved(ctx: &mut Ctx, verb: &str, req: &impl serde::Serialize) -> Result<i32> {
+    refuse_in_job(verb)?;
     let out: Moved = ctx.api.post(verb, req)?;
     print_item(ctx, &out.item);
     Ok(0)

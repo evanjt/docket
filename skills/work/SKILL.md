@@ -141,6 +141,16 @@ that stops the work, or is critical, gets `docket new B` at its own priority.
 Never weaken a test to avoid a question. Never quote a document as evidence:
 re-read the working tree and cite `file:line`.
 
+## Under a lead
+
+A lead may run the same queue: it claims each ticket itself and starts a job
+for it with `docket job run`. A job follows the brief it was started with,
+not this skill: it builds and commits on the branch it was given, never
+claims, merges or closes, and ends with a one-line report the lead reads.
+`docket` refuses `start`, `release`, `close`, `drop` and `reopen` inside a
+job. Beside a lead, take only what `docket next --role work` still offers;
+the claims keep the two apart.
+
 ## When you are done
 
 Say `stop`. No report and no summary of what was worked: the docket holds it.

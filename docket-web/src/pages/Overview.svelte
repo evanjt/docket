@@ -347,9 +347,22 @@
 
   .release {
     display: grid;
-    grid-template-columns: minmax(4ch, auto) 7ch minmax(0, 1fr) auto;
+    grid-template-columns: minmax(4ch, auto) minmax(0, 1fr) auto;
+    grid-template-areas: 'name state bar' 'counts counts counts';
     align-items: baseline;
-    gap: 4px 10px;
+    gap: 2px 10px;
+  }
+
+  .release .name {
+    grid-area: name;
+  }
+
+  .release .state {
+    grid-area: state;
+  }
+
+  .release .progress {
+    grid-area: bar;
   }
 
   .release .name {
@@ -358,9 +371,7 @@
   }
 
   .release .counts {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    grid-area: counts;
     font-size: 12.5px;
   }
 

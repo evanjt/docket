@@ -206,7 +206,7 @@
       {#each shown as r (r.id)}
         <ItemRow row={r} href={withParams({ i: r.id })} selected={r.id === selected} marked={marks.has(r.id)}
           onmark={() => toggle(r.id)} aside={r.aside}
-          release={r.release && r.release !== ctx.releases[0] ? r.release : undefined} />
+          release={!release && r.release && r.release !== ctx.releases[0] ? r.release : undefined} />
       {/each}
     </ul>
   </div>

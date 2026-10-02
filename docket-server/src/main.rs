@@ -7,7 +7,8 @@ use docket_server::auth::Keys;
 use docket_server::{connect, import, migrate, serve};
 
 /// The docket server over the Postgres database `DATABASE_URL` names. It applies any migration the
-/// database lacks before it listens on `DOCKET_LISTEN`, with the keys in the file `DOCKET_KEYS`.
+/// database lacks before it listens on `DOCKET_LISTEN`, with the keys in the file `DOCKET_KEYS`, and
+/// serves the web client at `/ui/` from the directory `DOCKET_WEB` when it is set.
 #[derive(Parser)]
 #[command(name = "docket-server", version)]
 struct Args {
@@ -36,12 +37,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let keys = Keys::parse(&std::fs::read_to_string(env::var("DOCKET_KEYS")?)?)?;
     let listen = env::var("DOCKET_LISTEN").unwrap_or_else(|_| "127.0.0.1:7878".to_string());
+    let web = env::var_os("DOCKET_WEB").map(std::path::PathBuf::from);
+    if let Some(dir) = web.as_ref().filter(|d| !d.join("index.html").is_file()) {
+        return Err(format!("DOCKET_WEB is {}, which holds no index.html", dir.display()).into());
+    }
     let listener = tokio::net::TcpListener::bind(&listen).await?;
     println!(
         "docket-server listening on {listen} (clients reach it at the server in their client config, \
          through Traefik in compose); {ready}"
     );
-    serve(listener, &db, keys, stop_signal()?).await?;
+    if let Some(dir) = &web {
+        println!(
+            "docket-server: the web client at /ui/, from {}",
+            dir.display()
+        );
+    }
+    serve(listener, &db, keys, web.as_deref(), stop_signal()?).await?;
     db.close().await?;
     println!("docket-server stopped");
     Ok(())

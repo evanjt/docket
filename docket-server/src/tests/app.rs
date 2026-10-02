@@ -165,7 +165,7 @@ async fn test_serve_returns_promptly_with_a_change_stream_open() {
     let keys = Keys::parse("devbox agent secret").unwrap();
     let db = s.db.clone();
     let served = tokio::spawn(async move {
-        serve(listener, &db, keys, async {
+        serve(listener, &db, keys, None, async {
             stopped.await.ok();
         })
         .await
@@ -182,4 +182,70 @@ async fn test_serve_returns_promptly_with_a_change_stream_open() {
     let ended = tokio::time::timeout(std::time::Duration::from_secs(3), served).await;
     assert!(ended.is_ok(), "the server waited on the open change stream");
     ended.unwrap().unwrap().unwrap();
+}
+
+/// A directory holding a built page and one asset, removed when dropped.
+struct Built(std::path::PathBuf);
+
+impl Built {
+    fn new(name: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("docket-web-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("assets")).unwrap();
+        std::fs::write(dir.join("index.html"), "<p>page</p>").unwrap();
+        std::fs::write(dir.join("assets/app.js"), "let a = 1;").unwrap();
+        Self(dir)
+    }
+}
+
+impl Drop for Built {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0).ok();
+    }
+}
+
+async fn fetch(app: Router, uri: &str, key: Option<&str>) -> (StatusCode, String) {
+    let mut req = Request::builder().uri(uri);
+    if let Some(key) = key {
+        req = req.header(AUTHORIZATION, format!("Bearer {key}"));
+    }
+    let resp = app.oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+    let status = resp.status();
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
+#[tokio::test]
+async fn test_web_client_serves_the_page_and_its_routes_without_a_key() {
+    let built = Built::new("routes");
+    let web = web_client(&built.0);
+    assert_eq!(
+        fetch(web.clone(), "/ui/", None).await,
+        (StatusCode::OK, "<p>page</p>".into())
+    );
+    assert_eq!(
+        fetch(web.clone(), "/ui/assets/app.js", None).await,
+        (StatusCode::OK, "let a = 1;".into())
+    );
+    assert_eq!(
+        fetch(web.clone(), "/ui/o/p/work?i=T1", None).await,
+        (StatusCode::OK, "<p>page</p>".into())
+    );
+    let (status, _) = fetch(web, "/", None).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+}
+
+#[tokio::test]
+async fn test_web_client_leaves_every_route_behind_its_key() {
+    let built = Built::new("keyed");
+    let (app, _db) = seeded().await;
+    let app = app.merge(web_client(&built.0));
+    assert_eq!(
+        fetch(app.clone(), "/projects", None).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        fetch(app.clone(), "/projects", Some("secret")).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(fetch(app, "/ui/", None).await.0, StatusCode::OK);
 }

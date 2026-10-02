@@ -11,14 +11,17 @@ mod store;
 mod verbs;
 
 use std::future::Future;
+use std::path::Path;
 use std::sync::Arc;
 
 use axum::Router;
 use axum::middleware::from_fn_with_state;
+use axum::response::Redirect;
 use axum::routing::get;
 use sea_orm::{ConnectOptions, Database, DatabaseConnection, DbBackend, DbErr};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
+use tower_http::services::{ServeDir, ServeFile};
 use utoipa_axum::router::OpenApiRouter;
 
 use crate::auth::{Keys, require_key};
@@ -50,7 +53,7 @@ pub fn app(db: &DatabaseConnection, keys: Keys) -> Router {
 }
 
 /// The routes served until `stop` resolves, then every request in flight finished and every change
-/// stream ended.
+/// stream ended. With `web`, the web client's files are served beside them.
 ///
 /// # Errors
 /// The listener fails.
@@ -58,6 +61,7 @@ pub async fn serve(
     listener: TcpListener,
     db: &DatabaseConnection,
     keys: Keys,
+    web: Option<&Path>,
     stop: impl Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
     let (stopping, watched) = watch::channel(false);
@@ -65,9 +69,23 @@ pub async fn serve(
         stop.await;
         stopping.send_replace(true);
     };
-    axum::serve(listener, routes(db, keys, watched))
+    let mut app = routes(db, keys, watched);
+    if let Some(dir) = web {
+        app = app.merge(web_client(dir));
+    }
+    axum::serve(listener, app)
         .with_graceful_shutdown(shutdown)
         .await
+}
+
+/// The web client built in `dir`, at `/ui/`, with `/` sent there. No key is asked: the files hold no
+/// data, and every request the page makes carries the key typed into it. A path that names no file is
+/// answered with the page, which routes it.
+pub fn web_client(dir: &Path) -> Router {
+    let files = ServeDir::new(dir).fallback(ServeFile::new(dir.join("index.html")));
+    Router::new()
+        .nest_service("/ui", files)
+        .route("/", get(|| async { Redirect::to("/ui/") }))
 }
 
 fn routes(db: &DatabaseConnection, keys: Keys, stopping: watch::Receiver<bool>) -> Router {

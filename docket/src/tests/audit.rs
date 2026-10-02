@@ -45,3 +45,20 @@ fn test_breakdown_lines_for_a_package_and_a_concept() {
         ]
     );
 }
+
+#[test]
+fn test_sections_are_found_by_word_and_open_counts_the_flow_words() {
+    let rows: Vec<Value> = [
+        "ready", "blocked", "blocked", "parked", "standing", "done", "dropped",
+    ]
+    .iter()
+    .enumerate()
+    .map(|(i, w)| serde_json::json!({"id": format!("T{i}"), "word": w}))
+    .collect();
+    let sections = sections_of(&rows);
+    assert_eq!(section(&sections, "done").len(), 1);
+    assert_eq!(section(&sections, "done")[0]["id"], "T5");
+    assert_eq!(section(&sections, "blocked").len(), 2);
+    assert_eq!(open_count(&sections), 4);
+    assert!(section(&sections, "inbox").is_empty());
+}

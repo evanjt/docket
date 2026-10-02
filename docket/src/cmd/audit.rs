@@ -17,6 +17,41 @@ const SECTIONS: [&str; 8] = [
     "ready", "building", "checking", "blocked", "parked", "standing", "done", "dropped",
 ];
 
+/// The words that are not open: standing for good, or closed.
+const NOT_OPEN: [&str; 3] = ["standing", "done", "dropped"];
+
+/// The rows under each of the words, in the order the sections are printed.
+#[must_use]
+pub fn sections_of(rows: &[Value]) -> Vec<(&'static str, Vec<&Value>)> {
+    let mut sections: Vec<(&str, Vec<&Value>)> =
+        SECTIONS.iter().map(|k| (*k, Vec::new())).collect();
+    for r in rows {
+        if let Some((_, list)) = sections.iter_mut().find(|(k, _)| r["word"] == *k) {
+            list.push(r);
+        }
+    }
+    sections
+}
+
+/// The rows under one word; none for a word the sections do not hold.
+#[must_use]
+pub fn section<'a, 'b>(sections: &'a [(&str, Vec<&'b Value>)], word: &str) -> &'a [&'b Value] {
+    sections
+        .iter()
+        .find(|(k, _)| *k == word)
+        .map_or(&[], |(_, v)| v.as_slice())
+}
+
+/// How many rows are open: every word but standing, done and dropped.
+#[must_use]
+pub fn open_count(sections: &[(&str, Vec<&Value>)]) -> usize {
+    sections
+        .iter()
+        .filter(|(k, _)| !NOT_OPEN.contains(k))
+        .map(|(_, v)| v.len())
+        .sum()
+}
+
 static SHA: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b([0-9a-f]{7,40})\b").unwrap());
 
 /// The shas a resolution names.
@@ -109,14 +144,11 @@ pub fn audit(ctx: &mut Ctx, t: &Target) -> Result<i32> {
     )?;
     let project = ctx.project_row(&slug)?;
     let rows = a["rows"].as_array().cloned().unwrap_or_default();
-    let mut sections: Vec<(&str, Vec<&Value>)> =
-        SECTIONS.iter().map(|k| (*k, Vec::new())).collect();
-    for r in &rows {
-        if let Some((_, list)) = sections.iter_mut().find(|(k, _)| r["word"] == *k) {
-            list.push(r);
-        }
-    }
-    let done: Vec<Value> = sections[8].1.iter().map(|r| (*r).clone()).collect();
+    let sections = sections_of(&rows);
+    let done: Vec<Value> = section(&sections, "done")
+        .iter()
+        .map(|r| (*r).clone())
+        .collect();
     let (head, known) = commits(&repo_dirs(ctx, &slug, &project));
     let (off_head, nowhere) = unreachable(&done, &head, &known);
     let breakdown = breakdown_lines(&a["breakdown"]);
@@ -234,7 +266,7 @@ impl Report<'_> {
 
     fn json(&self) -> Py {
         let target = &self.a["target"];
-        let blocked = &self.sections[4].1;
+        let blocked = section(self.sections, "blocked");
         let principles = self
             .principles()
             .into_iter()
@@ -304,7 +336,7 @@ impl Report<'_> {
 
     fn print(&self, head: &str) {
         let target = &self.a["target"];
-        let open: usize = self.sections[..7].iter().map(|(_, v)| v.len()).sum();
+        let open = open_count(self.sections);
         let shown = target["word"]
             .as_str()
             .map_or(String::new(), |w| format!(", {w}"));

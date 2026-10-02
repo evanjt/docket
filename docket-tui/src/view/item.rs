@@ -5,10 +5,10 @@ use docket_core::pace::{duration, epoch};
 use docket_core::rows::{EventRow, Row, Shown};
 use ratatui::style::Style;
 
-use crate::board::Board;
 use crate::doc::{Doc, Listing, Seg, Target, linked, seg, spot, wrap};
 use crate::page::{Detail, Queue};
 use crate::style;
+use docket_core::board::Board;
 
 /// The log's newest moves shown, edits left out.
 const LOG_ROWS: usize = 15;

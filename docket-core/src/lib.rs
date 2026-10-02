@@ -1,6 +1,7 @@
 //! The rules of a docket, free of any database or transport.
 
 pub mod api;
+pub mod board;
 pub mod clock;
 pub mod dump;
 pub mod fact;

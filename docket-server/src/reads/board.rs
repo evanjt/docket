@@ -1,6 +1,6 @@
 //! A project at a glance: the caller, every project's counts, the flow, the check, the graph, the claims.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use axum::Json;
 use axum::extract::{Extension, Query, State};
@@ -8,14 +8,17 @@ use sea_orm::{DatabaseConnection, FromQueryResult};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
+use docket_core::board::Board;
 use docket_core::clock::stamp;
+use docket_core::member::Tie;
 use docket_core::pace::epoch;
+use docket_core::rows::{ItemRow, KeySpec, ProjectRow};
 use docket_core::rules::GATE;
 use docket_core::word::{Kind, word};
 
 use crate::auth::Caller;
 use crate::reads::public::{Kinds, facts, open_members, sql};
-use crate::reads::rows::{marks, project_model, rows};
+use crate::reads::rows::{project_model, rows};
 use crate::store::{self, column, to_item};
 use crate::verbs::Failure;
 use crate::verbs::graph::{audits_over, live_overlaps, open_under};
@@ -355,12 +358,21 @@ pub async fn graph(
     let model = project_model(&db, &q.project).await?;
     let kinds = Kinds::of(&model);
     let items = words(&db, &q.project, &kinds).await?;
+    let board = core_board(&db, &model).await?;
     let ids: HashMap<i64, &str> = items.iter().map(|(r, _)| (r.rid, r.id.as_str())).collect();
     let nodes: Vec<Value> = items
         .iter()
         .map(|(r, w)| {
-            json!({ "id": r.id, "rid": r.rid, "key": r.key, "kind": kinds.kind(&r.key).as_str(), "state": r.state,
-                    "word": w, "theme": r.theme, "title": r.title })
+            let kind = kinds.kind(&r.key);
+            let mut node = json!({ "id": r.id, "rid": r.rid, "key": r.key, "kind": kind.as_str(), "state": r.state,
+                                   "word": w, "theme": r.theme, "title": r.title });
+            if let Some(row) = board.by_rid(r.rid).filter(|_| holds(kind)) {
+                node["progress"] = json!(board.progress(row));
+                if kind == Kind::Audit {
+                    node["due"] = json!(board.due(row));
+                }
+            }
+            node
         })
         .collect();
     let links = LinkRow::find_by_statement(sql(
@@ -387,6 +399,105 @@ pub async fn graph(
     Ok(Json(
         json!({ "project": q.project, "nodes": nodes, "edges": edges }),
     ))
+}
+
+/// Kinds that hold other items, and so carry a progress: what a package, plan or story opened, what
+/// belongs to a concept or idea.
+fn holds(kind: Kind) -> bool {
+    matches!(
+        kind,
+        Kind::Package | Kind::Audit | Kind::Story | Kind::Concept | Kind::Idea
+    )
+}
+
+/// A project as docket-core's board reads it: every item, the `opened` ties leaving them and the
+/// `related` ties reaching or leaving a standing item, as the TUI loads it.
+///
+/// # Errors
+/// The database.
+pub async fn core_board(
+    db: &DatabaseConnection,
+    model: &crate::entities::project::Model,
+) -> Result<Board, Failure> {
+    let project = ProjectRow {
+        slug: model.slug.clone(),
+        keys: model
+            .keys
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|spec| serde_json::from_value::<KeySpec>(spec.clone()).ok())
+            .collect(),
+        ..ProjectRow::default()
+    };
+    let items: Vec<ItemRow> = rows(
+        db,
+        "SELECT * FROM items WHERE project=? ORDER BY rid",
+        vec![model.slug.clone().into()],
+    )
+    .await?
+    .into_iter()
+    .map(item_row)
+    .collect();
+    let standing: HashSet<i64> = items
+        .iter()
+        .filter(|i| project.kind(&i.key).is_standing())
+        .map(|i| i.rid)
+        .collect();
+    let ties = TieRow::find_by_statement(sql(
+        "SELECT l.rid, l.kind, l.to_rid FROM links l JOIN items i ON i.rid=l.rid \
+         WHERE i.project=? AND l.to_rid IS NOT NULL AND l.kind IN ('opened', 'related') ORDER BY l.id",
+        vec![model.slug.clone().into()],
+    ))
+    .all(db)
+    .await?
+    .into_iter()
+    .filter(|t| t.kind == "opened" || standing.contains(&t.rid) || standing.contains(&t.to_rid))
+    .map(|t| Tie {
+        rid: t.rid,
+        opened: t.kind == "opened",
+        to: t.to_rid,
+    })
+    .collect();
+    Ok(Board::new(project, items, ties))
+}
+
+#[derive(FromQueryResult)]
+struct TieRow {
+    rid: i64,
+    kind: String,
+    to_rid: i64,
+}
+
+fn item_row(m: crate::entities::item::Model) -> ItemRow {
+    ItemRow {
+        tags: serde_json::from_value(m.tags).unwrap_or_default(),
+        rid: m.rid,
+        project: m.project,
+        key: m.key,
+        num: m.num,
+        id: m.id,
+        title: m.title,
+        state: m.state,
+        turn: m.turn,
+        turn_note: m.turn_note,
+        claim_branch: m.claim_branch,
+        claim_host: m.claim_host,
+        claim_since: m.claim_since,
+        claim_job: m.claim_job,
+        claim_on: m.claim_on,
+        wait_on: m.wait_on,
+        wait_item: m.wait_item,
+        wait_ref: m.wait_ref,
+        decision: m.decision,
+        resolution: m.resolution,
+        scope: m.scope,
+        group_name: m.group_name,
+        theme: m.theme,
+        rank: m.rank,
+        opened_at: m.opened_at,
+        updated_at: m.updated_at,
+    }
 }
 
 #[derive(Deserialize)]
@@ -495,13 +606,14 @@ pub async fn summary(
 ) -> Result<Json<Value>, Failure> {
     let model = project_model(&db, &q.project).await?;
     let project = store::project(&db, &q.project).await?;
+    let board = core_board(&db, &model).await?;
     let now = i64::try_from(now_secs()).unwrap_or(0);
     Ok(Json(json!({
         "skills": model.skills,
         "pace": pace(&db, &q.project, &project, now).await?,
         "claims": claims(&db, &q.project, &model).await?,
-        "plans": plans(&db, &q.project, &project).await?,
-        "due": due(&db, &q.project, &project).await?,
+        "plans": plans(&board),
+        "due": due(&board),
         "problems": problems(&db, &q.project).await?,
     })))
 }
@@ -579,79 +691,28 @@ async fn claims(
 
 /// Open plans that opened anything: done, total and claimed of all they opened at any depth, those
 /// being worked first, then the nearest done.
-async fn plans(
-    db: &DatabaseConnection,
-    slug: &str,
-    project: &store::ProjectRow,
-) -> Result<Value, Failure> {
-    let mut out: Vec<(String, String, usize, usize, usize)> = Vec::new();
-    for p in open_plans(db, slug, project).await? {
-        let mut g = (0, 0, 0);
-        for rid in crate::verbs::graph::opened_under(db, p.rid).await? {
-            if let Some(m) = store::by_rid(db, rid).await? {
-                g.0 += usize::from(m.state != "open");
-                g.1 += 1;
-                g.2 += usize::from(m.claim_branch.is_some());
-            }
-        }
-        if g.1 > 0 {
-            out.push((p.id, p.title, g.0, g.1, g.2));
-        }
-    }
-    out.sort_by(|a, b| {
-        let near = |x: &(String, String, usize, usize, usize)| x.2 * 1000 / x.3;
-        (b.4, near(b), a.3 - a.2, &a.0).cmp(&(a.4, near(a), b.3 - b.2, &b.0))
-    });
-    Ok(json!(
-        out.into_iter()
-            .map(|(id, title, done, total, live)| json!({
-                "id": id, "title": title, "done": done, "total": total, "live": live
+/// The open plans started, as the core counts them: those being worked first, then the nearest done.
+fn plans(board: &Board) -> Value {
+    json!(
+        board
+            .plans_under_way()
+            .into_iter()
+            .map(|(p, g)| json!({
+                "id": p.id, "title": p.title, "done": g.done, "total": g.total, "live": g.live
             }))
             .collect::<Vec<_>>()
-    ))
-}
-
-/// Plans due for audit: open, nobody's claim, waiting on nothing, and everything they opened, at any
-/// depth, closed.
-async fn due(
-    db: &DatabaseConnection,
-    slug: &str,
-    project: &store::ProjectRow,
-) -> Result<Value, Failure> {
-    let mut out = Vec::new();
-    for p in open_plans(db, slug, project).await? {
-        if p.claim_branch.is_some() || p.wait_on.is_some() || p.turn.as_deref() != Some("agent") {
-            continue;
-        }
-        let opened = crate::verbs::graph::opened_under(db, p.rid).await?;
-        if !opened.is_empty() && open_under(db, p.rid).await?.is_empty() {
-            out.push(json!({ "id": p.id, "title": p.title }));
-        }
-    }
-    Ok(json!(out))
-}
-
-async fn open_plans(
-    db: &DatabaseConnection,
-    slug: &str,
-    project: &store::ProjectRow,
-) -> Result<Vec<docket_core::item::Item>, Failure> {
-    let mut keys = crate::verbs::graph::keys_of(project, &[Kind::Audit]);
-    if keys.is_empty() {
-        return Ok(Vec::new());
-    }
-    keys.sort();
-    let mut values: Vec<sea_orm::Value> = vec![slug.into()];
-    values.extend(keys.iter().map(|k| k.clone().into()));
-    Ok(store::items(
-        db,
-        &format!(
-            "SELECT * FROM items WHERE project=? AND state='open' AND key IN ({}) ORDER BY key, num",
-            marks(keys.len())
-        ),
-        values,
     )
-    .await?)
+}
+
+/// The plans due for their audit, as the core decides it.
+fn due(board: &Board) -> Value {
+    json!(
+        board
+            .due_audits()
+            .into_iter()
+            .map(|p| json!({ "id": p.id, "title": p.title }))
+            .collect::<Vec<_>>()
+    )
 }
 
 #[cfg(test)]

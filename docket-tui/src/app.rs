@@ -4,13 +4,13 @@ use std::collections::{BTreeSet, HashMap};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use crate::board::Board;
 use crate::doc::{Cursor, Listing, Target};
 use crate::mouse::Map;
 use crate::page::{Browser, Detail, Help, Home, Page, Plans, Project, Queue, Settings, Typing};
 use crate::source::Source;
 use crate::view;
 use crate::write::{Ask, Prompt};
+use docket_core::board::Board;
 
 pub struct App<S: Source> {
     pub source: S,

@@ -8,7 +8,6 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::app::App;
-use crate::board::Board;
 use crate::doc::{Doc, Target, seg, spot};
 use crate::mouse::Pane;
 use crate::page::{Page, PlanRow, Plans};
@@ -17,6 +16,7 @@ use crate::style;
 use crate::view::browser::follow;
 use crate::view::project::bar;
 use crate::view::{draw_doc, list_width};
+use docket_core::board::Board;
 
 fn row_line(r: &PlanRow, selected: bool, marked: bool, width: usize) -> Line<'static> {
     if let Some(h) = &r.heading {

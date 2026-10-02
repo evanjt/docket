@@ -8,10 +8,10 @@ use docket_core::pace::{Minute, duration};
 use docket_core::rows::Row;
 use ratatui::style::Style;
 
-use crate::board::Board;
 use crate::doc::{Doc, Listing, Route, Seg, Target, seg, spot};
 use crate::page::ProjectData;
 use crate::style;
+use docket_core::board::Board;
 
 /// The narrowest screen the sidebar stands beside the main pane on.
 const WIDE: usize = 120;

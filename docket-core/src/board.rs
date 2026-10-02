@@ -3,9 +3,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use docket_core::member::{Tie, members_of, opened_under};
-use docket_core::rows::{ItemRow, Progress, ProjectRow};
-use docket_core::word::{Facts, Kind, word};
+use crate::member::{Tie, members_of, opened_under};
+use crate::rows::{ItemRow, Progress, ProjectRow};
+use crate::word::{Facts, Kind, word};
 
 #[derive(Clone, Debug, Default)]
 pub struct Board {
@@ -169,20 +169,27 @@ impl Board {
         out
     }
 
-    /// Plans due for their audit: everything they opened, at any depth, is closed, and nobody holds
-    /// them yet.
+    /// Whether an open plan is due for its audit: it opened something, everything it opened, at any
+    /// depth, is closed, and nobody holds it yet.
+    #[must_use]
+    pub fn due(&self, item: &ItemRow) -> bool {
+        if item.state != "open" || self.kind(item) != Kind::Audit {
+            return false;
+        }
+        let g = self.progress(item);
+        item.wait_on.is_none()
+            && item.claim_branch.is_none()
+            && item.turn.as_deref() == Some("agent")
+            && g.total > 0
+            && g.done == g.total
+    }
+
+    /// Plans due for their audit, by key and number.
     #[must_use]
     pub fn due_audits(&self) -> Vec<&ItemRow> {
         self.open_of(&[Kind::Audit])
             .into_iter()
-            .filter(|p| {
-                let g = self.progress(p);
-                p.wait_on.is_none()
-                    && p.claim_branch.is_none()
-                    && p.turn.as_deref() == Some("agent")
-                    && g.total > 0
-                    && g.done == g.total
-            })
+            .filter(|p| self.due(p))
             .collect()
     }
 

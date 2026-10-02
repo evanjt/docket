@@ -11,8 +11,8 @@ use docket_core::rows::{
 use docket_core::word::Kind;
 use serde_json::Value;
 
-use crate::board::Board;
 use crate::source::{Result, Source};
+use docket_core::board::Board;
 
 fn keys() -> Vec<KeySpec> {
     [

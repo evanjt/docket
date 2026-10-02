@@ -9,12 +9,12 @@ const node = (id: string, kind: GraphNode['kind'], word: string, rid = 0): Graph
 const GRAPH: Graph = {
   project: 'o/p',
   nodes: [
-    node('A1', 'audit', 'blocked', 1),
-    node('A2', 'audit', 'ready', 2),
+    { ...node('A1', 'audit', 'blocked', 1), progress: { done: 1, total: 2, live: 1 }, due: false },
+    { ...node('A2', 'audit', 'ready', 2), progress: { done: 1, total: 1, live: 0 }, due: true },
     node('T1', 'work', 'done', 3),
     node('T2', 'work', 'building', 4),
     node('T3', 'work', 'done', 5),
-    node('CON1', 'concept', 'standing', 6),
+    { ...node('CON1', 'concept', 'standing', 6), progress: { done: 0, total: 1, live: 0 } },
   ],
   edges: [
     { from: 'T1', kind: 'opened', to: 'A1' },
@@ -38,16 +38,13 @@ describe('board', () => {
     expect(b.related.get('A1')).toEqual(['CON1']);
   });
 
-  it('tallies what an item opened', () => {
-    // T1 done, T2 building
+  it('reads what an item holds from the served progress', () => {
     expect(tally(b, 'A1')).toEqual({ done: 1, total: 2, live: 1 });
-  });
-
-  it('tallies what a concept is related to', () => {
     expect(tally(b, 'CON1')).toEqual({ done: 0, total: 1, live: 0 });
+    expect(tally(b, 'T1')).toEqual({ done: 0, total: 0, live: 0 });
   });
 
-  it('lists a plan whose items are all closed as due, first', () => {
+  it('lists a plan the server holds due first', () => {
     const rows = plans(b, 'audit');
     expect(rows.map((r) => [r.node.id, r.due])).toEqual([
       ['A2', true],
@@ -57,6 +54,30 @@ describe('board', () => {
 
   it('finds an item by the rid its events name', () => {
     expect(b.byRid.get(4)?.id).toBe('T2');
+  });
+});
+
+describe('plans', () => {
+  // A1 opened T1 and T2, both done; T2 opened T3, still open. The server counts all three.
+  const deep: Graph = {
+    project: 'o/p',
+    nodes: [
+      { ...node('A1', 'audit', 'blocked', 1), progress: { done: 2, total: 3, live: 0 }, due: false },
+      node('T1', 'work', 'done', 2),
+      node('T2', 'work', 'done', 3),
+      node('T3', 'work', 'ready', 4),
+    ],
+    edges: [
+      { from: 'T1', kind: 'opened', to: 'A1' },
+      { from: 'T2', kind: 'opened', to: 'A1' },
+      { from: 'T3', kind: 'opened', to: 'T2' },
+    ],
+  };
+
+  it('reads the progress and due of a plan as the server serves them', () => {
+    const [row] = plans(board(deep), 'audit');
+    expect(row.tally).toEqual({ done: 2, total: 3, live: 0 });
+    expect(row.due).toBe(false);
   });
 });
 

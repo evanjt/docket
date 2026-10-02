@@ -2,7 +2,6 @@
 //! and the settings, read from the server and read again whenever the database moves.
 
 pub mod app;
-pub mod board;
 pub mod doc;
 pub mod load;
 pub mod mouse;
@@ -17,3 +16,7 @@ pub mod write;
 #[cfg(test)]
 #[path = "tests/fixture.rs"]
 mod tests_fixture;
+
+#[cfg(test)]
+#[path = "tests/board.rs"]
+mod tests_board;

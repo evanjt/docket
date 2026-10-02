@@ -69,11 +69,11 @@ fn test_parse_aliases_flags_and_lists() {
 
 #[test]
 fn test_parse_skills_set_posts_a_fact() {
-    let (verb, body) = post("skills set land make land", &[]);
+    let (verb, body) = post("skills set gates make test", &[]);
     assert_eq!(verb, "fact");
     assert_eq!(
         (&body["key"], &body["value"]),
-        (&json!("land"), &json!("make land"))
+        (&json!("gates"), &json!("make test"))
     );
     let (_, body) = post("skills owner", &[]);
     assert!(body.get("value").is_none(), "no value unsets: {body}");

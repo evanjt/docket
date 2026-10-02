@@ -3,7 +3,6 @@
   import { project } from '../lib/context';
   import { resource } from '../lib/live.svelte';
   import { act, reloadProjects } from '../lib/session.svelte';
-  import { ago } from '../lib/time';
   import type { FactSet } from '../lib/types';
 
   const ctx = project();
@@ -69,7 +68,6 @@
         <input class="field" placeholder="Value" bind:value={fresh.value} aria-label="Its value" />
         <button class="btn small" disabled={!fresh.key.trim() || !fresh.value.trim()}>Set</button>
       </form>
-      {#if facts.data.last_tick}<p class="faint">The loop last ticked {ago(facts.data.last_tick)}.</p>{/if}
     {:else if facts.error}
       <p class="error">{facts.error}</p>
     {/if}

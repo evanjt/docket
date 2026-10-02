@@ -129,6 +129,11 @@ fn get(ctx: &mut Ctx, key: Option<&str>) -> Result<i32> {
         println!("{found}");
         return Ok(0);
     }
+    if fact::RETIRED.contains(&key) {
+        return Err(Fail::refused(format!(
+            "{key} was a fact of the old loop and is no longer read"
+        )));
+    }
     let Some(meaning) = fact::meaning(key) else {
         return Err(Fail::refused(format!(
             "{key} is not a skill fact. One of: {}",
@@ -166,10 +171,6 @@ fn set(ctx: &mut Ctx, key: Option<&str>, value: &str) -> Result<i32> {
         )));
     };
     fact::check(key, value)?;
-    let job = std::env::var("DOCKET_JOB").is_ok_and(|j| !j.is_empty());
-    if let Some(why) = fact::owner_only(key).filter(|_| job) {
-        return Err(Fail::refused(why));
-    }
     let out = ctx.api.set_fact(&slug, key, value)?;
     let now = out.skills.get(key).map_or("(unset)", String::as_str);
     println!("{slug} {key}: {now}");
@@ -177,21 +178,19 @@ fn set(ctx: &mut Ctx, key: Option<&str>, value: &str) -> Result<i32> {
     Ok(0)
 }
 
-/// Every fact's value: the set ones, the defaults, and a visible gap for the rest.
+/// Every fact's value: the set ones, the defaults, and a visible gap for the rest. A retired fact still
+/// stored is left out.
 #[must_use]
-pub fn values(
-    skills: &BTreeMap<String, String>,
-    last_tick: Option<&str>,
-) -> BTreeMap<String, String> {
+pub fn values(skills: &BTreeMap<String, String>) -> BTreeMap<String, String> {
     let mut out: BTreeMap<String, String> = DEFAULTS
         .iter()
         .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
         .collect();
-    for (k, v) in skills.iter().filter(|(_, v)| !v.is_empty()) {
-        out.insert(k.clone(), v.clone());
-    }
-    if let Some(t) = last_tick {
-        out.insert("last_tick".into(), t.to_string());
+    for (k, v) in fact::known(skills)
+        .into_iter()
+        .filter(|(_, v)| !v.is_empty())
+    {
+        out.insert(k, v);
     }
     for (k, _) in FACTS {
         out.entry(k.to_string())
@@ -222,7 +221,7 @@ fn show(ctx: &mut Ctx) -> Result<i32> {
         || "(no root bound on this host)".to_string(),
         |r| home_relative(&r, &home),
     );
-    let values = values(&facts.skills, facts.last_tick.as_deref());
+    let values = values(&facts.skills);
     println!(
         "{slug} on {}, root {root}\n\nThe facts the skills read with docket skills:\n",
         ctx.host()?

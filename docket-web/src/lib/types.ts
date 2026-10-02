@@ -110,7 +110,6 @@ export interface Derived {
 export interface Facts {
   project: string;
   skills: Record<string, string>;
-  last_tick: string | null;
 }
 
 export interface Machine {

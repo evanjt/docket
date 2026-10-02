@@ -93,7 +93,7 @@ The same from a terminal
 
   docket next              the ready queue           docket todo         what is parked on you
   docket show B14          one item in full          docket derived      what agents decided, and why
-  docket skills            the project's facts       docket pool run     start working
+  docket skills            the project's facts       docket wip          what is claimed, by host
 ";
 
 #[must_use]

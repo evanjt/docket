@@ -218,13 +218,7 @@ impl Source for Fixture {
     }
 
     fn projects(&self) -> Result<Vec<ProjectRow>> {
-        let run = [
-            ("mode", "run"),
-            ("land", "make land"),
-            ("model_build", "m"),
-            ("model_review", "m"),
-            ("model_plan", "m"),
-        ];
+        let run = [("mode", "run"), ("models", "medium=claude:m")];
         let facts = self.facts.lock().unwrap().clone();
         let facts: Vec<(&str, &str)> = facts
             .iter()

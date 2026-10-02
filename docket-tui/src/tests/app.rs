@@ -188,12 +188,13 @@ fn test_settings_list_every_fact_with_its_value_and_meaning() {
         assert!(s.contains("SETTINGS  o/p"), "{s}");
         assert!(!s.contains("Nothing is worked"), "{s}");
         assert!(s.contains("  owner           the owner (default)"), "{s}");
-        assert!(s.contains("  land            (not set)"), "{s}");
+        assert!(s.contains("  gates           (not set)"), "{s}");
         assert!(
-            s.contains("the command that lands a collected branch"),
+            s.contains("the checks a job reruns after merging main"),
             "{s}"
         );
-        assert_ne!(colour_of(&mut a, w, "  land   "), Some(Color::Red));
+        assert!(!s.contains("  pool "), "a retired fact is not listed: {s}");
+        assert_ne!(colour_of(&mut a, w, "  gates   "), Some(Color::Red));
     }
 }
 

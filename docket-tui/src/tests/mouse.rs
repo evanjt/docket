@@ -149,11 +149,11 @@ fn test_mouse_click_on_a_fact_starts_editing_it() {
     a.open(Target::Project("o/p".into()));
     a.open_settings();
     let buf = draw(&mut a, 160, 120);
-    let (x, y) = find(&buf, "  land  ", 0, 160);
+    let (x, y) = find(&buf, "  gates  ", 0, 160);
     click(&mut a, (x + 3, y));
     let p = a.prompt.as_ref().expect("a fact typed");
-    assert_eq!(p.ask, Ask::Fact("land".into()));
-    assert_eq!(p.label, "land = ");
+    assert_eq!(p.ask, Ask::Fact("gates".into()));
+    assert_eq!(p.label, "gates = ");
     assert_eq!(a.page.title(), "settings");
 }
 

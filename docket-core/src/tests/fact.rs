@@ -7,56 +7,40 @@ fn skills(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         .collect()
 }
 
+const MODELS_SET: &str = "high=claude:opus-x:high medium=codex:gpt-x:medium low=claude:haiku-x \
+                          unrated=codex:gpt-y audit=codex:gpt-x:high plan=claude:opus-x:max \
+                          lead=claude:opus-x:high";
+
+fn model(runner: &str, name: &str, effort: Option<&str>) -> Model {
+    Model {
+        runner: runner.into(),
+        model: name.into(),
+        effort: effort.map(str::to_string),
+    }
+}
+
 #[test]
-fn test_gaps_name_every_missing_fact_and_the_mode() {
+fn test_gaps_name_the_mode_and_a_missing_models() {
     assert_eq!(
-        gaps(&skills(&[])),
-        [
-            "mode is pause",
-            "no land",
-            "no model_build",
-            "no model_review",
-            "no model_plan"
-        ]
+        gaps(&skills(&[("mode", "pause")])),
+        ["mode is pause", "no models"]
     );
+    assert_eq!(gaps(&skills(&[("mode", "drain")]))[0], "mode is drain");
 }
 
 #[test]
-fn test_gaps_empty_when_the_loop_can_dispatch() {
-    let set = skills(&[
-        ("mode", "run"),
-        ("land", "make land"),
-        ("model_build", "m"),
-        ("model_review", "m"),
-        ("model_plan", "m"),
-    ]);
-    assert!(gaps(&set).is_empty());
-}
-
-#[test]
-fn test_gaps_put_a_brake_first() {
-    let set = skills(&[("mode", "pause"), ("paused_by", "brake ratio 0.9")]);
-    assert_eq!(gaps(&set)[0], "the loop paused itself: brake ratio 0.9");
-    assert_eq!(gaps(&set)[1], "mode is pause");
+fn test_gaps_empty_when_a_lead_can_dispatch() {
+    assert!(gaps(&skills(&[("models", "medium=claude:m")])).is_empty());
 }
 
 #[test]
 fn test_value_tells_set_default_and_unset_apart() {
-    let set = skills(&[("land", "make land"), ("owner", "")]);
-    assert_eq!(value(&set, "land"), Value::Set("make land".into()));
+    let set = skills(&[("gates", "make test"), ("owner", "")]);
+    assert_eq!(value(&set, "gates"), Value::Set("make test".into()));
     // An empty value is unset, so the default shows.
     assert_eq!(value(&set, "owner"), Value::Default("the owner"));
-    assert_eq!(value(&set, "model_build"), Value::Unset);
-}
-
-#[test]
-fn test_blocks_marks_needed_facts_and_a_mode_other_than_run() {
-    let set = skills(&[("land", "x")]);
-    assert!(!blocks(&set, "land"));
-    assert!(blocks(&set, "model_build"));
-    assert!(blocks(&set, "mode"));
-    assert!(!blocks(&skills(&[("mode", "run")]), "mode"));
-    assert!(!blocks(&set, "traps"));
+    assert_eq!(value(&set, "models"), Value::Unset);
+    assert_eq!(value(&set, "mode"), Value::Default("run"));
 }
 
 #[test]
@@ -64,15 +48,52 @@ fn test_every_fact_has_a_meaning_and_every_default_a_fact() {
     assert!(FACTS.iter().all(|(k, m)| !k.is_empty() && !m.is_empty()));
     assert!(DEFAULTS.iter().all(|(k, _)| meaning(k).is_some()));
     assert!(NEEDED.iter().all(|k| meaning(k).is_some()));
+    assert!(RETIRED.iter().all(|k| meaning(k).is_none()));
 }
 
 #[test]
-fn test_pool_reads_pairs_and_skips_the_rest() {
-    assert_eq!(
-        pool("local=4 devbox=16 bad =3 x=y"),
-        [("local".to_string(), 4), ("devbox".to_string(), 16)]
-    );
-    assert!(pool("").is_empty());
+fn test_the_old_loops_facts_are_retired() {
+    for key in [
+        "remote",
+        "mirror_exclude",
+        "remote_prepare",
+        "remote_setup",
+        "land",
+        "slice",
+        "pool",
+        "pool_max",
+        "model_build",
+        "model_review",
+        "model_plan",
+        "file_cap",
+        "lanes",
+        "packages_live",
+        "ram_floor",
+        "observe_cap",
+        "plan_batch",
+        "jobs_per_day",
+        "brake_ratio",
+        "loop_host",
+        "poll",
+        "paused_by",
+        "last_tick",
+    ] {
+        assert!(meaning(key).is_none(), "{key}");
+        assert!(RETIRED.contains(&key), "{key}");
+        assert_eq!(
+            refusal(check(key, "x")),
+            format!("{key} was a fact of the old loop and is no longer read")
+        );
+    }
+    for key in ["mode", "stale_claim", "job_timeout", "checkout", "models"] {
+        assert!(meaning(key).is_some(), "{key}");
+    }
+}
+
+#[test]
+fn test_known_keeps_the_facts_docket_reads_and_leaves_the_rest() {
+    let stored = skills(&[("owner", "Ana"), ("pool", "a=2"), ("land", "make land")]);
+    assert_eq!(known(&stored), skills(&[("owner", "Ana")]));
 }
 
 fn refusal(r: Result<(), Refused>) -> String {
@@ -86,7 +107,7 @@ fn test_check_refuses_an_unknown_key_naming_every_fact() {
         why.starts_with("colour is not a skill fact. One of: owner, worktree, merge"),
         "{why}"
     );
-    assert!(why.ends_with("paused_by, last_tick"), "{why}");
+    assert!(why.ends_with("stale_claim, lead_lapse, flow"), "{why}");
 }
 
 #[test]
@@ -99,8 +120,8 @@ fn test_check_lets_an_empty_value_unset_any_fact() {
 #[test]
 fn test_check_refuses_facts_docket_writes() {
     assert_eq!(
-        refusal(check("paused_by", "me")),
-        "paused_by is written by docket, not set by hand"
+        refusal(check("flow", "simple")),
+        "flow is written by docket, not set by hand"
     );
 }
 
@@ -115,94 +136,144 @@ fn test_check_holds_mode_to_its_choices() {
 
 #[test]
 fn test_check_counts_are_whole_numbers_above_zero() {
-    assert_eq!(check("poll", "30"), Ok(()));
+    assert_eq!(check("job_timeout", "30"), Ok(()));
     for bad in ["0", "00", "-1", "1.5", "ten", " 3"] {
         assert_eq!(
-            refusal(check("poll", bad)),
-            format!("poll is a whole number above 0, not '{bad}'")
+            refusal(check("stale_claim", bad)),
+            format!("stale_claim is a whole number above 0, not '{bad}'")
         );
     }
 }
 
 #[test]
-fn test_check_models_take_a_model_and_an_optional_effort() {
-    assert_eq!(check("model_build", "gpt-5.4"), Ok(()));
-    assert_eq!(check("model_build", "gpt-5.4 medium"), Ok(()));
-    assert_eq!(
-        refusal(check("model_plan", "a b c")),
-        "model_plan is a model and an optional effort, as \"gpt-5.4 medium\", not 'a b c'"
-    );
+fn test_check_takes_a_models_value_that_reads() {
+    assert_eq!(check("models", MODELS_SET), Ok(()));
+    assert_eq!(check("models", "medium=claude:m"), Ok(()));
 }
 
 #[test]
-fn test_check_brake_ratio_is_a_number() {
-    assert_eq!(check("brake_ratio", "0.25"), Ok(()));
-    assert_eq!(
-        refusal(check("brake_ratio", "half")),
-        "brake_ratio is a number, as 0.5, not 'half'"
-    );
-}
-
-#[test]
-fn test_pool_of_refuses_a_pair_that_does_not_read() {
-    assert_eq!(
-        pool_of("local=4 devbox=16").unwrap(),
-        [("local".to_string(), 4), ("devbox".to_string(), 16)]
-    );
-    assert!(pool_of("").unwrap().is_empty());
-    for bad in ["local", "=3", "local=x", "local=4 bad"] {
+fn test_check_refuses_a_models_entry_naming_it() {
+    for (bad, why) in [
+        ("high", "'high' is not key=runner:model[:effort]"),
+        (
+            "high=claude",
+            "'high=claude' is not key=runner:model[:effort]",
+        ),
+        ("high=:m", "'high=:m' is not key=runner:model[:effort]"),
+        (
+            "high=claude:",
+            "'high=claude:' is not key=runner:model[:effort]",
+        ),
+        (
+            "high=claude:m:",
+            "'high=claude:m:' is not key=runner:model[:effort]",
+        ),
+        (
+            "huge=claude:m",
+            "'huge=claude:m' names huge, not one of high, medium, low, unrated, audit, plan, lead",
+        ),
+        (
+            "high=gemini:m",
+            "'high=gemini:m' runs on gemini, not one of claude, codex",
+        ),
+        (
+            "low=claude:a low=codex:b",
+            "'low=codex:b' sets low a second time",
+        ),
+    ] {
         assert_eq!(
-            refusal(pool_of(bad).map(|_| ())),
-            format!(
-                "pool is host=slots pairs separated by spaces, as \"local=4 devbox=16\", not '{bad}'"
-            )
+            refusal(check("models", bad)),
+            format!("models: {why}"),
+            "{bad}"
         );
     }
 }
 
 #[test]
-fn test_ceiling_refuses_a_pool_above_pool_max() {
-    let set = skills(&[("pool_max", "6")]);
-    assert_eq!(ceiling(&set, "pool", "local=2 devbox=4"), Ok(()));
+fn test_model_for_a_build_follows_its_complexity() {
+    let set = skills(&[("models", MODELS_SET)]);
     assert_eq!(
-        refusal(ceiling(&set, "pool", "local=3 devbox=4")),
-        "the pool would hold 7 slots, above pool_max 6, the owner's ceiling"
+        model_for(&set, Role::Build, Some("high")),
+        Some(model("claude", "opus-x", Some("high")))
+    );
+    assert_eq!(
+        model_for(&set, Role::Build, Some("medium")),
+        Some(model("codex", "gpt-x", Some("medium")))
+    );
+    assert_eq!(
+        model_for(&set, Role::Build, Some("low")),
+        Some(model("claude", "haiku-x", None))
     );
 }
 
 #[test]
-fn test_ceiling_refuses_a_pool_max_below_the_stored_pool() {
-    let set = skills(&[("pool", "local=4 devbox=4")]);
-    assert_eq!(ceiling(&set, "pool_max", "8"), Ok(()));
+fn test_model_for_unrated_falls_back_to_unrated_then_medium() {
+    let set = skills(&[("models", MODELS_SET)]);
     assert_eq!(
-        refusal(ceiling(&set, "pool_max", "5")),
-        "the pool would hold 8 slots, above pool_max 5, the owner's ceiling"
+        model_for(&set, Role::Build, None),
+        Some(model("codex", "gpt-y", None))
     );
-    // With no pool stored the default is not counted.
-    assert_eq!(ceiling(&skills(&[]), "pool_max", "1"), Ok(()));
+    let no_unrated = skills(&[("models", "medium=codex:gpt-x:medium high=claude:o")]);
+    assert_eq!(
+        model_for(&no_unrated, Role::Build, None),
+        Some(model("codex", "gpt-x", Some("medium")))
+    );
+    assert_eq!(
+        model_for(&no_unrated, Role::Build, Some("unrated")),
+        Some(model("codex", "gpt-x", Some("medium")))
+    );
 }
 
 #[test]
-fn test_ceiling_lets_a_pool_be_unset() {
-    let set = skills(&[("pool_max", "1"), ("pool", "local=1")]);
-    assert_eq!(ceiling(&set, "pool", ""), Ok(()));
+fn test_model_for_audit_and_plan_use_their_entries_then_high() {
+    let set = skills(&[("models", MODELS_SET)]);
+    assert_eq!(
+        model_for(&set, Role::Audit, Some("low")),
+        Some(model("codex", "gpt-x", Some("high")))
+    );
+    assert_eq!(
+        model_for(&set, Role::Plan, None),
+        Some(model("claude", "opus-x", Some("max")))
+    );
+    let builds_only = skills(&[("models", "high=claude:opus-x:high")]);
+    assert_eq!(
+        model_for(&builds_only, Role::Audit, None),
+        Some(model("claude", "opus-x", Some("high")))
+    );
 }
 
 #[test]
-fn test_owner_only_names_pool_max_alone() {
+fn test_model_for_a_lead_uses_its_entry_then_high() {
+    let set = skills(&[("models", MODELS_SET)]);
     assert_eq!(
-        owner_only("pool_max").as_deref(),
-        Some("pool_max is the owner's ceiling on the pool, and a fleet job does not set it")
+        model_for(&set, Role::Lead, None),
+        Some(model("claude", "opus-x", Some("high")))
     );
-    assert_eq!(owner_only("pool"), None);
+    let no_lead = skills(&[("models", "high=codex:gpt-x:xhigh low=claude:h")]);
+    assert_eq!(
+        model_for(&no_lead, Role::Lead, Some("low")),
+        Some(model("codex", "gpt-x", Some("xhigh")))
+    );
+    assert_eq!(
+        model_for(&skills(&[("models", "low=claude:h")]), Role::Lead, None),
+        None
+    );
+}
+
+#[test]
+fn test_model_for_is_none_without_an_entry() {
+    assert_eq!(model_for(&skills(&[]), Role::Build, Some("high")), None);
+    let set = skills(&[("models", "high=claude:o")]);
+    assert_eq!(model_for(&set, Role::Build, Some("low")), None);
+    assert_eq!(model_for(&set, Role::Build, None), None);
 }
 
 #[test]
 fn test_with_sets_and_unsets() {
-    let set = skills(&[("land", "x")]);
+    let set = skills(&[("gates", "x")]);
     assert_eq!(
         with(&set, "owner", "Ada"),
-        skills(&[("land", "x"), ("owner", "Ada")])
+        skills(&[("gates", "x"), ("owner", "Ada")])
     );
-    assert_eq!(with(&set, "land", ""), skills(&[]));
+    assert_eq!(with(&set, "gates", ""), skills(&[]));
 }

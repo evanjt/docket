@@ -258,4 +258,9 @@ fn test_a_range_checks_every_commits_message_and_changes() {
     assert!(said.contains(" a.rs:1: alpha"), "{said}");
     let newest = c.check(&["--range", "HEAD~1..HEAD"]);
     assert_eq!(newest.status.code(), Some(0), "{}", text(&newest));
+    assert!(
+        text(&newest).contains("no private name in 1 commit\n"),
+        "{}",
+        text(&newest)
+    );
 }

@@ -284,8 +284,13 @@ fn check(ctx: &mut Ctx, scope: &Scope) -> Result<i32> {
         }
     }
     if found.is_empty() {
+        let what = if scope.range.is_some() {
+            "commit"
+        } else {
+            "file"
+        };
         println!(
-            "no private name in {read} file{}",
+            "no private name in {read} {what}{}",
             if read == 1 { "" } else { "s" }
         );
         return Ok(0);

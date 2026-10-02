@@ -403,6 +403,35 @@ pub enum Cmd {
         #[command(subcommand)]
         what: JobCmd,
     },
+    /// the machines jobs run on, this one marked
+    Machines,
+    /// set or remove a machine, on the owner's key; set changes only the fields given
+    Machine {
+        #[arg(value_parser = ["set", "remove"])]
+        what: String,
+        /// the host its key names
+        name: String,
+        /// the ssh address the other machines reach it at
+        #[arg(long)]
+        ssh: Option<String>,
+        /// the most jobs it runs at once, 1 to 64
+        #[arg(long)]
+        slots: Option<i64>,
+        /// the runners it has, as claude,codex
+        #[arg(long)]
+        runners: Option<String>,
+        /// a line about it; empty clears it
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// the project's lead claim: show who leads, or take, renew or give it back
+    Lead {
+        #[arg(value_parser = ["show", "take", "renew", "give"], default_value = "show")]
+        what: String,
+        /// the session holding the claim on this host; default: the branch acting
+        #[arg(long)]
+        session: Option<String>,
+    },
     /// bind this directory to a project by hand
     Bind {
         slug: Option<String>,

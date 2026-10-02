@@ -5,6 +5,8 @@ pub mod changes;
 pub mod entities;
 mod facts;
 pub mod import;
+mod lead;
+mod machines;
 pub mod reads;
 pub mod show;
 pub mod simplify;
@@ -100,6 +102,8 @@ fn routes(db: &DatabaseConnection, keys: Keys, stopping: watch::Receiver<bool>) 
         .route("/show/{id}", get(show::show))
         .merge(reads::router())
         .merge(facts::router())
+        .merge(machines::router())
+        .merge(lead::router())
         .nest("/do", verbs::router())
         .with_state(db.clone())
         .merge(changes::router(db, stopping))

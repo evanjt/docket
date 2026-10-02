@@ -181,3 +181,32 @@ fn test_facts_read_and_set_through_their_routes() {
         other => panic!("{other:?}"),
     }
 }
+
+#[test]
+fn test_machines_and_the_lead_claim_round_trip() {
+    let api = served();
+    assert!(api.machines().unwrap().machines.is_empty());
+    let req = MachineRequest {
+        set: docket_core::machine::Set {
+            name: "alpha".into(),
+            ssh: Some("alpha.example".into()),
+            slots: Some(2),
+            runners: Some(vec!["claude".into()]),
+            note: None,
+        },
+        remove: false,
+    };
+    assert_eq!(api.set_machine(&req).unwrap().machines[0].slots, 2);
+    assert_eq!(api.machines().unwrap().machines[0].name, "alpha");
+
+    assert!(api.lead("o/p").unwrap().lead.is_none());
+    let took = api.lead_act("o/p", Some("main"), "take", "lead-1").unwrap();
+    assert_eq!(took.outcome.as_deref(), Some("took"));
+    assert_eq!(api.lead("o/p").unwrap().lead.unwrap().session, "lead-1");
+    let gave = api.lead_act("o/p", None, "give", "lead-1").unwrap();
+    assert!(gave.lead.is_none());
+    assert!(matches!(
+        api.lead_act("o/p", None, "renew", "lead-1"),
+        Err(Error::Refused(409, _))
+    ));
+}

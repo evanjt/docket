@@ -6,7 +6,7 @@ use crate::item::Refused;
 use crate::text::py_repr;
 
 /// Every fact a project carries, in the order `docket skills` prints them, with its one-line meaning.
-pub const FACTS: [(&str, &str); 35] = [
+pub const FACTS: [(&str, &str); 36] = [
     ("owner", "the owner's name, as the skills address them"),
     (
         "worktree",
@@ -122,6 +122,10 @@ pub const FACTS: [(&str, &str); 35] = [
         "stale_claim",
         "minutes with no event on a claimed item before wip and the watch flag the claim",
     ),
+    (
+        "lead_lapse",
+        "minutes a lead claim holds without a renewal before another session may take the lead over",
+    ),
     ("poll", "seconds between ticks of the loop"),
     (
         "flow",
@@ -138,10 +142,11 @@ pub const FACTS: [(&str, &str); 35] = [
 ];
 
 /// The value a fact takes when the project sets none.
-pub const DEFAULTS: [(&str, &str); 13] = [
+pub const DEFAULTS: [(&str, &str); 14] = [
     ("owner", "the owner"),
     ("checkout", "."),
     ("stale_claim", "120"),
+    ("lead_lapse", "10"),
     ("poll", "60"),
     ("mode", "pause"),
     ("pool", "local=2"),
@@ -234,8 +239,9 @@ pub fn gaps(skills: &BTreeMap<String, String>) -> Vec<String> {
 pub const CHOICES: [(&str, &[&str]); 1] = [("mode", &["run", "drain", "pause"])];
 
 /// Facts that hold a whole number above 0.
-pub const COUNTS: [&str; 10] = [
+pub const COUNTS: [&str; 11] = [
     "stale_claim",
+    "lead_lapse",
     "poll",
     "pool_max",
     "file_cap",

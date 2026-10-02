@@ -8,7 +8,9 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
-use docket_core::api::{Common, FactRequest, FactSet, Facts};
+use docket_core::api::{
+    Common, FactRequest, FactSet, Facts, LeadRequest, LeadState, MachineRequest, Machines,
+};
 use docket_core::rows::{Derived, EventRow, ItemRow, LinkRow, ProjectRow, Row, Shown, Status};
 
 use crate::config::Config;
@@ -309,6 +311,53 @@ impl Api {
             value: value.to_string(),
         };
         self.post("fact", &req)
+    }
+
+    /// Every machine jobs run on, by name.
+    ///
+    /// # Errors
+    /// As `get`.
+    pub fn machines(&self) -> Result<Machines> {
+        self.get("/machines", &[])
+    }
+
+    /// One machine set or removed, on the owner's key; the machines as they stand after.
+    ///
+    /// # Errors
+    /// As `post`.
+    pub fn set_machine(&self, req: &MachineRequest) -> Result<Machines> {
+        self.post("machine", req)
+    }
+
+    /// Who leads a project, and whether the claim lapsed.
+    ///
+    /// # Errors
+    /// As `get`.
+    pub fn lead(&self, slug: &str) -> Result<LeadState> {
+        self.get("/lead", &of(slug))
+    }
+
+    /// The project's lead claim taken, renewed or given back by a session on this key's host.
+    ///
+    /// # Errors
+    /// As `post`.
+    pub fn lead_act(
+        &self,
+        slug: &str,
+        branch: Option<&str>,
+        act: &str,
+        session: &str,
+    ) -> Result<LeadState> {
+        let req = LeadRequest {
+            common: Common {
+                project: slug.to_string(),
+                branch: branch.map(str::to_string),
+                force: false,
+            },
+            act: act.to_string(),
+            session: session.to_string(),
+        };
+        self.post("lead", &req)
     }
 
     /// # Errors

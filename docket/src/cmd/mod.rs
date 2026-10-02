@@ -2,7 +2,9 @@
 
 pub mod audit;
 pub mod instructions;
+pub mod lead;
 pub mod lists;
+pub mod machines;
 pub mod show;
 pub mod skills;
 pub mod status;
@@ -108,7 +110,35 @@ pub fn run(ctx: &mut Ctx, cmd: Option<&Cmd>) -> Result<i32> {
             },
         ),
         Cmd::Instructions { what, yes } => instructions::instructions(ctx, what, *yes),
+        Cmd::Machines | Cmd::Machine { .. } | Cmd::Lead { .. } => run_lead(ctx, cmd),
         _ => run_write(ctx, cmd),
+    }
+}
+
+/// The machines and the lead claim, which a lead reads and holds.
+fn run_lead(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
+    match cmd {
+        Cmd::Machines => machines::machines(ctx),
+        Cmd::Machine {
+            what,
+            name,
+            ssh,
+            slots,
+            runners,
+            note,
+        } => machines::machine(
+            ctx,
+            &machines::set_request(
+                name,
+                ssh.as_ref(),
+                *slots,
+                runners.as_deref(),
+                note.as_ref(),
+                what == "remove",
+            ),
+        ),
+        Cmd::Lead { what, session } => lead::lead(ctx, what, session.as_ref()),
+        _ => unreachable!("run_lead is given only the machine and lead commands"),
     }
 }
 

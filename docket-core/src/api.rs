@@ -474,5 +474,46 @@ pub struct FactSet {
     pub skills: BTreeMap<String, String>,
 }
 
+/// `docket machine set` and `remove`: the fields given, or the machine removed. The owner's key only.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MachineRequest {
+    #[serde(flatten)]
+    pub set: crate::machine::Set,
+    #[serde(default)]
+    pub remove: bool,
+}
+
+/// Every machine, by name: `GET /machines` and the answer to a machine write.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Machines {
+    pub machines: Vec<crate::machine::Machine>,
+}
+
+/// `docket lead take`, `renew` or `give`: the act, and the session naming the holder on its host.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LeadRequest {
+    #[serde(flatten)]
+    pub common: Common,
+    pub act: String,
+    pub session: String,
+}
+
+/// A project's lead claim as it stands: `GET /lead`, and the answer to an act with what it did.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LeadState {
+    pub project: String,
+    pub lead: Option<crate::lead::Lead>,
+    /// The claim went unrenewed for the lapse, and the next take takes it over.
+    pub lapsed: bool,
+    pub lapses_at: Option<String>,
+    pub lapse_minutes: i64,
+    /// took, took over, renewed or gave; absent on a read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
+    /// The claim a takeover replaced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous: Option<crate::lead::Lead>,
+}
+
 /// A stored JSON column, passed through as it is.
 pub type Json = Value;

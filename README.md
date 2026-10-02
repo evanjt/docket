@@ -89,6 +89,27 @@ The keys file has one line per key, `host role key`, where role is `owner` or `a
 what the server records on every event made with that key, so a client cannot claim to be another
 machine. An agent key cannot open items with `new` or `add`.
 
+## Machines and the lead
+
+The machines jobs run on are rows on the server, so every machine reads the same list and none of
+them is named in a repository or a skill. Each has a name, which is the host on its key, the ssh
+address the other machines reach it at, its job slots (1 to 64) and the runners it has (`claude`,
+`codex`). The owner's key sets them:
+
+```bash
+docket machine set NAME --ssh ADDRESS --slots 4 --runners claude,codex [--note "..."]
+docket machine set NAME --slots 8      # a set changes only the fields it names
+docket machine remove NAME
+docket machines                        # every machine, * against the one this client runs on
+```
+
+A project has at most one lead: a session that takes the project's lead claim and renews it while it
+runs. `docket lead take` takes it, `renew` keeps it, `give` hands it back and `show` (the default)
+says who holds it. The holder is the key's host and a session name, the branch acting unless
+`--session` names one. A take while another holder renewed within the project's `lead_lapse`
+(minutes, 10 by default) is refused and names the holder; once the claim lapses, the next take takes
+it over. A take, a takeover and a give each write a `lead` event on the project; a renewal does not.
+
 ## Routes
 
 | Route | What |
@@ -101,6 +122,8 @@ machine. An agent key cannot open items with `new` or `add`.
 | `GET /counts`, `/whoami` | every project's counts; the host and role of the key presented |
 | `GET /projects`, `/items`, `/events`, `/links` | the stored rows, filtered and paged |
 | `GET /dump` | the rows changed after an event `seq` (`since=N`), or every row (`since=0`), for `docket-dump` |
+| `GET /machines`, `POST /do/machine` | every machine; one set or removed (`remove: true`), on the owner's key |
+| `GET /lead`, `POST /do/lead` | a project's lead claim; `act` take, renew or give, with the holder's `session` |
 | `GET /ui/` | the web client when `DOCKET_WEB` is set, with `/` sent to it; neither asks for a key |
 | `POST /do/{verb}` | `new`, `add`, `start`, `close`, `release`, `drop`, `reopen`, `wait`, `resume`, `ask`, `reply`, `answer`, `decide`, `priority`, `rate`, `edit`, `link`, `key`, `project`, `reindex` |
 

@@ -2,6 +2,11 @@ use super::*;
 
 use crate::scratch::Scratch;
 
+const MIGRATIONS: [&str; 2] = [
+    "m20261001_000001_schema",
+    "m20261002_000001_machines_and_leads",
+];
+
 #[test]
 fn test_numbered_counts_each_mark_in_order() {
     assert_eq!(
@@ -36,13 +41,14 @@ fn test_postgres_url_reads_either_scheme() {
 #[tokio::test]
 async fn test_migrate_applies_once_then_nothing() {
     let s = Scratch::bare(2).await;
-    assert_eq!(migrate(&s.db).await.unwrap(), ["m20261001_000001_schema"]);
+    assert_eq!(migrate(&s.db).await.unwrap(), MIGRATIONS);
     assert!(migrate(&s.db).await.unwrap().is_empty());
     let tables = s
         .db
         .query_one_raw(statement(
             "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN \
-             ('projects', 'roots', 'items', 'events', 'links', 'search', 'pending_dump', 'chores', 'meta')",
+             ('projects', 'roots', 'items', 'events', 'links', 'search', 'pending_dump', 'chores', 'meta', \
+             'machines', 'leads')",
             vec![],
         ))
         .await
@@ -50,7 +56,7 @@ async fn test_migrate_applies_once_then_nothing() {
         .unwrap()
         .try_get_by_index::<i64>(0)
         .unwrap();
-    assert_eq!(tables, 9);
+    assert_eq!(tables, 11);
 }
 
 #[tokio::test]
@@ -59,5 +65,5 @@ async fn test_migrate_from_two_servers_at_once_applies_once() {
     let (a, b) = tokio::join!(migrate(&s.db), migrate(&s.db));
     let mut applied = a.unwrap();
     applied.extend(b.unwrap());
-    assert_eq!(applied, ["m20261001_000001_schema"]);
+    assert_eq!(applied, MIGRATIONS);
 }

@@ -30,11 +30,11 @@ pub fn router() -> Router<DatabaseConnection> {
 
 #[derive(Deserialize)]
 pub struct InProject {
-    project: String,
+    pub project: String,
 }
 
 /// The facts a project sets, each a string, read from the stored JSON object.
-async fn stored<C: ConnectionTrait>(
+pub async fn stored<C: ConnectionTrait>(
     c: &C,
     slug: &str,
 ) -> Result<BTreeMap<String, String>, Failure> {

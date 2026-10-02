@@ -2,6 +2,7 @@
 //! raw query is sent as.
 
 mod m20261001_000001_schema;
+mod m20261002_000001_machines_and_leads;
 #[cfg(any(test, feature = "scratch"))]
 pub mod scratch;
 
@@ -20,7 +21,10 @@ pub struct Migrator;
 
 impl MigratorTrait for Migrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![Box::new(m20261001_000001_schema::Migration)]
+        vec![
+            Box::new(m20261001_000001_schema::Migration),
+            Box::new(m20261002_000001_machines_and_leads::Migration),
+        ]
     }
 }
 

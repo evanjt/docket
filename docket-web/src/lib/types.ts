@@ -127,6 +127,10 @@ export interface GraphNode {
   theme: string | null;
   title: string;
   word: string;
+  /** What a plan, story, package, concept or idea holds, as the server counts it. */
+  progress?: Progress;
+  /** A plan due for its audit, as the server decides it. */
+  due?: boolean;
 }
 
 export interface GraphEdge {

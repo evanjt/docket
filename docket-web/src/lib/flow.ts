@@ -1,4 +1,4 @@
-import type { EventRow, Graph, GraphNode, Kind } from './types';
+import type { EventRow, Graph, GraphNode, Kind, Progress } from './types';
 import { day, epoch } from './time';
 
 /** The flow read left to right, then the words that sit beside it. */
@@ -71,42 +71,28 @@ export function board(g: Graph): Board {
   return b;
 }
 
-export interface Tally {
-  done: number;
-  total: number;
-  live: number;
-}
+export type Tally = Progress;
 
-/** What an item opened, closed of all and claimed now. A concept or idea counts what is related to it. */
+const NONE: Tally = { done: 0, total: 0, live: 0 };
+
+/** What an item holds, closed of all and claimed now, as the server counts it; nothing for a ticket. */
 export function tally(b: Board, id: string): Tally {
-  const node = b.nodes.get(id);
-  const standing = node?.kind === 'concept' || node?.kind === 'idea';
-  const under = (standing ? b.related.get(id) : b.children.get(id)) ?? [];
-  const t = { done: 0, total: 0, live: 0 };
-  for (const kid of under) {
-    const k = b.nodes.get(kid);
-    if (!k || k.word === 'standing') continue;
-    t.total++;
-    if (isClosed(k.word)) t.done++;
-    if (k.word === 'building' || k.word === 'checking') t.live++;
-  }
-  return t;
+  return b.nodes.get(id)?.progress ?? NONE;
 }
 
 export interface PlanRow {
   node: GraphNode;
   tally: Tally;
-  /** Every item it opened is closed, and the plan itself is still open: its audit is due. */
+  /** The server holds the plan due for its audit. */
   due: boolean;
 }
 
-/** The open items of one kind with their tallies, the nearest done first. */
+/** The open items of one kind with their progress, the due ones first, then the nearest done. */
 export function plans(b: Board, kind: Kind): PlanRow[] {
   const rows: PlanRow[] = [];
   for (const node of b.nodes.values()) {
     if (node.kind !== kind || isClosed(node.word)) continue;
-    const t = tally(b, node.id);
-    rows.push({ node, tally: t, due: kind === 'audit' && t.total > 0 && t.done === t.total });
+    rows.push({ node, tally: node.progress ?? NONE, due: node.due === true });
   }
   const share = (r: PlanRow) => (r.tally.total ? r.tally.done / r.tally.total : -1);
   return rows.sort((a, z) => Number(z.due) - Number(a.due) || share(z) - share(a) || byId(a.node.id, z.node.id));

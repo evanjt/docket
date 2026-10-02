@@ -1,6 +1,6 @@
 <script lang="ts">
   import { project } from '../lib/context';
-  import { GROUPINGS, byId, plans } from '../lib/flow';
+  import { GROUPINGS, byId, plans, tally } from '../lib/flow';
   import Bar from '../components/Bar.svelte';
   import Word from '../components/Word.svelte';
 
@@ -19,6 +19,9 @@
     unfolded = u;
   }
 
+  /** How deep the tree unfolds below a plan, as the TUI folds it. */
+  const DEEPEST = 4;
+
   function under(id: string) {
     const b = ctx.board!;
     const node = b.nodes.get(id);
@@ -30,6 +33,33 @@
       .sort((a, z) => byId(a.id, z.id));
   }
 </script>
+
+{#snippet tree(id: string, depth: number)}
+  {@const kids = under(id)}
+  {#if kids.length}
+    <ul class="kids">
+      {#each kids as k (k.id)}
+        {@const t = tally(ctx.board!, k.id)}
+        {@const foldable = t.total > 0 && depth < DEEPEST}
+        <li>
+          <div class="kid">
+            <button class="fold" onclick={() => fold(k.id)} aria-expanded={unfolded.has(k.id)}
+              aria-label="Show what {k.id} opened" disabled={!foldable}>
+              {foldable ? (unfolded.has(k.id) ? '−' : '+') : ''}
+            </button>
+            <a class="id" href={ctx.item(k.id)}>{k.id}</a>
+            <Word word={k.word} />
+            <a class="title" href={ctx.item(k.id)}>{k.title}</a>
+            <span class="bar">{#if t.total}<Bar tally={t} />{/if}</span>
+          </div>
+          {#if foldable && unfolded.has(k.id)}{@render tree(k.id, depth + 1)}{/if}
+        </li>
+      {/each}
+    </ul>
+  {:else}
+    <p class="kids faint">Everything it opened is closed.</p>
+  {/if}
+{/snippet}
 
 <div class="plans">
   {#if !ctx.board}
@@ -46,7 +76,6 @@
         <h2>{s.title} <span class="faint">{s.rows.length} open</span></h2>
         <ul>
           {#each s.rows as p (p.node.id)}
-            {@const kids = unfolded.has(p.node.id) ? under(p.node.id) : []}
             <li class="plan" class:due={p.due}>
               <div class="line">
                 <button class="fold" onclick={() => fold(p.node.id)} aria-expanded={unfolded.has(p.node.id)}
@@ -60,19 +89,7 @@
                 </span>
                 <span class="bar">{#if p.tally.total}<Bar tally={p.tally} wide />{:else}<span class="faint">opened nothing yet</span>{/if}</span>
               </div>
-              {#if kids.length}
-                <ul class="kids">
-                  {#each kids as k (k.id)}
-                    <li>
-                      <a class="id" href={ctx.item(k.id)}>{k.id}</a>
-                      <Word word={k.word} />
-                      <a class="title" href={ctx.item(k.id)}>{k.title}</a>
-                    </li>
-                  {/each}
-                </ul>
-              {:else if unfolded.has(p.node.id)}
-                <p class="kids faint">Everything it opened is closed.</p>
-              {/if}
+              {#if unfolded.has(p.node.id)}{@render tree(p.node.id, 1)}{/if}
             </li>
           {/each}
         </ul>
@@ -178,15 +195,19 @@
     font-size: 13px;
   }
 
-  .kids li {
+  .kid {
     display: grid;
-    grid-template-columns: 56px 92px 1fr;
-    align-items: baseline;
+    grid-template-columns: 26px 56px 92px 1fr 160px;
+    align-items: center;
     gap: 8px;
     padding: 3px 0;
   }
 
-  .kids li .title {
+  .kids .kids {
+    margin: 0 0 4px 34px;
+  }
+
+  .kid .title {
     font-weight: 400;
   }
 
@@ -210,6 +231,14 @@
 
     .kids {
       margin-left: 30px;
+    }
+
+    .kid {
+      grid-template-columns: 26px 54px auto 1fr;
+    }
+
+    .kid .bar {
+      grid-column: 2 / -1;
     }
   }
 </style>

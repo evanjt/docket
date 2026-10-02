@@ -471,11 +471,43 @@ pub enum Cmd {
         #[arg(long)]
         remove: bool,
     },
+    /// what a public repository must not carry: the owner's private names, read from the server
+    Private {
+        #[command(subcommand)]
+        what: PrivateCmd,
+    },
     /// bind this directory to a project by hand
     Bind {
         slug: Option<String>,
         #[arg(long)]
         root: Option<String>,
+    },
+}
+
+/// `docket private`: the owner's private names kept out of a public repository.
+#[derive(Subcommand, Debug)]
+pub enum PrivateCmd {
+    /// search the tracked files (or the paths given, or the staged change) for every private name;
+    /// exits 1 on a hit
+    Check {
+        /// the change staged for the next commit, not the tracked files
+        #[arg(long)]
+        staged: bool,
+        /// a commit message file, as a commit-msg hook passes it
+        #[arg(long, value_name = "FILE")]
+        message: Option<String>,
+        /// also report docket item ids cited in code comments
+        #[arg(long)]
+        ids: bool,
+        paths: Vec<String>,
+    },
+    /// every private name, one a line, for a history rewrite's replace file kept outside the repository
+    Terms,
+    /// install pre-commit, commit-msg and pre-push hooks that run the check in this checkout
+    Hook {
+        /// replace hooks that docket did not write
+        #[arg(long)]
+        force: bool,
     },
 }
 

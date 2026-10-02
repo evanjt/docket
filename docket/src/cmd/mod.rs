@@ -7,6 +7,7 @@ pub mod job;
 pub mod lead;
 pub mod lists;
 pub mod machines;
+pub mod private;
 pub mod show;
 pub mod skills;
 pub mod status;
@@ -118,6 +119,7 @@ pub fn run(ctx: &mut Ctx, cmd: Option<&Cmd>) -> Result<i32> {
         | Cmd::Dispatch { .. }
         | Cmd::Jobs { .. }
         | Cmd::Collect { .. } => run_lead(ctx, cmd),
+        Cmd::Private { what } => private::private(ctx, what),
         _ => run_write(ctx, cmd),
     }
 }

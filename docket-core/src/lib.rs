@@ -12,6 +12,7 @@ pub mod like;
 pub mod machine;
 pub mod member;
 pub mod pace;
+pub mod private;
 pub mod project;
 pub mod pyjson;
 pub mod queue;

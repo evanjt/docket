@@ -6,15 +6,13 @@
 //! not dispatched twice, a failed push gives the claim back, and every machine's jobs are read.
 
 use std::fs;
-use std::net::SocketAddr;
+mod common;
+
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::sync::mpsc;
 
-use docket_migration::scratch::Scratch;
-use docket_server::app;
-use docket_server::auth::Keys;
+use common::{Server, serve};
 
 const SEED: &str = r#"
 INSERT INTO projects (slug, keys, skills, created_at, updated_at) VALUES ('o/p',
@@ -48,50 +46,6 @@ sha=$(git rev-parse --short HEAD)
 printf '{"type":"result","result":"NOTE wrote made-by-job\\nDONE %s","usage":{"output_tokens":7}}\n' "$sha"
 "#;
 
-struct Server {
-    addr: SocketAddr,
-    stop: Option<tokio::sync::oneshot::Sender<()>>,
-    thread: Option<std::thread::JoinHandle<()>>,
-}
-
-impl Drop for Server {
-    fn drop(&mut self) {
-        if let Some(stop) = self.stop.take() {
-            stop.send(()).ok();
-        }
-        if let Some(t) = self.thread.take() {
-            t.join().ok();
-        }
-    }
-}
-
-fn serve() -> Server {
-    let (tx, rx) = mpsc::channel::<SocketAddr>();
-    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
-    let thread = std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async move {
-            let db = Scratch::new(2).await;
-            db.seed(SEED).await;
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            tx.send(listener.local_addr().unwrap()).unwrap();
-            let keys = Keys::parse("alpha owner key-alpha\nbeta owner key-beta").unwrap();
-            axum::serve(listener, app(&db.db, keys))
-                .with_graceful_shutdown(async {
-                    stopped.await.ok();
-                })
-                .await
-                .unwrap();
-        });
-    });
-    let addr = rx.recv().unwrap();
-    Server {
-        addr,
-        stop: Some(stop),
-        thread: Some(thread),
-    }
-}
-
 /// Two machines, each a home with its key and a clone of the project bound as its root.
 struct World {
     _tmp: tempfile::TempDir,
@@ -111,7 +65,7 @@ impl World {
         let w = World {
             machines,
             bin,
-            server: serve(),
+            server: serve(SEED, "alpha owner key-alpha\nbeta owner key-beta"),
             _tmp: tmp,
         };
         let origin = w.machines.join("origin");

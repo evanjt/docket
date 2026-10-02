@@ -123,6 +123,19 @@ machine is reached over ssh at its recorded address (`DOCKET_SSH` replaces the p
 the `docket` on its path, and its code moves only by git from the lead's machine: pushed there
 before the job, fetched back by `collect`. `jobs --wait` returns once one of the running jobs ends.
 
+## Private names
+
+A repository may be public while its docket is private. `docket private check` reads every private
+name from the server on the owner's key (`GET /private`: project slugs, owners, machines and their
+addresses, the hosts on keys, events and claims) and searches the tracked files for them, or the
+staged change (`--staged`), or a commit message (`--message FILE`); `--ids` also reports a docket
+item id cited in a code comment. A hit prints `file:line: name` and exits 1. The names are never
+written into the repository: a name that is public (a product's name, a public dependency) is listed
+one a line in `$XDG_CONFIG_HOME/docket/public`, outside it, and the owner and name of `origin` are
+public already. `docket private hook` installs pre-commit, commit-msg and pre-push hooks that run the
+check, and `docket private terms` prints the names, for a history rewrite's replace file kept outside
+the repository.
+
 ## Keys
 
 The keys file has one line per key, `host role key`, where role is `owner` or `agent`. The host is
@@ -159,6 +172,7 @@ it over. A take, a takeover and a give each write a `lead` event on the project;
 | `GET /show/{id}`, `/search`, `/similar/{id}` | one item, full-text search over Postgres `tsvector` |
 | `GET /context/{id}`, `/log/{id}`, `/deps/{id}` | what `show` prints beside an item, its events, its ties |
 | `GET /flow`, `/summary`, `/check`, `/audit`, `/graph`, `/files`, `/citations`, `/shares` | a project's flow, status, integrity, audits, graph, cited files, claims sharing files |
+| `GET /private` | the names private to the owner's docket, for `docket private check`; owner key only |
 | `GET /counts`, `/whoami` | every project's counts; the host and role of the key presented |
 | `GET /projects`, `/items`, `/events`, `/links` | the stored rows, filtered and paged |
 | `GET /dump` | the rows changed after an event `seq` (`since=N`), or every row (`since=0`), for `docket-dump` |

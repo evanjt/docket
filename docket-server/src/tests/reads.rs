@@ -13,7 +13,13 @@ const SEED: &str = r#"
 INSERT INTO projects (slug, keys, themes, skills, created_at, updated_at) VALUES ('o/p',
   '[{"key":"T","kind":"work"},{"key":"Q","kind":"decision"},{"key":"A","kind":"audit"},
     {"key":"PK","kind":"package"},{"key":"CON","kind":"concept"}]',
-  '[{"name":"sync"}]', '{}', 'c', 'u');
+  '[{"name":"sync"}]', '{}', 'c', 'u'),
+  ('o/r', '[{"key":"T","kind":"work"}]', '[]', '{"releases":"1.0 1.1 1.2"}', 'c', 'u');
+INSERT INTO items (rid, project, key, num, title, state, turn, tags, theme, body, opened_at, updated_at) VALUES
+  (130, 'o/r', 'T', 1, 'Two releases out', 'open', 'agent', '["high"]', '1.2', '', 'o30', 'u30'),
+  (131, 'o/r', 'T', 2, 'Next release', 'open', 'agent', '[]', '1.1', '', 'o31', 'u31'),
+  (132, 'o/r', 'T', 3, 'This release, low', 'open', 'agent', '["low"]', NULL, '', 'o32', 'u32'),
+  (133, 'o/r', 'T', 4, 'Docs', 'open', 'agent', '[]', 'docs', '', 'o33', 'u33');
 INSERT INTO items (rid, project, key, num, title, state, turn, tags, rank, complexity, scope, theme,
                    group_name, body, opened_at, updated_at) VALUES
   (1, 'o/p', 'T', 1, 'Plain fix', 'open', 'agent', '[]', NULL, NULL, NULL, NULL, NULL, '', 'o01', 'u01'),
@@ -98,6 +104,11 @@ async fn test_next_orders_by_priority_then_age_alone() {
     assert_eq!(rows[0]["tags"], json!(["high"]));
     assert!(rows[0].get("eff_tier").is_none());
     assert_eq!(get("/show/T8").await.1["word"], "ready");
+}
+
+#[tokio::test]
+async fn test_next_orders_by_release_then_priority() {
+    assert_eq!(ids("/next?project=o/r").await, ["T4", "T3", "T2", "T1"]);
 }
 
 #[tokio::test]

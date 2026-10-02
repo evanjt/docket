@@ -154,6 +154,7 @@ pub async fn next(
         None => None,
     };
     let key = q.key.as_deref().map(str::to_uppercase);
+    let releases = docket_core::fact::releases(project.skills["releases"].as_str());
     let filter = Filter {
         role: q.role.as_deref().and_then(Role::parse),
         priority: q
@@ -164,6 +165,7 @@ pub async fn next(
         under: under.as_ref(),
         complexity: q.complexity.as_deref(),
         theme: q.theme.as_deref(),
+        releases: &releases,
     };
     let candidates: Vec<Candidate> = board.items.iter().map(|r| candidate(r, &kinds)).collect();
     let picked = queue(&candidates, &board.ties, &filter, q.n);

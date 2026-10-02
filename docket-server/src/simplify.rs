@@ -42,6 +42,8 @@ pub struct Change {
     pub lowered: Vec<String>,
     /// The release fact removed.
     pub release: Option<String>,
+    /// The releases fact written in its place: the release, then the version-named themes in order.
+    pub releases: Option<String>,
 }
 
 impl Change {
@@ -91,6 +93,9 @@ impl Change {
         }
         if let Some(r) = &self.release {
             out.push(format!("  release fact {r} removed"));
+        }
+        if let Some(r) = &self.releases {
+            out.push(format!("  releases set to {r}"));
         }
         out
     }
@@ -341,60 +346,32 @@ async fn fold_scopes(tx: &mut Tx, slug: &str, c: &mut Change) -> Result<(), Fail
     Ok(())
 }
 
-/// The release folded into priority: normal work outside it goes to low, and the fact is removed.
+/// The release fact turned into the `releases` fact: the release first, then the themes
+/// named as versions, in version order. Release work keeps its priority; `next` orders by release.
 async fn fold_release(tx: &mut Tx, slug: &str, c: &mut Change) -> Result<(), Failure> {
-    let (skills, themes): (Json, Json) = {
-        let s: Json = scalar(
-            &tx.conn,
-            "SELECT skills FROM projects WHERE slug=?",
-            vec![slug.into()],
-        )
-        .await?
-        .unwrap_or_default();
-        let t: Json = scalar(
-            &tx.conn,
-            "SELECT themes FROM projects WHERE slug=?",
-            vec![slug.into()],
-        )
-        .await?
-        .unwrap_or_default();
-        (s, t)
-    };
+    let skills: Json = scalar(
+        &tx.conn,
+        "SELECT skills FROM projects WHERE slug=?",
+        vec![slug.into()],
+    )
+    .await?
+    .unwrap_or_default();
     let Some(release) = skills["release"].as_str().filter(|r| !r.is_empty()) else {
         return Ok(());
     };
-    let declared: Vec<String> = themes
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|t| t["name"].as_str().map(str::to_string))
-        .collect();
-    let p = tx.project(slug).await?;
-    let held = tx
+    let themes = tx
         .items(
             "SELECT * FROM items WHERE project=? AND state='open' AND theme IS NOT NULL ORDER BY key, num",
             vec![slug.into()],
         )
         .await?;
-    let note =
-        format!("outside release {release}: A7 folds the release into priority, priority low");
-    for r in held {
-        let read_only = rules::kind_of(&p.rules, &r.key).is_ok_and(Kind::is_read_only);
-        if read_only || declared.iter().any(|d| Some(d) == r.theme.as_ref()) {
-            continue;
-        }
-        let low = lowered(&r)?;
-        if low.is_empty() {
-            continue;
-        }
-        tx.update(r.rid, &low).await?;
-        tx.event(slug, Some(r.rid), "edited", Some(&note), None, None)
-            .await?;
-        c.lowered.push(r.id);
-    }
+    let current = release.split_whitespace().next().unwrap_or(release);
+    let named: Vec<&str> = themes.iter().filter_map(|r| r.theme.as_deref()).collect();
+    let releases = releases_of(current, &named).join(" ");
     let mut rest = skills.clone();
     if let Some(m) = rest.as_object_mut() {
         m.remove("release");
+        m.insert("releases".into(), Json::String(releases.clone()));
     }
     tx.execute(
         "UPDATE projects SET skills=?, updated_at=? WHERE slug=?",
@@ -402,11 +379,44 @@ async fn fold_release(tx: &mut Tx, slug: &str, c: &mut Change) -> Result<(), Fai
     )
     .await?;
     tx.touch_project(slug);
-    let said = format!("release {release} removed: A7 orders the work by priority alone");
+    let said = format!(
+        "release {release} removed, releases set to {releases}: the queue orders by release, then priority"
+    );
     tx.event(slug, None, "edited", Some(&said), None, None)
         .await?;
     c.release = Some(release.to_string());
+    c.releases = Some(releases);
     Ok(())
+}
+
+/// The releases in order: the current one, then each theme named as a version (`1.1`, `v2.0`),
+/// in version order, each once.
+#[must_use]
+pub fn releases_of(current: &str, themes: &[&str]) -> Vec<String> {
+    let mut later: Vec<(Vec<u64>, &str)> = themes
+        .iter()
+        .filter(|t| **t != current)
+        .filter_map(|t| version(t).map(|v| (v, *t)))
+        .collect();
+    later.sort();
+    later.dedup_by(|a, b| a.1 == b.1);
+    std::iter::once(current.to_string())
+        .chain(later.into_iter().map(|(_, t)| t.to_string()))
+        .collect()
+}
+
+/// A theme's version numbers when it names a version: digits joined by dots, at least two, with an
+/// optional leading `v`.
+fn version(theme: &str) -> Option<Vec<u64>> {
+    let parts: Vec<&str> = theme
+        .strip_prefix('v')
+        .unwrap_or(theme)
+        .split('.')
+        .collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    parts.iter().map(|p| p.parse::<u64>().ok()).collect()
 }
 
 #[cfg(test)]

@@ -19,7 +19,7 @@ INSERT INTO projects (slug, keys, themes, skills, created_at, updated_at) VALUES
   '[{"key":"T","kind":"work"},{"key":"B","kind":"work"},{"key":"A","kind":"audit"},
     {"key":"PK","kind":"package","meaning":"packages"},{"key":"STY","kind":"story"},
     {"key":"CON","kind":"concept"}]',
-  '[{"name":"Theme 1"}]', '{"release":"1.0.0 2026-10-01","owner":"Ada"}', 'c', 'u'),
+  '[{"name":"Theme 1"}]', '{"release":"1.0 2026-10-01","owner":"Ada"}', 'c', 'u'),
   ('o/q', '[{"key":"T","kind":"work"}]', '[]', '{}', 'c', 'u');
 INSERT INTO items (rid, project, key, num, title, state, turn, tags, scope, theme, body, opened_at, updated_at) VALUES
   (1, 'o/p', 'PK', 1, 'Shelves have one owner', 'open', 'agent', '[]', NULL, NULL, '', 'o', 'u'),
@@ -30,12 +30,14 @@ INSERT INTO items (rid, project, key, num, title, state, turn, tags, scope, them
   (9, 'o/p', 'T', 4, 'Port mixer', 'open', 'agent', '[]', NULL, NULL, '', 'o', 'u'),
   (10, 'o/p', 'T', 5, 'Seen on the way', 'open', 'agent', '[]', 'inbox', NULL, '', 'o', 'u'),
   (11, 'o/p', 'T', 6, 'After the release', 'open', 'agent', '["high"]', 'later', NULL, '', 'o', 'u'),
-  (12, 'o/p', 'T', 7, 'Next version work', 'open', 'agent', '[]', NULL, '1.0.1', '', 'o', 'u'),
+  (12, 'o/p', 'T', 7, 'Next version work', 'open', 'agent', '[]', NULL, '1.1', '', 'o', 'u'),
   (13, 'o/p', 'T', 8, 'Release work', 'open', 'agent', '[]', NULL, 'Theme 1', '', 'o', 'u'),
-  (14, 'o/p', 'T', 9, 'Urgent next version', 'open', 'agent', '["critical"]', NULL, '1.0.1', '', 'o', 'u'),
+  (14, 'o/p', 'T', 9, 'Urgent next version', 'open', 'agent', '["critical"]', NULL, '1.1', '', 'o', 'u'),
   (15, 'o/p', 'STY', 1, 'A baker corrects a step', 'open', 'user', '[]', NULL, NULL, '', 'o', 'u'),
   (16, 'o/p', 'CON', 1, 'Crusts', 'open', 'agent', '[]', NULL, NULL, '', 'o', 'u'),
   (17, 'o/p', 'B', 1, 'Gap the audit found', 'open', 'agent', '[]', NULL, NULL, '', 'o', 'u'),
+  (21, 'o/p', 'T', 12, 'Docs work', 'open', 'agent', '[]', NULL, 'docs', '', 'o', 'u'),
+  (22, 'o/p', 'T', 13, 'Much later work', 'open', 'agent', '[]', NULL, '1.10', '', 'o', 'u'),
   (20, 'o/q', 'T', 1, 'Elsewhere', 'open', 'agent', '[]', 'later', NULL, '', 'o', 'u');
 INSERT INTO items (rid, project, key, num, title, state, resolution, tags, body, opened_at, updated_at) VALUES
   (4, 'o/p', 'T', 2, 'Oven runs hot', 'done', 'abc1234', '[]', '', 'o', 'u'),
@@ -126,8 +128,9 @@ async fn test_a_dry_run_reports_the_write_and_writes_nothing() {
     assert_eq!(ids(&p.closed), ["A1"]);
     assert_eq!(ids(&p.gated), ["PK1"]);
     assert_eq!(ids(&p.unscoped), ["T5", "T6"]);
-    assert_eq!(ids(&p.lowered), ["T5", "T7"]);
-    assert_eq!(p.release.as_deref(), Some("1.0.0 2026-10-01"));
+    assert_eq!(ids(&p.lowered), ["T5"]);
+    assert_eq!(p.release.as_deref(), Some("1.0 2026-10-01"));
+    assert_eq!(p.releases.as_deref(), Some("1.0 1.1 1.10"));
     let q = wrote.iter().find(|c| c.project == "o/q").unwrap();
     assert_eq!(ids(&q.unscoped), ["T1"]);
 }
@@ -172,14 +175,18 @@ async fn test_packages_become_plans_and_the_ceremony_closes_out() {
     assert_eq!(scoped[0], 0);
     assert_eq!(item(&s, "T5").await["tags"], serde_json::json!(["low"]));
     assert_eq!(item(&s, "T6").await["tags"], serde_json::json!(["high"]));
-    assert_eq!(item(&s, "T7").await["tags"], serde_json::json!(["low"]));
+    assert_eq!(item(&s, "T7").await["tags"], serde_json::json!([]));
+    assert_eq!(item(&s, "T12").await["tags"], serde_json::json!([]));
     assert_eq!(item(&s, "T8").await["tags"], serde_json::json!([]));
     assert_eq!(
         item(&s, "T9").await["tags"],
         serde_json::json!(["critical"])
     );
     let skills = rows(&s, "SELECT skills FROM projects WHERE slug='o/p'").await;
-    assert_eq!(skills[0], serde_json::json!({"owner": "Ada"}));
+    assert_eq!(
+        skills[0],
+        serde_json::json!({"owner": "Ada", "releases": "1.0 1.1 1.10"})
+    );
 
     let notes = rows(
         &s,
@@ -197,4 +204,18 @@ async fn test_a_second_run_changes_nothing() {
     let again = simplify(&s.db, "testbox", true).await.unwrap();
     assert!(again.iter().all(Change::is_empty), "{again:?}");
     assert_eq!(items(&s).await, after);
+}
+
+#[test]
+fn test_releases_are_the_current_then_the_version_themes_in_order() {
+    assert_eq!(
+        releases_of(
+            "1.0",
+            &[
+                "1.2", "docs", "1.10", "1.1", "1.2", "v2.0", "Theme 1", "1.0"
+            ]
+        ),
+        ["1.0", "1.1", "1.2", "1.10", "v2.0"]
+    );
+    assert_eq!(releases_of("1.0", &[]), ["1.0"]);
 }

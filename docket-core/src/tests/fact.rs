@@ -277,3 +277,14 @@ fn test_with_sets_and_unsets() {
     );
     assert_eq!(with(&set, "gates", ""), skills(&[]));
 }
+
+#[test]
+fn test_releases_reads_the_names_in_order_and_refuses_one_twice() {
+    assert_eq!(releases(Some(" 1.0  1.1 2.0 ")), ["1.0", "1.1", "2.0"]);
+    assert!(releases(None).is_empty());
+    assert_eq!(check("releases", "1.0 1.1"), Ok(()));
+    assert_eq!(
+        refusal(check("releases", "1.0 1.1 1.0")),
+        "releases names 1.0 twice"
+    );
+}

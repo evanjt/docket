@@ -184,3 +184,52 @@ fn test_next_filters_by_theme_and_under() {
     };
     assert_eq!(ids(next(&items, &[], &below, 10)), vec![3]);
 }
+
+fn releases(names: &[&str]) -> Vec<String> {
+    names.iter().map(|n| (*n).to_string()).collect()
+}
+
+#[test]
+fn test_release_rank_is_the_themes_place_and_the_current_release_otherwise() {
+    let r = releases(&["1.0", "1.1", "1.2"]);
+    assert_eq!(release_rank(&r, Some("1.2")), 2);
+    assert_eq!(release_rank(&r, Some("1.0")), 0);
+    assert_eq!(release_rank(&r, None), 0);
+    assert_eq!(release_rank(&r, Some("docs")), 0);
+    assert_eq!(release_rank(&[], Some("1.1")), 0);
+}
+
+#[test]
+fn test_next_orders_by_release_before_priority() {
+    let items = vec![
+        Candidate {
+            theme: Some("1.2"),
+            tier: 0,
+            ..item(1, "B", Kind::Work)
+        },
+        Candidate {
+            theme: Some("1.1"),
+            tier: 3,
+            ..item(2, "B", Kind::Work)
+        },
+        Candidate {
+            theme: Some("docs"),
+            tier: 2,
+            ..item(3, "B", Kind::Work)
+        },
+        Candidate {
+            tier: 1,
+            ..item(4, "B", Kind::Work)
+        },
+    ];
+    let r = releases(&["1.0", "1.1", "1.2"]);
+    let f = Filter {
+        releases: &r,
+        ..Filter::default()
+    };
+    assert_eq!(ids(next(&items, &[], &f, 10)), vec![4, 3, 2, 1]);
+    assert_eq!(
+        ids(next(&items, &[], &Filter::default(), 10)),
+        vec![1, 4, 3, 2]
+    );
+}

@@ -56,6 +56,17 @@ pub struct Filter<'a> {
     pub under: Option<&'a HashSet<i64>>,
     pub complexity: Option<&'a str>,
     pub theme: Option<&'a str>,
+    /// The releases in the order they ship, from the `releases` fact; empty orders by priority alone.
+    pub releases: &'a [String],
+}
+
+/// Where an item's release falls: its theme's place in the releases, and 0, the current release,
+/// for no theme or a theme the releases do not list.
+#[must_use]
+pub fn release_rank(releases: &[String], theme: Option<&str>) -> usize {
+    theme
+        .and_then(|t| releases.iter().position(|r| r == t))
+        .unwrap_or(0)
 }
 
 /// The role an open item is taken by. A plan that has opened something is due for its audit once
@@ -92,7 +103,8 @@ fn takeable(c: &Candidate, f: &Filter, ties: &[Tie], open: &HashSet<i64>) -> boo
             .is_none_or(|t| c.theme.is_some_and(|mine| like::contains(mine, t)))
 }
 
-/// The queue an agent takes from, as `(rid, tier)`: most urgent first, then oldest first.
+/// The queue an agent takes from, as `(rid, tier)`: the earliest release first, then the most urgent,
+/// then the oldest.
 #[must_use]
 pub fn next(items: &[Candidate], ties: &[Tie], filter: &Filter, limit: usize) -> Vec<(i64, usize)> {
     let open: HashSet<i64> = items.iter().filter(|c| c.open).map(|c| c.rid).collect();
@@ -101,7 +113,14 @@ pub fn next(items: &[Candidate], ties: &[Tie], filter: &Filter, limit: usize) ->
         .filter(|c| takeable(c, filter, ties, &open))
         .filter(|c| filter.priority.is_none_or(|p| c.tier <= p))
         .collect();
-    rows.sort_by_key(|c| (c.tier, c.opened_at, c.rid));
+    rows.sort_by_key(|c| {
+        (
+            release_rank(filter.releases, c.theme),
+            c.tier,
+            c.opened_at,
+            c.rid,
+        )
+    });
     rows.into_iter()
         .take(limit)
         .map(|c| (c.rid, c.tier))

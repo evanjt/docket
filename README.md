@@ -200,8 +200,11 @@ DATABASE_URL=postgres://... docket-server import --from docket-copy.db
 Data from before plans were the one grouping is moved onto that model with `docket-server simplify`.
 Each package key holds plans from then on, ids unchanged, and every open plan waits on what it opened.
 A review claim on a package is given back, and a plan that already held its audit round is closed.
-The inbox, later and the release fold into priority: normal work there goes to low, and the release
-fact is removed. Every change writes an event naming A7. Without `--write` it prints what each
+The inbox and later fold into priority: normal work there goes to low. The release fact becomes the
+`releases` fact: the release, then every theme named as a version (`1.1`, `v2.0`) in version
+order, and release work keeps its priority. `docket next` orders by release, then priority, then
+age: an item's theme names its release, and no theme or a theme the list leaves out is the current
+release's. Every change writes an event saying why. Without `--write` it prints what each
 project changes and writes nothing; a second run changes nothing.
 
 ```bash

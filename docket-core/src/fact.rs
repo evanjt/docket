@@ -6,7 +6,7 @@ use crate::item::Refused;
 use crate::text::py_repr;
 
 /// Every fact a project carries, in the order `docket skills` prints them, with its one-line meaning.
-pub const FACTS: [(&str, &str); 14] = [
+pub const FACTS: [(&str, &str); 15] = [
     ("owner", "the owner's name, as the skills address them"),
     (
         "worktree",
@@ -40,6 +40,10 @@ pub const FACTS: [(&str, &str); 14] = [
     (
         "models",
         "the runner, model and effort a job or a lead runs on, by complexity and role, as \"high=claude:MODEL:high medium=codex:MODEL low=... unrated=... audit=... plan=... lead=...\"",
+    ),
+    (
+        "releases",
+        "the releases in the order they ship, the current first, as \"1.0 1.1 2.0\"; an item's theme names its release, and work with no theme or a theme not listed is the current release's. next orders by release, then priority",
     ),
     (
         "job_timeout",
@@ -236,7 +240,27 @@ fn check_shape(key: &str, value: &str) -> Result<(), Refused> {
     if key == "models" {
         models_of(value).map_err(|why| Refused(format!("models: {why}")))?;
     }
+    if key == "releases" {
+        let names = releases(Some(value));
+        if let Some(twice) = names
+            .iter()
+            .enumerate()
+            .find_map(|(i, n)| names[..i].contains(n).then_some(n))
+        {
+            return Err(Refused(format!("releases names {twice} twice")));
+        }
+    }
     Ok(())
+}
+
+/// The releases a `releases` value lists, in the order they ship.
+#[must_use]
+pub fn releases(value: Option<&str>) -> Vec<String> {
+    value
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(str::to_string)
+        .collect()
 }
 
 /// Digits only, and not all of them zero.

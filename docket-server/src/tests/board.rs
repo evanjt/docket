@@ -261,6 +261,24 @@ async fn test_files_and_citations_read_the_cited_paths() {
 }
 
 #[tokio::test]
+async fn test_graph_nodes_carry_the_rid_events_name() {
+    let s = Seeded::new().await;
+    let g = s.ok("/graph?project=o/p").await;
+    let items = s
+        .ok("/items?filter=%7B%22project%22%3A%22o%2Fp%22%7D")
+        .await;
+    for n in g["nodes"].as_array().unwrap() {
+        let stored = items
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["id"] == n["id"])
+            .unwrap();
+        assert_eq!(n["rid"], stored["rid"], "{n}");
+    }
+}
+
+#[tokio::test]
 async fn test_graph_holds_nodes_and_edges_once_each() {
     let s = Seeded::new().await;
     let g = s.ok("/graph?project=o/p").await;

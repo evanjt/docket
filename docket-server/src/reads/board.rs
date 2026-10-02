@@ -396,7 +396,7 @@ struct LinkRow {
     to_path: Option<String>,
 }
 
-/// `docket graph`: every item with its kind and word, and every link and cited file leaving one.
+/// `docket graph`: every item with its rid, kind and word, and every link and cited file leaving one.
 ///
 /// # Errors
 /// 404 for an unknown project.
@@ -411,7 +411,7 @@ pub async fn graph(
     let nodes: Vec<Value> = items
         .iter()
         .map(|(r, w)| {
-            json!({ "id": r.id, "key": r.key, "kind": kinds.kind(&r.key).as_str(), "state": r.state,
+            json!({ "id": r.id, "rid": r.rid, "key": r.key, "kind": kinds.kind(&r.key).as_str(), "state": r.state,
                     "word": w, "theme": r.theme, "title": r.title })
         })
         .collect();

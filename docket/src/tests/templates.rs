@@ -200,3 +200,13 @@ fn test_instructions_never_write_through_a_symlink() {
         "# Elsewhere\n"
     );
 }
+
+#[test]
+fn test_a_derived_answer_names_its_carrier_and_a_routine_choice_is_a_note() {
+    for (name, text) in texts() {
+        if text.contains("--derived") {
+            assert!(text.contains("--carried-by"), "{name}");
+            assert!(text.contains("outine choice"), "{name}");
+        }
+    }
+}

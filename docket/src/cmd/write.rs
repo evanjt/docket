@@ -363,9 +363,11 @@ pub fn answer(ctx: &mut Ctx, req: &AnswerRequest) -> Result<i32> {
     if !ctx.json {
         print_released(ctx, &out.released);
         let i = &out.item.id;
-        println!(
-            "\n{i} now owes work items: docket start {i}, then docket close {i} \"opened ...\"."
-        );
+        if req.carried_by.is_empty() {
+            println!(
+                "\n{i} now owes work items: docket start {i}, then docket close {i} \"opened ...\"."
+            );
+        }
     }
     Ok(0)
 }

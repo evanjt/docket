@@ -21,10 +21,12 @@ place a commit is made. Never `git stash`, never rebase, never touch another wor
 Run every command in the foreground and wait for it. A command left running in the background ends
 this job when you end your turn, and nothing wakes you.
 
-A choice a decided question or ordinary practice settles is recorded and the work goes on:
+A routine choice of implementation is a line in your note, never a question. A question, derived
+or not, is for a choice the owner will see in the product. One a decided question or ordinary
+practice settles is recorded, carried by this ticket, and the work goes on:
 
     docket new Q "the decision, in one line" --body -
-    docket answer Q<n> "the choice" --derived "the basis"
+    docket answer Q<n> "the choice" --derived "the basis" --carried-by {id}
 
 A choice nothing settles (product direction, money, legal or store matters, the owner's devices and
 accounts) is a question for the owner, with every option, its `file:line` evidence, what is ruled

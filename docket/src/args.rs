@@ -254,6 +254,9 @@ pub enum Cmd {
         /// the decision, central idea or practice an agent derived it from
         #[arg(long, value_name = "BASIS")]
         derived: Option<String>,
+        /// the items already filed that carry the decision out: the question closes on them
+        #[arg(long, value_name = "ID", value_delimiter = ',')]
+        carried_by: Vec<String>,
     },
     /// record a choice made on an item by best practice, with its basis
     Decide {

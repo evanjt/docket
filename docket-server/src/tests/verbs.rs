@@ -261,6 +261,42 @@ async fn test_a_derived_answer_carries_its_basis() {
 }
 
 #[tokio::test]
+async fn test_a_derived_answer_with_its_carrier_closes_and_never_lists_for_planning() {
+    let s = Scratch::new().await;
+    s.open("Q", "Retry or fail on a timeout").await;
+    s.open("T", "Retry a timed out order three times").await;
+    s.open("Q", "Which retry count").await;
+    let out = s
+        .ok(
+            "answer",
+            json!({ "id": "Q1", "decision": "Retry", "derived": "CID2, orders are idempotent", "carried_by": ["T1"] }),
+        )
+        .await;
+    assert_eq!(out["item"]["state"], "done");
+    let q1 = s.item("Q1").await;
+    assert_eq!(q1["resolution"], "carried by T1");
+    assert_eq!(s.item("T1").await["opened"], json!(["Q1"]));
+    let (_, research) = s
+        .send(
+            Method::GET,
+            &format!("/research?project={SLUG}"),
+            "ownerkey",
+            None,
+        )
+        .await;
+    assert!(ids(&research).is_empty(), "{research}");
+    assert!(!next(&s, "plan").await.contains(&"Q1".to_string()));
+    let (status, out) = s
+        .post(
+            "answer",
+            json!({ "id": "Q2", "decision": "Three", "derived": "CID2", "carried_by": ["T9"] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{out}");
+    assert_eq!(s.item("Q2").await["state"], "open");
+}
+
+#[tokio::test]
 async fn test_a_new_question_lists_the_decided_questions_close_to_it() {
     let s = Scratch::new().await;
     s.open("Q", "Retry policy for the order queue").await;

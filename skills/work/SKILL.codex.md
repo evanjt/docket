@@ -53,11 +53,13 @@ opened A3`, `docket edit T14 --append "Closed short of its fix: ..."`.
 
 ## Choices
 
-A choice a decided question or ordinary practice settles is recorded and the
-work goes on:
+A routine choice of implementation is a line in the close note, never a
+question: a question is for a choice the owner will see in the product. One a
+decided question or ordinary practice settles is recorded, carried by the
+ticket in hand, and the work goes on:
 
     docket new Q "the decision" --body -
-    docket answer Q<n> "the choice" --derived "the basis"
+    docket answer Q<n> "the choice" --derived "the basis" --carried-by T14
 
 A choice nothing settles (product direction, money, legal, the owner's devices
 and accounts) is a question for the owner: `docket new Q "..." --body -` with

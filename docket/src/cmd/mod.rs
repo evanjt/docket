@@ -333,12 +333,14 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             id,
             decision,
             derived,
+            carried_by,
         } => {
             let req = AnswerRequest {
                 common: ctx.common(false)?,
                 id: id.clone(),
                 decision: decision.clone(),
                 derived: derived.clone(),
+                carried_by: carried_by.clone(),
             };
             write::answer(ctx, &req)
         }

@@ -92,11 +92,14 @@ out, link each as opened by the question, and close it with them:
 
 ## Questions
 
-A choice a decided question or ordinary practice settles is recorded, marked
-derived, and the planning goes on:
+A routine choice of implementation is a line in a ticket's Fix, never a
+question. A question, derived or not, is for a choice the owner will see in
+the product. One a decided question or ordinary practice settles is recorded,
+marked derived, with the ticket that carries it out, filed first; it closes on
+that ticket and never waits to be planned again:
 
     docket new Q "the decision, in one line" --body -
-    docket answer Q<n> "the choice" --derived "the basis"
+    docket answer Q<n> "the choice" --derived "the basis" --carried-by T14
 
 The owner reads `docket derived` as a digest and overturns any of them by
 answering again. A choice nothing settles (product direction, money, legal or

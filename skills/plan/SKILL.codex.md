@@ -56,8 +56,11 @@ machine: a comment states the rule itself, and tests use invented names.
 
 ## Questions
 
-A choice a decided question or ordinary practice settles: `docket new Q "..."
---body -`, then `docket answer Q<n> "the choice" --derived "the basis"`. One
+A routine choice of implementation is a line in a ticket's Fix, never a
+question; a question is for a choice the owner will see in the product. A
+choice a decided question or ordinary practice settles: `docket new Q "..."
+--body -`, then `docket answer Q<n> "the choice" --derived "the basis"
+--carried-by T14`, naming the ticket filed to carry it out. One
 nothing settles goes to the owner as a question with every option, its
 `file:line` evidence, what is ruled out and the fact that would settle it; a
 ticket that turns on it gets `docket wait T14 --on Q<n>`.

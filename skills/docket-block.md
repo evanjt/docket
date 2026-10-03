@@ -10,8 +10,9 @@ skills` prints this project's facts.
 - Work a ticket in a worktree off the branch you started from, the failing
   test first. Merge back into that branch, then `docket close ID <sha>`. Never
   push: the owner does.
-- A choice a recorded decision or ordinary practice settles is filed as a
-  question and answered with `--derived "the basis"`. One only the owner can
+- A routine choice is a line in the close note. One the owner sees in the
+  product, settled by a decision or ordinary practice, is a question answered
+  `--derived "the basis" --carried-by T14`. One only the owner can
   make is a question with every option and its evidence: `docket wait ID --on
   Q<n>`, then take another ticket. Never weaken a test to avoid one.
 - Something found on the way: `docket add "title" --body -`.

@@ -26,8 +26,11 @@ The body holds the **Evidence** (`file:line` read from the tree, never quoted fr
 **Fix**, and the **Failing case**. A defect is a `B`. Before filing, `docket search` the words: what
 already covers part of it is linked, not written again.
 
-A choice a decided question or ordinary practice settles is recorded with `docket answer Q<n> "the
-choice" --derived "the basis"`. A choice nothing settles is a question for the owner with every
+A routine choice of implementation is a line in a ticket's Fix, never a question. A question,
+derived or not, is for a choice the owner will see in the product. One a decided question or
+ordinary practice settles is recorded with the ticket that carries it out, filed first, and closes
+on it: `docket answer Q<n> "the choice" --derived "the basis" --carried-by T<n>`. It is never left
+open for another plan job to find. A choice nothing settles is a question for the owner with every
 option and its evidence, and the tickets that turn on it wait with `docket wait T<n> --on Q<n>`.
 
 Run every command in the foreground and wait for it. A measurement's script or fixture is left in

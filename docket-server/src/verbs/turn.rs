@@ -15,7 +15,7 @@ use docket_core::item::Field;
 use docket_core::rules;
 
 use crate::auth::Caller;
-use crate::verbs::graph::{audits_over, is_standing, release_waiters, similar_rows};
+use crate::verbs::graph::{audits_over, is_standing, release_waiters, settle_audits, similar_rows};
 use crate::verbs::view::{brief, item_view, kind};
 use crate::verbs::{Call, Failure, chars, given};
 
@@ -193,6 +193,10 @@ pub async fn answer(
 ) -> Result<Json<Answered>, Failure> {
     let mut call = Call::begin(&db, &caller, &req.common).await?;
     let r = call.item(&req.id).await?;
+    let mut carriers = Vec::new();
+    for id in &req.carried_by {
+        carriers.push(call.item(id).await?);
+    }
     let kind = kind(&call.project, &r);
     let mut cols = rules::answer(
         &r,
@@ -228,7 +232,31 @@ pub async fn answer(
             None,
         )
         .await?;
-    let released = release_waiters(&mut call.tx, &call.slug, &row, "decided").await?;
+    let mut released = release_waiters(&mut call.tx, &call.slug, &row, "decided").await?;
+    let row = if carriers.is_empty() {
+        row
+    } else {
+        let ids: Vec<&str> = carriers.iter().map(|c| c.id.as_str()).collect();
+        let resolution = format!("carried by {}", ids.join(", "));
+        let cols = rules::close(&row, &call.ctx, Some(&resolution), kind)?;
+        let row = call.tx.update(r.rid, &cols).await?;
+        call.tx
+            .event(
+                &call.slug,
+                Some(r.rid),
+                "closed",
+                Some(&resolution),
+                Some(call.branch()),
+                None,
+            )
+            .await?;
+        for c in &carriers {
+            call.tx.set_link(c.rid, "opened", r.rid, false).await?;
+        }
+        released.extend(release_waiters(&mut call.tx, &call.slug, &row, "closed").await?);
+        released.extend(settle_audits(&mut call.tx, &call.project, &[r.rid]).await?);
+        row
+    };
     let out = Answered {
         item: item_view(&call.tx.conn, &call.project, &row).await?,
         released: released.iter().map(brief).collect(),

@@ -262,6 +262,9 @@ pub struct AnswerRequest {
     pub decision: String,
     #[serde(default)]
     pub derived: Option<String>,
+    /// The items that carry the decision out, already filed: the question closes on them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub carried_by: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

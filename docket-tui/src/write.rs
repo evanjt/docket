@@ -344,6 +344,7 @@ impl<S: Source> App<S> {
                     id: id.clone(),
                     decision: text,
                     derived: None,
+                    carried_by: Vec::new(),
                 };
                 ("answer", body(&req), format!("answered {id}"))
             }

@@ -109,13 +109,15 @@ claim, or you reach the number of tickets you were asked for.
 When a fix turns on a choice, look first for what settles it: a decided
 question (`docket search`, `docket derived`, and the decided questions
 `docket new Q` lists as close to a new one), or ordinary practice for this
-kind of software. When one does, record it and carry on:
+kind of software. When one does, record it, carried by the ticket in hand, and
+carry on:
 
     docket new Q "the decision, in one line" --body -        # options and evidence
-    docket answer Q<n> "the choice" --derived "the basis"
+    docket answer Q<n> "the choice" --derived "the basis" --carried-by T14
 
-A routine choice of implementation is a line in the close note instead. Never
-pick the cheaper option because it is cheaper.
+A routine choice of implementation is a line in the close note instead, never a
+question: a question, derived or not, is for a choice the owner will see in the
+product. Never pick the cheaper option because it is cheaper.
 
 A question goes to the owner only when nothing settles it: product direction,
 money, legal or store matters, the owner's own devices and accounts. The body

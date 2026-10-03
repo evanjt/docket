@@ -433,3 +433,13 @@ fn test_find_and_tail() {
     assert!(find(&m.state(), "nope", None).is_err());
     assert!(tail(&s.dir, 1).contains("DONE abcdef1"));
 }
+
+#[test]
+fn test_a_brief_keeps_a_routine_choice_out_of_the_questions() {
+    for role in ["build", "plan"] {
+        let text = brief(role, "T14", "lead/t14-7").unwrap();
+        assert!(text.contains("routine choice"), "{role}");
+        assert!(text.contains("see in the product"), "{role}");
+        assert!(text.contains("--carried-by"), "{role}");
+    }
+}

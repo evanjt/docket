@@ -310,7 +310,7 @@ async fn test_a_release_sets_the_theme_an_item_is_filed_under() {
     .await;
     s.ok(
         "new",
-        json!({ "key": "T", "title": "Dark map style", "release": "1.1" }),
+        json!({ "key": "T", "title": "Wider settings page", "release": "1.1" }),
     )
     .await;
     s.ok(
@@ -741,20 +741,16 @@ async fn test_every_verb_that_ends_a_claim_clears_its_runner_and_job() {
 // ---- test_audit.py ----
 
 async fn plan(s: &Scratch) {
-    s.open_with_body(
-        "A",
-        "The pantry plan",
-        "Every bakery oven is a ratio set.\n",
-    )
-    .await;
+    s.open_with_body("A", "The pantry plan", "Every oven has one schedule.\n")
+        .await;
 }
 
 #[tokio::test]
 async fn test_audit_waits_until_everything_it_opened_is_closed() {
     let s = Scratch::new().await;
     plan(&s).await;
-    s.open("B", "Port proofer").await;
-    s.open("Q", "Which pressure does mixer read").await;
+    s.open("B", "Port the proofer").await;
+    s.open("Q", "Which scale does the mixer read").await;
     s.ok(
         "link",
         json!({ "a": ["B1", "Q1"], "kind": "opened", "b": "A1" }),
@@ -768,7 +764,7 @@ async fn test_audit_waits_until_everything_it_opened_is_closed() {
         json!({ "id": "Q1", "decision": "the bench scale" }),
     )
     .await;
-    s.open("B", "mixer reads the bench scale").await;
+    s.open("B", "The mixer reads the bench scale").await;
     s.ok("close", json!({ "id": "Q1", "resolution": "opened B2" }))
         .await;
     s.ok("close", json!({ "id": "B1", "resolution": "abc1234" }))
@@ -793,7 +789,7 @@ async fn test_audit_waits_until_everything_it_opened_is_closed() {
 async fn test_a_reopened_item_holds_its_audit_again() {
     let s = Scratch::new().await;
     plan(&s).await;
-    s.open("B", "Port proofer").await;
+    s.open("B", "Port the proofer").await;
     s.ok("link", json!({ "a": ["B1"], "kind": "opened", "b": "A1" }))
         .await;
     s.ok("close", json!({ "id": "B1", "resolution": "abc1234" }))
@@ -863,7 +859,7 @@ async fn test_an_audit_that_finds_work_goes_back_to_waiting() {
     s.ok("start", json!({ "id": "A1" })).await;
     s.ok(
         "close",
-        json!({ "id": "A1", "resolution": "clean: every oven is a stored ratio set" }),
+        json!({ "id": "A1", "resolution": "clean: every oven has a stored schedule" }),
     )
     .await;
     assert_eq!(s.item("A1").await["state"], "done");
@@ -886,8 +882,8 @@ async fn next(s: &Scratch, role: &str) -> Vec<String> {
 async fn test_a_plans_audit_comes_due_once_and_closes_in_one_round() {
     let s = Scratch::new().await;
     plan(&s).await;
-    s.open("B", "Port proofer").await;
-    s.open("T", "Port mixer").await;
+    s.open("B", "Port the proofer").await;
+    s.open("T", "Port the mixer").await;
     s.ok(
         "link",
         json!({ "a": ["B1", "T1"], "kind": "opened", "b": "A1" }),
@@ -903,7 +899,7 @@ async fn test_a_plans_audit_comes_due_once_and_closes_in_one_round() {
     assert!(!next(&s, "work").await.contains(&"A1".to_string()));
     assert!(!next(&s, "plan").await.contains(&"A1".to_string()));
     s.ok("start", json!({ "id": "A1" })).await;
-    s.open("B", "proofer reads the wrong constant").await;
+    s.open("B", "The proofer reads the wrong constant").await;
     s.ok("link", json!({ "a": ["B2"], "kind": "opened", "b": "A1" }))
         .await;
     s.ok(
@@ -926,7 +922,7 @@ async fn test_a_new_plan_is_the_plan_roles_until_it_opens_work() {
     s.open("I", "How many ovens the bakery has").await;
     assert_eq!(next(&s, "plan").await, vec!["A1", "I1"]);
     assert!(next(&s, "audit").await.is_empty());
-    s.open("B", "Port proofer").await;
+    s.open("B", "Port the proofer").await;
     s.ok("link", json!({ "a": ["B1"], "kind": "opened", "b": "A1" }))
         .await;
     assert_eq!(next(&s, "plan").await, vec!["I1"]);

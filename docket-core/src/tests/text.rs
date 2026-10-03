@@ -54,7 +54,7 @@ fn test_citations_resume_after_a_fix_bullet_ends() {
     assert_eq!(paths(body), vec!["src/x.rs"]);
 }
 
-const PLAN: &str = "- **Source.** A conversation.\n- **Principles.**\n  1. Every oven is stored as a ratio set,\n     authored by hand.\n  2. A shared step is corrected once.\n- **Scope.** The pantry.\n";
+const PLAN: &str = "- **Source.** A conversation.\n- **Principles.**\n  1. Every loaf is weighed against a ratio set,\n     written by hand.\n  2. A shared step is corrected once.\n- **Scope.** The pantry.\n";
 
 #[test]
 fn test_principles_parse_the_numbered_list_with_continuations() {
@@ -63,7 +63,7 @@ fn test_principles_parse_the_numbered_list_with_continuations() {
         vec![
             (
                 1,
-                "Every oven is stored as a ratio set, authored by hand.".to_string()
+                "Every loaf is weighed against a ratio set, written by hand.".to_string()
             ),
             (2, "A shared step is corrected once.".to_string()),
         ]

@@ -69,27 +69,27 @@ fn items() -> Vec<ItemRow> {
     claimed.claim_host = Some("devbox.lan".into());
     claimed.claim_job = Some("t2-b1".into());
     claimed.claim_since = Some("2026-10-01T09:00:00Z".into());
-    let mut question = item(5, "Q1", "Which store holds the buns", "open");
+    let mut question = item(5, "Q1", "Which shelf holds the loaves", "open");
     question.turn = Some("user".into());
     question.turn_note = Some("pick one".into());
-    let mut blocked = item(7, "B1", "Buns vanish after a wipe", "open");
+    let mut blocked = item(7, "B1", "Loaves vanish after a restock", "open");
     blocked.wait_on = Some("item".into());
     blocked.wait_ref = Some("Q1".into());
-    blocked.group_name = Some("buns".into());
-    let mut plan = item(8, "A1", "Buns stay put", "open");
+    blocked.group_name = Some("loaves".into());
+    let mut plan = item(8, "A1", "Loaves stay put", "open");
     plan.wait_on = Some("condition".into());
     plan.wait_ref = Some("all closed".into());
     vec![
         item(1, "T1", "First member, done", "done"),
         claimed,
-        item(3, "T3", "Fix the bun cache", "open"),
-        item(4, "PK1", "Bun cache has one owner", "open"),
+        item(3, "T3", "Fix the loaf count", "open"),
+        item(4, "PK1", "Loaf count has one owner", "open"),
         question,
         item(6, "CON1", "Crusts", "open"),
         blocked,
         plan,
         item(9, "A2", "Orders print at the till", "open"),
-        item(10, "T4", "Cache the oven buns", "done"),
+        item(10, "T4", "Print the order slips", "done"),
     ]
 }
 
@@ -116,7 +116,7 @@ fn ties() -> Vec<Tie> {
 fn body(id: &str) -> String {
     match id {
         "T3" => "The cache in PK1 forgets T1's fix.\n\n- Needs Q1 answered first, not X9.".into(),
-        "Q1" => "Two stores could hold the buns.\nThe owner picks one; B1 waits on it.".into(),
+        "Q1" => "Two shelves could hold the loaves.\nThe owner picks one; B1 waits on it.".into(),
         _ => format!("Body of {id}."),
     }
 }

@@ -27,7 +27,7 @@ INSERT INTO items (rid, project, key, num, title, state, turn, tags, scope, them
   (3, 'o/p', 'PK', 2, 'Oven owner', 'open', 'agent', '["high"]', NULL, NULL, '', 'o', 'u'),
   (6, 'o/p', 'A', 1, 'The pantry plan', 'open', 'agent', '[]', NULL, NULL, '', 'o', 'u'),
   (8, 'o/p', 'A', 2, 'Plan still building', 'open', 'agent', '[]', NULL, NULL, '', 'o', 'u'),
-  (9, 'o/p', 'T', 4, 'Port mixer', 'open', 'agent', '[]', NULL, NULL, '', 'o', 'u'),
+  (9, 'o/p', 'T', 4, 'Port the mixer', 'open', 'agent', '[]', NULL, NULL, '', 'o', 'u'),
   (10, 'o/p', 'T', 5, 'Seen on the way', 'open', 'agent', '[]', 'inbox', NULL, '', 'o', 'u'),
   (11, 'o/p', 'T', 6, 'After the release', 'open', 'agent', '["high"]', 'later', NULL, '', 'o', 'u'),
   (12, 'o/p', 'T', 7, 'Next version work', 'open', 'agent', '[]', NULL, '1.1', '', 'o', 'u'),

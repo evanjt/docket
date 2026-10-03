@@ -93,8 +93,8 @@ fn test_parse_reads_open_their_page() {
         ))))
     );
     assert_eq!(
-        parse("search bun cache", "o/p", &[]),
-        Ok(Command::Search("bun cache".into()))
+        parse("search loaf count", "o/p", &[]),
+        Ok(Command::Search("loaf count".into()))
     );
     assert_eq!(
         parse("status", "o/p", &[]),

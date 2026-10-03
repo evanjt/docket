@@ -53,12 +53,12 @@ fn read() -> Read {
             "pace": {"closed": 0, "working": 0},
             "claims": [{"id": "T2", "title": "Second member", "branch": "audit/t2-1",
                         "host": "devbox", "since": 1000, "flag": "no event for 3h"}],
-            "plans": [{"id": "A1", "title": "Buns stay put", "done": 1, "total": 4, "live": 1}],
+            "plans": [{"id": "A1", "title": "Loaves stay put", "done": 1, "total": 4, "live": 1}],
             "due": [{"id": "A2", "title": "Orders print at the till"}],
             "problems": [],
         }),
-        yours: json!([{"id": "Q1", "title": "Which store holds the buns"}]),
-        next: json!([{"id": "T3", "title": "Fix the bun cache", "complexity": "low"}]),
+        yours: json!([{"id": "Q1", "title": "Which shelf holds the loaves"}]),
+        next: json!([{"id": "T3", "title": "Fix the loaf count", "complexity": "low"}]),
         now: 1000 + 3 * 3600,
     }
 }
@@ -75,14 +75,14 @@ fn test_status_text_shows_claims_owner_items_and_due_audits() {
     );
     assert!(text.contains("YOURS  1  (docket todo)"), "{text}");
     assert!(
-        text.contains(" Q1     Which store holds the buns"),
+        text.contains(" Q1     Which shelf holds the loaves"),
         "{text}"
     );
     assert!(text.contains("AUDITS DUE  1"), "{text}");
     assert!(text.contains(" A2     Orders print at the till"), "{text}");
     assert!(text.contains("PLANS  1 under way"), "{text}");
     assert!(
-        text.contains("   1. T3     Fix the bun cache [low]"),
+        text.contains("   1. T3     Fix the loaf count [low]"),
         "{text}"
     );
     assert!(text.contains("/plan") && text.contains("/work") && text.contains("/audit"));

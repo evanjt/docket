@@ -265,7 +265,7 @@ fn test_a_group_name_in_the_detail_opens_the_group() {
     let spots = view::spots(&a);
     let at = spots
         .iter()
-        .position(|(_, t)| *t == Target::List(Listing::Group("buns".into())))
+        .position(|(_, t)| *t == Target::List(Listing::Group("loaves".into())))
         .unwrap();
     for _ in 0..=at {
         press(&mut a, KeyCode::Tab);
@@ -273,7 +273,7 @@ fn test_a_group_name_in_the_detail_opens_the_group() {
     press(&mut a, KeyCode::Enter);
     let s = screen(&mut a, 80);
     assert!(
-        s.contains("[group buns]") && s.contains("group buns 1"),
+        s.contains("[group loaves]") && s.contains("group loaves 1"),
         "{s}"
     );
 }

@@ -19,6 +19,7 @@ pub mod queue;
 pub mod rows;
 pub mod rules;
 pub mod search;
+pub mod stall;
 pub mod text;
 pub mod touch;
 pub mod word;

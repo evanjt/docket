@@ -315,6 +315,13 @@ fn problem_line(p: &Value) -> String {
         "integrity" => format!("integrity_check: {}", s("result")),
         "foreign_keys" => format!("{n} foreign key violations"),
         "cycle" => format!("{} waits in a cycle", s("id")),
+        "held_later" => format!(
+            "{} ({}) is held by {}, in the later release {}",
+            s("id"),
+            s("release"),
+            s("by"),
+            s("later")
+        ),
         "held_gate" => format!(
             "{} is held although everything it opened is closed: docket resume {}",
             s("id"),

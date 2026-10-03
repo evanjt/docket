@@ -359,6 +359,39 @@ async fn test_check_finds_an_open_audit_and_bare_bodies() {
     assert_eq!(s.ok("/check?project=o/q").await, json!([]));
 }
 
+const STALLED: &str = r#"
+INSERT INTO projects (slug, keys, themes, skills, remotes, created_at, updated_at) VALUES ('o/s',
+  '[{"key":"T","kind":"work"},{"key":"PK","kind":"package"}]', '[]', '{"releases":"1.0 1.1"}', '[]', 'c', 'u');
+INSERT INTO items (rid, project, key, num, title, state, turn, wait_on, wait_item, wait_ref, wait_since, theme, tags, body, opened_at, updated_at) VALUES
+  (101, 'o/s', 'PK', 1, 'First package', 'open', 'agent', 'condition', NULL, 'everything it opened is closed', 'w', NULL, '[]', 'x', 'o', 'u'),
+  (102, 'o/s', 'PK', 2, 'Second package', 'open', 'agent', 'condition', NULL, 'everything it opened is closed', 'w', NULL, '[]', 'x', 'o', 'u'),
+  (103, 'o/s', 'T', 1, 'Member of the first', 'open', 'agent', 'item', 102, 'PK2', 'w', NULL, '[]', 'x', 'o', 'u'),
+  (104, 'o/s', 'T', 2, 'Member of the second', 'open', 'agent', 'item', 101, 'PK1', 'w', NULL, '[]', 'x', 'o', 'u'),
+  (105, 'o/s', 'PK', 3, 'Current package', 'open', 'agent', 'condition', NULL, 'everything it opened is closed', 'w', '1.0', '[]', 'x', 'o', 'u'),
+  (106, 'o/s', 'T', 3, 'Later member', 'open', 'agent', NULL, NULL, NULL, NULL, '1.1', '[]', 'x', 'o', 'u'),
+  (107, 'o/s', 'T', 4, 'Current waiter', 'open', 'agent', 'item', 108, 'T5', 'w', NULL, '[]', 'x', 'o', 'u'),
+  (108, 'o/s', 'T', 5, 'Later item', 'open', 'agent', NULL, NULL, NULL, NULL, '1.1', '[]', 'x', 'o', 'u');
+INSERT INTO links (rid, kind, to_rid) VALUES (103, 'opened', 101), (104, 'opened', 102), (106, 'opened', 105);
+"#;
+
+#[tokio::test]
+async fn test_check_finds_a_cycle_through_containers_and_a_hold_by_a_later_release() {
+    let s = Seeded::new().await;
+    s.db.seed(STALLED).await;
+    let c = s.ok("/check?project=o/s").await;
+    assert_eq!(
+        c,
+        json!([
+            { "kind": "cycle", "id": "PK1" },
+            { "kind": "cycle", "id": "PK2" },
+            { "kind": "cycle", "id": "T1" },
+            { "kind": "cycle", "id": "T2" },
+            { "kind": "held_later", "id": "PK3", "by": "T3", "release": "1.0", "later": "1.1" },
+            { "kind": "held_later", "id": "T4", "by": "T5", "release": "1.0", "later": "1.1" },
+        ])
+    );
+}
+
 #[tokio::test]
 async fn test_shares_flags_idle_claims_and_files_they_share() {
     let s = Seeded::new().await;

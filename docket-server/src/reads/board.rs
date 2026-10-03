@@ -185,7 +185,7 @@ pub async fn problems(db: &DatabaseConnection, slug: &str) -> Result<Vec<Value>,
     );
     out.extend(undefined_keys(db, slug, &project).await?);
     out.extend(database_checks(db).await?);
-    out.extend(cycles(db, slug).await?);
+    out.extend(stalls(db, slug).await?);
     out.extend(audits_held(db, slug, &project).await?);
     let cutoff = stamp(now_secs().saturating_sub(30 * 86_400));
     let stale = rows(
@@ -286,26 +286,61 @@ const BROKEN: &str = "SELECT 'index ' || c.relname FROM pg_index x JOIN pg_class
      WHERE n.nspname = current_schema() AND k.contype = 'c' AND NOT k.convalidated \
      ORDER BY 1";
 
-async fn cycles(db: &DatabaseConnection, slug: &str) -> Result<Vec<Value>, Failure> {
-    let waiting = rows(
+#[derive(FromQueryResult)]
+struct Hold {
+    rid: i64,
+    to_rid: i64,
+}
+
+/// What stalls the queue for good: open items holding each other in a cycle, through an item's wait
+/// or a container's wait on its open members, and an item held by one in a later release.
+async fn stalls(db: &DatabaseConnection, slug: &str) -> Result<Vec<Value>, Failure> {
+    let open = rows(
         db,
-        "SELECT * FROM items WHERE project=? AND state='open' AND wait_on='item' ORDER BY rid",
+        "SELECT * FROM items WHERE project=? AND state='open' ORDER BY rid",
         vec![slug.into()],
     )
     .await?;
-    let mut out = Vec::new();
-    for r in waiting {
-        let mut seen = std::collections::HashSet::new();
-        let mut cur = Some(r.rid);
-        while let Some(c) = cur {
-            if !seen.insert(c) {
-                out.push(problem("cycle", json!({ "id": r.id })));
-                break;
-            }
-            cur = store::by_rid(db, c)
-                .await?
-                .filter(|t| t.state == "open")
-                .and_then(|t| t.wait_item);
+    let by_rid: HashMap<i64, &crate::entities::item::Model> =
+        open.iter().map(|r| (r.rid, r)).collect();
+    let holds = Hold::find_by_statement(sql(
+        "SELECT i.rid, i.wait_item AS to_rid FROM items i WHERE i.project=? AND i.state='open' \
+           AND i.wait_on='item' AND i.wait_item IS NOT NULL \
+         UNION ALL SELECT c.rid, l.rid FROM items c JOIN links l ON l.to_rid=c.rid AND l.kind='opened' \
+           WHERE c.project=? AND c.state='open' AND c.wait_on='condition' AND c.wait_ref=? \
+         ORDER BY 1, 2",
+        vec![slug.into(), slug.into(), GATE.into()],
+    ))
+    .all(db)
+    .await?;
+    let mut edges: std::collections::BTreeMap<i64, Vec<i64>> = std::collections::BTreeMap::new();
+    for h in holds {
+        if by_rid.contains_key(&h.rid) && by_rid.contains_key(&h.to_rid) {
+            edges.entry(h.rid).or_default().push(h.to_rid);
+        }
+    }
+    let mut out: Vec<Value> = docket_core::stall::cycles(&edges)
+        .into_iter()
+        .map(|rid| problem("cycle", json!({ "id": by_rid[&rid].id })))
+        .collect();
+    let model = project_model(db, slug).await?;
+    let releases = docket_core::fact::releases(model.skills["releases"].as_str());
+    if releases.len() > 1 {
+        let release_of = |rid: i64| {
+            let theme = by_rid[&rid].theme.as_deref();
+            docket_core::queue::release_rank(&releases, theme)
+        };
+        let rank = by_rid.keys().map(|&rid| (rid, release_of(rid))).collect();
+        for (held, by) in docket_core::stall::held_later(&edges, &rank) {
+            out.push(problem(
+                "held_later",
+                json!({
+                    "id": by_rid[&held].id,
+                    "by": by_rid[&by].id,
+                    "release": releases[release_of(held)],
+                    "later": releases[release_of(by)],
+                }),
+            ));
         }
     }
     Ok(out)

@@ -238,6 +238,29 @@ pub fn report(text: &str) -> (Option<Report>, Option<String>) {
     (last.and_then(report_line), note)
 }
 
+/// What a job saw on the way that is below the bar for an item of its own: every line of its final
+/// message starting `OBSERVE `, in order.
+#[must_use]
+pub fn observations(text: &str) -> Vec<String> {
+    text.lines()
+        .map(str::trim)
+        .filter_map(|l| l.strip_prefix("OBSERVE "))
+        .map(str::trim)
+        .filter(|o| !o.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// The observations as appended to the job's item.
+#[must_use]
+pub fn observed(job: &str, observations: &[String]) -> String {
+    let list: Vec<String> = observations.iter().map(|o| format!("- {o}")).collect();
+    format!(
+        "**Observations, from the job {job}.**\n\n{}",
+        list.join("\n")
+    )
+}
+
 /// The commit message a job proposes: the last line of its final message starting `MESSAGE `.
 #[must_use]
 pub fn message(text: &str) -> Option<String> {
@@ -390,6 +413,8 @@ pub struct Row {
     pub note: Option<String>,
     /// The one-line commit message the job proposes.
     pub message: Option<String>,
+    /// What it saw on the way, below the bar for an item of its own.
+    pub observations: Vec<String>,
     /// The commit the job started from.
     pub base: Option<String>,
     /// The final message in full: the result of a Claude session, the last message file of Codex.
@@ -435,6 +460,7 @@ pub fn row(dir: &Path, at: u64) -> Option<Row> {
         report: said.map(|r| r.line()),
         note,
         message: last.as_deref().and_then(message),
+        observations: last.as_deref().map(observations).unwrap_or_default(),
         base: meta.base,
         last,
         worktree: meta.worktree,

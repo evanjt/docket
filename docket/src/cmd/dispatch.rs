@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use docket_core::api::{Common, ReleaseRequest, StartRequest, Started};
+use docket_core::api::{Common, EditRequest, ReleaseRequest, StartRequest, Started};
 use docket_core::fact::{self, Model, Role};
 use docket_core::machine::Machine;
 
@@ -251,6 +251,7 @@ pub fn collect(ctx: &mut Ctx, id: &str, discard: bool) -> Result<i32> {
         remove(&via, &slug, name, same)?;
         None
     };
+    append_observations(ctx, &id, name, &row)?;
     let reference = format!("refs/heads/{branch}");
     let commits = if git(&repo, &["rev-parse", "--verify", "--quiet", &reference]).is_ok() {
         git(&repo, &["log", "--oneline", &format!("HEAD..{branch}")]).map_err(Fail::refused)?
@@ -269,6 +270,31 @@ pub fn collect(ctx: &mut Ctx, id: &str, discard: bool) -> Result<i32> {
     };
     said.print(ctx.json);
     Ok(0)
+}
+
+/// A job's `OBSERVE` lines, appended to its item, so what it saw below the bar for an item of its own
+/// is kept.
+fn append_observations(ctx: &mut Ctx, id: &str, name: &str, row: &Value) -> Result<()> {
+    let seen: Vec<String> = row["observations"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    if seen.is_empty() {
+        return Ok(());
+    }
+    let req = EditRequest {
+        common: ctx.common(false)?,
+        id: id.to_string(),
+        append: Some(crate::job::observed(name, &seen)),
+        ..EditRequest::default()
+    };
+    let _: Value = ctx.api.post("edit", &req)?;
+    Ok(())
 }
 
 /// What `docket collect` did, as it prints it.

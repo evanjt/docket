@@ -472,3 +472,28 @@ fn test_every_brief_triages_a_filing_by_what_it_is() {
         assert!(text.contains("**Release.**"), "{role}");
     }
 }
+
+#[test]
+fn test_observations_are_every_observe_line_and_read_as_a_list() {
+    let text = "OBSERVE the retry sleeps a fixed second\nNOTE built it\nOBSERVE  the log names no host \nOBSERVE \nDONE";
+    assert_eq!(
+        observations(text),
+        ["the retry sleeps a fixed second", "the log names no host"]
+    );
+    assert_eq!(report(text).1, Some("built it".into()));
+    assert!(observations("NOTE x\nDONE").is_empty());
+    assert_eq!(
+        observed("lead-t14-7", &["one".into(), "two".into()]),
+        "**Observations, from the job lead-t14-7.**\n\n- one\n- two"
+    );
+}
+
+#[test]
+fn test_a_side_finding_below_the_bar_is_an_observation() {
+    for role in ["build", "plan"] {
+        let text = brief(role, "T14", "lead/t14-7").unwrap();
+        assert!(text.contains("    OBSERVE "), "{role}");
+        assert!(text.contains("critical or high"), "{role}");
+        assert!(!text.contains("docket add"), "{role}");
+    }
+}

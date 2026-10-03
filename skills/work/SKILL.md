@@ -146,9 +146,11 @@ keeps for them (`docket skills releases` lists the releases, the current
 first). The body's last line says which and why: `**Release.** current: it
 loses the draft on resume.`
 
-Something found on the way that is not this ticket is filed, never left in a
-reply: `docket add "title" --body -` files it as a low-priority ticket. A bug
-that stops the work, or is critical, gets `docket new B` at its own priority.
+Something found on the way that is not this ticket is filed only when it is
+critical or high, or the order above puts it in the current release: `docket
+new B "title" --body - --release current --priority high`. Anything else is an
+observation on the ticket, never a ticket of its own: `docket edit T14
+--append "Observed: ..."`.
 
 Never weaken a test to avoid a question. Never quote a document as evidence:
 re-read the working tree and cite `file:line`.

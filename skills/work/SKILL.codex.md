@@ -75,8 +75,10 @@ work is `current`; otherwise a feature or polish goes to a later release, and
 tests, CI and hooks to the theme the project keeps for them. The body's last line says
 which and why (`**Release.** current: ...`).
 
-A side finding is `docket add "title" --body -`, a low-priority ticket. Never
-weaken a test to avoid a question. Cite `file:line` from the working tree, not
+A side finding is filed only when it is critical or high, or the order above
+puts it in the current release (`docket new B "..." --body - --release current
+--priority high`); anything else is an observation on the ticket: `docket edit
+T14 --append "Observed: ..."`. Never weaken a test to avoid a question. Cite `file:line` from the working tree, not
 a document.
 
 The repository may be public while the docket is private. Code, tests,
@@ -88,8 +90,9 @@ machine: a comment states the rule itself, and tests use invented names.
 ## Under a lead
 
 A lead may run the same queue, claiming each ticket and starting a job for it
-with `docket job run`. A job follows its brief, not this skill: it commits on
-its branch, never claims, merges or closes, and ends with a one-line report.
+with `docket job run`. A job follows its brief, not this skill: it leaves its
+change uncommitted for the lead, never claims, merges or closes, and ends with
+its report.
 `docket` refuses `start`, `release`, `close`, `drop` and `reopen` inside a
 job. Beside a lead, take only what `docket next --role work` still offers.
 

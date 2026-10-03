@@ -46,9 +46,10 @@ Every item you file names its release with `--release`, chosen by what the item 
 The body's last line says which and why: `**Release.** current: it loses the draft on resume.`
 `docket` refuses `new` and `add` here without `--release`.
 
-Something found on the way that is not this ticket is filed, never left in the report:
-`docket add "title" --body -`. A part of {id} left undone is a ticket of its own, filed before you
-report and named in the note.
+Something found on the way that is not this ticket is filed only when it is critical or high, or the
+triage above puts it in the current release: `docket new B "title" --body - --release current
+--priority high`. Anything else is an `OBSERVE` line in your report, which the lead adds to {id}.
+A part of {id} left undone is a ticket of its own, filed before you report and named in the note.
 
 The repository may be public while the docket is private: code, tests, comments and commit
 messages never name a docket item, project, person or machine. A comment states the rule itself and
@@ -56,6 +57,7 @@ tests use invented names. Before you report, `git add -A` and `docket private ch
 
 End with your report as the last lines of your final message:
 
+    OBSERVE something seen on the way, below the bar for an item (a line each, as many as there are)
     NOTE what was done, in one line: the test that proves it, anything filed
     MESSAGE the commit message for your change, one line, naming no docket item
     DONE

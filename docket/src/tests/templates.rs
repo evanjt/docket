@@ -221,3 +221,10 @@ fn test_every_template_names_the_release_of_what_it_files() {
         assert!(text.contains("data loss"), "{name}");
     }
 }
+
+#[test]
+fn test_no_template_files_every_side_finding() {
+    for (name, text) in texts() {
+        assert!(!text.contains("docket add"), "{name}");
+    }
+}

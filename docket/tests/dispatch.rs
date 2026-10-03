@@ -329,3 +329,18 @@ fn test_a_change_without_a_message_is_refused_and_the_job_kept() {
         "the job is kept"
     );
 }
+
+#[test]
+fn test_collect_appends_a_jobs_observations_to_its_item() {
+    let mut w = World::new();
+    w.says = "OBSERVE the retry sleeps a fixed second\\nOBSERVE the log names no host\\nNOTE wrote it\\nMESSAGE Write the job marker\\nDONE".into();
+    assert!(w.lead(&["dispatch", "T2", "--on", "beta"]).status.success());
+    let _ = w.lead(&["jobs", "--wait", "--every", "1"]);
+    let out = w.lead(&["collect", "T2"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let body = w.show("T2")["body"].as_str().unwrap().to_string();
+    assert!(
+        body.contains("- the retry sleeps a fixed second\n- the log names no host"),
+        "{body}"
+    );
+}

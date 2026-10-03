@@ -93,8 +93,8 @@ lead. Run it in the foreground and wait for it. Then, for each job that ended si
     docket collect T14
 
 A job never commits: `collect` takes the change it left in its worktree,
-commits it here on the job's branch with the message the job proposed, and
-clears the job from its machine. Commits are made on this machine only; the
+commits it here on the job's branch with the message the job proposed, adds
+the job's `OBSERVE` lines to the item, and clears the job from its machine. Commits are made on this machine only; the
 others build and test.
 
 Merge it into your branch through a worktree, so your checkout only ever

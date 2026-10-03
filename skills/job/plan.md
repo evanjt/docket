@@ -44,6 +44,10 @@ on it: `docket answer Q<n> "the choice" --derived "the basis" --carried-by T<n>`
 open for another plan job to find. A choice nothing settles is a question for the owner with every
 option and its evidence, and the tickets that turn on it wait with `docket wait T<n> --on Q<n>`.
 
+Something found on the way that {id} does not call for is filed only when it is critical or high,
+or the triage above puts it in the current release. Anything else is an `OBSERVE` line in your
+report, which the lead adds to {id}.
+
 Run every command in the foreground and wait for it. A measurement's script or fixture is left in
 this worktree, never committed: the lead commits it on its own machine.
 
@@ -53,6 +57,7 @@ tests use invented names. Before you report, `git add -A` and `docket private ch
 
 End with your report as the last lines of your final message:
 
+    OBSERVE something seen on the way, below the bar for an item (a line each, as many as there are)
     NOTE opened T<n>, T<m>; measured <the number> (for an investigation)
     MESSAGE the commit message for a script or fixture you left, one line (only when you left one)
     DONE

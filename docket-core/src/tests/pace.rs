@@ -133,3 +133,90 @@ fn test_epoch_reads_docket_stamps_only() {
     assert_eq!(epoch("o01"), None);
     assert_eq!(epoch("2026-13-01T00:00:00Z"), None);
 }
+
+#[test]
+fn test_net_counts_current_code_against_its_opens_and_the_research_that_opened_nothing() {
+    let code = Class::Code { current: true };
+    let later = Class::Code { current: false };
+    let events = [
+        Counted {
+            at: 50,
+            kind: "closed",
+            class: code,
+        },
+        Counted {
+            at: 100,
+            kind: "closed",
+            class: Class::Research { opened: true },
+        },
+        Counted {
+            at: 101,
+            kind: "opened",
+            class: code,
+        },
+        Counted {
+            at: 102,
+            kind: "opened",
+            class: code,
+        },
+        Counted {
+            at: 103,
+            kind: "opened",
+            class: later,
+        },
+        Counted {
+            at: 110,
+            kind: "closed",
+            class: Class::Research { opened: false },
+        },
+        Counted {
+            at: 120,
+            kind: "closed",
+            class: code,
+        },
+        Counted {
+            at: 130,
+            kind: "dropped",
+            class: code,
+        },
+        Counted {
+            at: 140,
+            kind: "reopened",
+            class: code,
+        },
+        Counted {
+            at: 150,
+            kind: "claimed",
+            class: code,
+        },
+        Counted {
+            at: 160,
+            kind: "closed",
+            class: Class::Other,
+        },
+    ];
+    let n = net(&events, 100);
+    assert_eq!(
+        n,
+        Net {
+            closed: 2,
+            opened: 3,
+            idle: 1
+        }
+    );
+    assert_eq!(n.net(), 1);
+    assert_eq!(
+        n.line("the last hour"),
+        "the last hour: current-release tickets 2 closed, 3 opened, net +1; 1 research close opened nothing"
+    );
+    assert_eq!(
+        Net {
+            closed: 4,
+            opened: 1,
+            idle: 0
+        }
+        .line("the last hour"),
+        "the last hour: current-release tickets 4 closed, 1 opened, net -3"
+    );
+    assert_eq!(Net::default().line("the last hour"), "");
+}

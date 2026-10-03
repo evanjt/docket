@@ -403,6 +403,42 @@ async fn test_shares_flags_idle_claims_and_files_they_share() {
 }
 
 #[tokio::test]
+async fn test_summary_nets_the_current_tickets_closed_against_those_opened() {
+    let s = Seeded::new().await;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let (recent, old) = (
+        docket_core::clock::stamp(now - 60),
+        docket_core::clock::stamp(now - 7200),
+    );
+    s.db.seed(&format!(
+        r#"
+INSERT INTO projects (slug, keys, themes, skills, remotes, created_at, updated_at) VALUES ('o/n',
+  '[{{"key":"T","kind":"work"}},{{"key":"Q","kind":"decision"}}]', '[]', '{{"releases":"1.0 1.1"}}', '[]', 'c', 'u');
+INSERT INTO items (rid, project, key, num, title, state, turn, resolution, theme, tags, body, opened_at, updated_at) VALUES
+  (201, 'o/n', 'Q', 1, 'Carried out', 'done', NULL, 'carried by T1', NULL, '[]', 'x', 'o', 'u'),
+  (202, 'o/n', 'Q', 2, 'Opened nothing', 'done', NULL, 'opened none', NULL, '[]', 'x', 'o', 'u'),
+  (203, 'o/n', 'T', 1, 'Current ticket', 'open', 'agent', NULL, NULL, '[]', 'x', 'o', 'u'),
+  (204, 'o/n', 'T', 2, 'Later ticket', 'open', 'agent', NULL, '1.1', '[]', 'x', 'o', 'u'),
+  (205, 'o/n', 'T', 3, 'Closed ticket', 'done', NULL, 'abc1234', '1.0', '[]', 'x', 'o', 'u');
+INSERT INTO links (rid, kind, to_rid) VALUES (203, 'opened', 201);
+INSERT INTO events (uid, project, rid, at, host, kind, note, data) VALUES
+  ('n1', 'o/n', 205, '{old}', 'devbox', 'opened', NULL, NULL),
+  ('n2', 'o/n', 201, '{recent}', 'devbox', 'closed', 'carried by T1', NULL),
+  ('n3', 'o/n', 203, '{recent}', 'devbox', 'opened', NULL, NULL),
+  ('n4', 'o/n', 204, '{recent}', 'devbox', 'opened', NULL, NULL),
+  ('n5', 'o/n', 202, '{recent}', 'devbox', 'closed', 'opened none', NULL),
+  ('n6', 'o/n', 205, '{recent}', 'devbox', 'closed', 'abc1234', NULL);
+"#
+    ))
+    .await;
+    let m = s.ok("/summary?project=o/n").await;
+    assert_eq!(m["net"], json!({ "closed": 1, "opened": 1, "idle": 1 }));
+}
+
+#[tokio::test]
 async fn test_summary_reads_claims_plans_and_due_audits() {
     let s = Seeded::new().await;
     let m = s.ok("/summary?project=o/p").await;

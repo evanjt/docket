@@ -2,7 +2,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use docket_core::pace::{Logged, Move, epoch, minutes, moves, pace};
+use docket_core::pace::{Class, Counted, Logged, Move, Net, epoch, minutes, moves, net, pace};
 use docket_core::rows::{EventRow, Row};
 use docket_core::word::Kind;
 
@@ -311,6 +311,7 @@ pub fn project_data(
     };
     ProjectData {
         pace: pace(&all, RECENT_CLOSES, now),
+        net: net_of(board, recent, now - 3600),
         status,
         next,
         wip,
@@ -341,6 +342,36 @@ fn moves_of(board: &Board, recent: &[EventRow]) -> Vec<Move> {
         })
         .collect();
     moves(&logged)
+}
+
+/// The current release's tickets closed and opened since `since`, and the research closes that opened
+/// nothing, read from the newest events.
+#[must_use]
+pub fn net_of(board: &Board, recent: &[EventRow], since: i64) -> Net {
+    let releases =
+        docket_core::fact::releases(board.project.skills.get("releases").map(String::as_str));
+    let counted: Vec<Counted> = recent
+        .iter()
+        .filter_map(|e| {
+            let item = board.by_rid(e.rid?)?;
+            let class = match board.kind(item) {
+                Kind::Work => Class::Code {
+                    current: docket_core::queue::release_rank(&releases, item.theme.as_deref())
+                        == 0,
+                },
+                Kind::Decision | Kind::Research => Class::Research {
+                    opened: !board.children(item.rid).is_empty(),
+                },
+                _ => Class::Other,
+            };
+            Some(Counted {
+                at: epoch(&e.at)?,
+                kind: &e.kind,
+                class,
+            })
+        })
+        .collect();
+    net(&counted, since)
 }
 
 /// The tree's sections in order, each with the kinds it holds.

@@ -1,5 +1,7 @@
 //! The moves read from the event log, the pace of closes, and the durations a person reads.
 
+use std::fmt::Write;
+
 /// Every verb a move row names, in the order a row lists them: closes first.
 pub const VERBS: [&str; 12] = [
     "closed", "dropped", "opened", "reopened", "claimed", "decided", "parked", "replied",
@@ -133,6 +135,80 @@ pub fn pace(moves: &[Move], recent: u64, now: i64) -> Pace {
         opened: slice.iter().filter(|m| m.delta > 0).count() as u64,
         working,
     }
+}
+
+/// What an event's item is, as the net count reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Class {
+    /// A ticket, and whether its release is the current one.
+    Code {
+        current: bool,
+    },
+    /// A question or an investigation, and whether it opened anything.
+    Research {
+        opened: bool,
+    },
+    Other,
+}
+
+/// One event as the net count reads it.
+#[derive(Clone, Copy, Debug)]
+pub struct Counted<'a> {
+    pub at: i64,
+    pub kind: &'a str,
+    pub class: Class,
+}
+
+/// Over a window: the current release's tickets closed and opened, and the research closes that opened
+/// nothing. A close of a question opens tickets, so closes alone say nothing of whether the work falls.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Net {
+    pub closed: u64,
+    pub opened: u64,
+    pub idle: u64,
+}
+
+impl Net {
+    /// Tickets opened less tickets closed: above zero, the current release grows.
+    #[must_use]
+    pub fn net(&self) -> i64 {
+        i64::try_from(self.opened).unwrap_or(i64::MAX)
+            - i64::try_from(self.closed).unwrap_or(i64::MAX)
+    }
+
+    /// The line a person reads, empty when nothing moved.
+    #[must_use]
+    pub fn line(&self, span: &str) -> String {
+        if *self == Net::default() {
+            return String::new();
+        }
+        let mut out = format!(
+            "{span}: current-release tickets {} closed, {} opened, net {:+}",
+            self.closed,
+            self.opened,
+            self.net()
+        );
+        if self.idle > 0 {
+            let closes = if self.idle == 1 { "close" } else { "closes" };
+            let _ = write!(out, "; {} research {closes} opened nothing", self.idle);
+        }
+        out
+    }
+}
+
+/// The net count over the events at or after `since`.
+#[must_use]
+pub fn net(events: &[Counted], since: i64) -> Net {
+    let mut out = Net::default();
+    for e in events.iter().filter(|e| e.at >= since) {
+        match (e.class, e.kind) {
+            (Class::Code { current: true }, "opened" | "reopened") => out.opened += 1,
+            (Class::Code { current: true }, "closed" | "dropped") => out.closed += 1,
+            (Class::Research { opened: false }, "closed") => out.idle += 1,
+            _ => {}
+        }
+    }
+    out
 }
 
 /// Six times the median, exact: an even count's median is the mean of its middle two.

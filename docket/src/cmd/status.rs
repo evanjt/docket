@@ -4,7 +4,7 @@
 use serde_json::Value;
 
 use docket_core::flow::GET_GOING;
-use docket_core::pace::{Pace, duration};
+use docket_core::pace::{Net, Pace, duration};
 
 use crate::ctx::Ctx;
 use crate::fail::{Fail, Result};
@@ -98,7 +98,13 @@ fn now() -> i64 {
 #[must_use]
 pub fn render(slug: &str, r: &Read) -> Vec<String> {
     let s = &r.summary;
-    let mut out = vec![head(slug, s, &r.total), flow_line(&r.total)];
+    let mut out = vec![head(slug, s, &r.total)];
+    let net: Net = serde_json::from_value(s["net"].clone()).unwrap_or_default();
+    let net = net.line("the last hour");
+    if !net.is_empty() {
+        out.push(net);
+    }
+    out.push(flow_line(&r.total));
     let closed = count(&r.total, "done");
     let open: u64 = r
         .total

@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use docket_core::pace::{Minute, Pace};
+use docket_core::pace::{Minute, Net, Pace};
 use docket_core::rows::{Derived, EventRow, ItemRow, ProjectRow, Row, Shown, Status};
 
 use crate::doc::{Cursor, Listing};
@@ -92,6 +92,8 @@ pub struct ProjectData {
     /// The moves shown are the newest ones, outside the window.
     pub stale: bool,
     pub pace: Pace,
+    /// The current release's tickets closed against those opened in the last hour.
+    pub net: Net,
     pub now: i64,
 }
 

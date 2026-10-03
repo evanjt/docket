@@ -112,3 +112,27 @@ fn test_status_text_says_when_nothing_is_claimed_waiting_or_due() {
     assert!(text.contains("AUDITS DUE  no plan is due"), "{text}");
     assert!(text.contains("PLANS  none under way"), "{text}");
 }
+
+#[test]
+fn test_status_text_nets_the_hours_tickets_and_names_the_idle_research() {
+    let mut r = read();
+    r.summary["net"] = json!({"closed": 2, "opened": 9, "idle": 3});
+    let lines = render("o/p", &r);
+    assert_eq!(
+        lines[1],
+        "the last hour: current-release tickets 2 closed, 9 opened, net +7; 3 research closes opened nothing"
+    );
+    r.summary["net"] = json!({"closed": 0, "opened": 0, "idle": 0});
+    assert!(render("o/p", &r)[1].starts_with("ready "));
+}
+
+#[test]
+fn test_a_hold_by_a_later_release_names_both_releases() {
+    let problems = json!([
+        {"kind": "held_later", "id": "A1", "by": "T4", "release": "1.0", "later": "1.1"},
+    ]);
+    assert_eq!(
+        problem_lines(&problems),
+        ["A1 (1.0) is held by T4, in the later release 1.1"]
+    );
+}

@@ -655,6 +655,7 @@ pub async fn summary(
     Ok(Json(json!({
         "skills": docket_core::fact::known(&stored),
         "pace": pace(&db, &q.project, &project, now).await?,
+        "net": net(&db, &model, now - 3600).await?,
         "claims": claims(&db, &q.project, &model).await?,
         "plans": plans(&board),
         "due": due(&board),
@@ -704,6 +705,55 @@ async fn pace(
         .collect();
     let p = pace_of(&timed, 20, now);
     Ok(json!({ "closed": p.closed, "working": p.working }))
+}
+
+#[derive(FromQueryResult)]
+struct NetRow {
+    kind: String,
+    at: String,
+    key: String,
+    theme: Option<String>,
+    opened: i64,
+}
+
+/// The current release's tickets closed and opened since `since`, and the research closes that opened
+/// nothing.
+async fn net(
+    db: &DatabaseConnection,
+    model: &crate::entities::project::Model,
+    since: i64,
+) -> Result<docket_core::pace::Net, Failure> {
+    use docket_core::pace::{Class, Counted, net as net_of};
+    let found = NetRow::find_by_statement(sql(
+        "SELECT e.kind, e.at, i.key, i.theme, \
+           (SELECT COUNT(*) FROM links l WHERE l.to_rid=i.rid AND l.kind='opened') AS opened \
+         FROM events e JOIN items i ON i.rid = e.rid WHERE e.project=? AND e.at >= ? ORDER BY e.at, e.seq",
+        vec![
+            model.slug.clone().into(),
+            stamp(u64::try_from(since).unwrap_or(0)).into(),
+        ],
+    ))
+    .all(db)
+    .await?;
+    let kinds = Kinds::of(model);
+    let releases = docket_core::fact::releases(model.skills["releases"].as_str());
+    let counted: Vec<Counted> = found
+        .iter()
+        .map(|r| Counted {
+            at: epoch(&r.at).unwrap_or(i64::MIN),
+            kind: &r.kind,
+            class: match kinds.kind(&r.key) {
+                Kind::Work => Class::Code {
+                    current: docket_core::queue::release_rank(&releases, r.theme.as_deref()) == 0,
+                },
+                Kind::Decision | Kind::Research => Class::Research {
+                    opened: r.opened > 0,
+                },
+                _ => Class::Other,
+            },
+        })
+        .collect();
+    Ok(net_of(&counted, since))
 }
 
 /// Every claim in the project, oldest first: its branch, the host it was claimed on, since when, and

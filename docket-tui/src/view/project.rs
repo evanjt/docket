@@ -133,6 +133,10 @@ fn progress(d: &mut Doc, data: &ProjectData, width: usize) {
     if !pace.is_empty() {
         d.plain(cut(&format!(" {pace}"), width), Style::default());
     }
+    let net = data.net.line("last hour");
+    if !net.is_empty() {
+        d.plain(cut(&format!(" {net}"), width), Style::default());
+    }
     let mut segs = vec![seg(" ", Style::default())];
     let shown = FLOW
         .iter()

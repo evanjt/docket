@@ -77,3 +77,34 @@ fn test_empty_board_has_nothing_under_way() {
     assert!(b.with_word("ready").is_empty());
     assert_eq!(b.on_owner(), 0);
 }
+
+#[test]
+fn test_net_counts_the_tickets_against_their_opens_and_the_idle_research() {
+    let b = board();
+    let event = |seq: i64, rid: i64, at: &str, kind: &str| docket_core::rows::EventRow {
+        seq,
+        project: "o/p".into(),
+        rid: Some(rid),
+        at: at.into(),
+        host: "devbox".into(),
+        branch: None,
+        kind: kind.into(),
+        note: None,
+    };
+    let recent = [
+        event(5, 5, "2026-10-01T10:04:00Z", "closed"),
+        event(4, 7, "2026-10-01T10:03:00Z", "opened"),
+        event(3, 3, "2026-10-01T10:02:00Z", "opened"),
+        event(2, 1, "2026-10-01T10:01:00Z", "closed"),
+        event(1, 1, "2026-10-01T08:00:00Z", "opened"),
+    ];
+    let since = docket_core::pace::epoch("2026-10-01T10:00:00Z").unwrap();
+    assert_eq!(
+        crate::load::net_of(&b, &recent, since),
+        docket_core::pace::Net {
+            closed: 1,
+            opened: 2,
+            idle: 1
+        }
+    );
+}

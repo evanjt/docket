@@ -123,7 +123,10 @@ machine is reached over ssh at its recorded address (`DOCKET_SSH` replaces the p
 the `docket` on its path. Code moves only by git from the lead's machine, and commits are made
 there only: the base is pushed to the job's machine as its branch, the job leaves its change
 uncommitted and ends with a `MESSAGE` line, and `collect` takes the change (`docket job diff` on
-that machine), commits it on the lead's machine with that message, and clears the job. `jobs --wait` returns once one of the running jobs ends.
+that machine), commits it on the lead's machine with that message, and clears the job. A change
+inside a submodule becomes a commit in the lead's own clone of that submodule, on a branch named
+for the job and pushed nowhere, and the job's commit points at it. A change that cannot be
+committed leaves the job where it ran, to collect again. `jobs --wait` returns once one of the running jobs ends.
 
 ## Private names
 

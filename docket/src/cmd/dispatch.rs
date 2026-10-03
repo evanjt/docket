@@ -12,9 +12,9 @@ use docket_core::fact::{self, Model, Role};
 use docket_core::machine::Machine;
 
 use crate::ctx::Ctx;
-use crate::dispatch::{Via, branch_for, choose, git, nonce, role_of};
+use crate::dispatch::{Via, branch_for, choose, commit_change, git, nonce, role_of};
 use crate::fail::{Fail, Result};
-use crate::job;
+use crate::job::{self, Change};
 
 /// What `docket dispatch` was asked for.
 pub struct Ask<'a> {
@@ -171,9 +171,11 @@ pub fn jobs(ctx: &mut Ctx, wait: bool, every: u64, timeout: u64, all: bool) -> R
 
 /// Bring a finished job's change to this machine and commit it here, on the job's branch, with the
 /// message the job proposed; then clear the job from its machine. Commits are only ever made on the
-/// lead's machine: a job leaves its change in its worktree. A job from before that rule, which
-/// committed on its own branch, has that branch fetched instead. With `discard`, the job is cleared
-/// and nothing is committed.
+/// lead's machine: a job leaves its change in its worktree. A change inside a submodule is committed
+/// in this checkout's repository of that submodule, on a branch of the job's name, and the job's
+/// commit points at it. A job from before that rule, which committed on its own branch, has that
+/// branch fetched instead. With `discard`, the job is cleared and nothing is committed. A change
+/// that cannot be committed here leaves the job where it ran, to collect again.
 ///
 /// # Errors
 /// The item has no job's claim, its job is still running or cannot be read, it proposed no message,
@@ -221,21 +223,16 @@ pub fn collect(ctx: &mut Ctx, id: &str, discard: bool) -> Result<i32> {
         remove(&via, &slug, name, same)?;
         None
     } else if let Some(base) = row["base"].as_str() {
-        let message = row["message"]
-            .as_str()
-            .or_else(|| row["note"].as_str())
-            .filter(|m| !m.is_empty())
-            .map(str::to_string);
-        let patch = via
-            .docket(&strings(&["-p", &slug, "job", "diff", name]))
-            .map_err(Fail::refused)?;
-        if !patch.trim().is_empty() && message.is_none() {
-            return Err(Fail::refused(format!(
-                "{name} left a change but proposed no MESSAGE line to commit it with: docket job log {name} on {on}"
-            )));
-        }
-        remove(&via, &slug, name, same)?;
-        commit_here(&repo, base, branch, &patch, message.as_deref())?
+        let ran = Ran {
+            via: &via,
+            slug: &slug,
+            name,
+            on,
+            branch,
+            repo: &repo,
+            same,
+        };
+        take(&ran, &row, base)?
     } else {
         if !same {
             git(
@@ -270,6 +267,67 @@ pub fn collect(ctx: &mut Ctx, id: &str, discard: bool) -> Result<i32> {
     };
     said.print(ctx.json);
     Ok(0)
+}
+
+/// A job that ended, as a collect reaches it.
+struct Ran<'a> {
+    via: &'a Via,
+    slug: &'a str,
+    name: &'a str,
+    on: &'a str,
+    branch: &'a str,
+    repo: &'a Path,
+    /// Whether the job's worktree belongs to this repository.
+    same: bool,
+}
+
+/// The job's change committed here on `base`, then the job cleared, so a change that cannot be
+/// committed leaves the job where it ran. Returns the short sha, `None` for an empty change.
+fn take(ran: &Ran, row: &Value, base: &str) -> Result<Option<String>> {
+    let (name, on, branch, repo) = (ran.name, ran.on, ran.branch, ran.repo);
+    let message = row["message"]
+        .as_str()
+        .or_else(|| row["note"].as_str())
+        .filter(|m| !m.is_empty());
+    let said = ran
+        .via
+        .docket(&strings(&["-p", ran.slug, "job", "diff", name, "--json"]))
+        .map_err(Fail::refused)?;
+    let change = read_change(&said);
+    if !change.is_empty() && message.is_none() {
+        return Err(Fail::refused(format!(
+            "{name} left a change but proposed no MESSAGE line to commit it with: docket job log {name} on {on}"
+        )));
+    }
+    let made = (!change.is_empty())
+        .then(|| commit_change(repo, base, &change, message.unwrap_or_default()))
+        .transpose()
+        .map_err(|why| {
+            Fail::refused(format!(
+                "{name}'s change was not committed here, and the job is kept on {on}: {why}"
+            ))
+        })?;
+    let keep = || match &made {
+        Some(m) => m.keep(repo, branch),
+        None => git(repo, &["branch", "-f", branch, base]).map(|_| ()),
+    };
+    // A branch checked out in the job's own worktree cannot be moved until that worktree is gone.
+    if !ran.same {
+        keep().map_err(|why| {
+            Fail::refused(format!("{why}: the job is kept on {on}, collect it again"))
+        })?;
+    }
+    remove(ran.via, ran.slug, name, ran.same)?;
+    if ran.same {
+        keep().map_err(|why| {
+            let sha = made.as_ref().map_or(base, |m| m.sha.as_str());
+            Fail::refused(format!(
+                "{why}: the change is {sha}, git branch -f {branch} {sha}"
+            ))
+        })?;
+    }
+    made.map(|m| git(repo, &["rev-parse", "--short", &m.sha]).map_err(Fail::refused))
+        .transpose()
 }
 
 /// A job's `OBSERVE` lines, appended to its item, so what it saw below the bar for an item of its own
@@ -351,53 +409,13 @@ fn remove(via: &Via, slug: &str, name: &str, same: bool) -> Result<()> {
     via.docket(&args).map(|_| ()).map_err(Fail::refused)
 }
 
-/// The patch applied to `base` in a worktree of this repository and committed with `message`, the
-/// branch set to the result; the branch is `base` itself when the patch is empty.
-fn commit_here(
-    repo: &Path,
-    base: &str,
-    branch: &str,
-    patch: &str,
-    message: Option<&str>,
-) -> Result<Option<String>> {
-    if patch.trim().is_empty() {
-        git(repo, &["branch", "-f", branch, base]).map_err(Fail::refused)?;
-        return Ok(None);
-    }
-    let tmp = std::env::temp_dir().join(format!(
-        "docket-collect-{}-{}",
-        crate::job::name_of(branch),
-        std::process::id()
-    ));
-    let tmp_s = tmp.display().to_string();
-    git(repo, &["worktree", "add", "--detach", &tmp_s, base]).map_err(Fail::refused)?;
-    let file = tmp.with_extension("patch");
-    let done = (|| -> std::result::Result<String, String> {
-        let mut text = patch.to_string();
-        if !text.ends_with('\n') {
-            text.push('\n');
-        }
-        std::fs::write(&file, text).map_err(|e| e.to_string())?;
-        git(
-            &tmp,
-            &["apply", "--index", "--binary", &file.display().to_string()],
-        )?;
-        git(
-            &tmp,
-            &[
-                "commit",
-                "-q",
-                "-m",
-                message.unwrap_or("Work from a lead's job"),
-            ],
-        )?;
-        let sha = git(&tmp, &["rev-parse", "--short", "HEAD"])?;
-        git(repo, &["branch", "-f", branch, &sha])?;
-        Ok(sha)
-    })();
-    let _ = std::fs::remove_file(&file);
-    let _ = git(repo, &["worktree", "remove", "--force", &tmp_s]);
-    done.map(Some).map_err(Fail::refused)
+/// A job's change as `docket job diff --json` sends it, or as a plain patch from a machine whose
+/// `docket` sends only that.
+fn read_change(said: &str) -> Change {
+    serde_json::from_str(said).unwrap_or_else(|_| Change {
+        patch: said.to_string(),
+        submodules: Vec::new(),
+    })
 }
 
 /// What a job is started with on its machine.

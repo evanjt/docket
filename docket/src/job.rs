@@ -3,6 +3,7 @@
 //! the brief, the session's event stream, the pid and process group, the exit code and the final
 //! message. Nothing here names a machine: the lead says where a job runs.
 
+use std::fmt::Write as _;
 use std::fs;
 use std::io;
 use std::os::unix::process::CommandExt;
@@ -683,13 +684,49 @@ fn spawn(
     cmd.spawn()
 }
 
-/// A job's change, against the commit it started from, as a patch `git apply` takes: what it
-/// committed and what it left in its worktree, new files and binary ones included. The worktree's
-/// changes are staged to be read; nothing is committed.
+/// A job's change in one repository: a patch against the commit it started from, with no part
+/// inside a submodule, and the change inside each submodule it changed.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Change {
+    pub patch: String,
+    #[serde(default)]
+    pub submodules: Vec<Submodule>,
+}
+
+/// A change inside a submodule.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Submodule {
+    /// Its path in the repository that pins it.
+    pub path: String,
+    /// The commit it is pinned at, which its change is taken against.
+    pub base: String,
+    pub change: Change,
+}
+
+impl Change {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.patch.trim().is_empty() && self.submodules.iter().all(|s| s.change.is_empty())
+    }
+
+    /// The change to read: its patch, then each submodule's under a line naming it.
+    #[must_use]
+    pub fn text(&self) -> String {
+        let mut out = self.patch.clone();
+        for s in &self.submodules {
+            let _ = writeln!(out, "Submodule {} from {}", s.path, s.base);
+            out.push_str(&s.change.text());
+        }
+        out
+    }
+}
+
+/// A job's change against the commit it started from: what it committed and what it left in its
+/// worktree, new files, binary ones and those inside a submodule included.
 ///
 /// # Errors
 /// The job is still running, has no worktree, or git fails.
-pub fn diff(dir: &Path) -> Result<String, String> {
+pub fn diff(dir: &Path) -> Result<Change, String> {
     let r = row(dir, now()).ok_or_else(|| format!("{}: no job here", dir.display()))?;
     if r.state == State::Running {
         return Err(format!("{} is still running", r.name));
@@ -698,25 +735,88 @@ pub fn diff(dir: &Path) -> Result<String, String> {
     if !worktree.is_dir() {
         return Err(format!("{} has no worktree at {}", r.name, r.worktree));
     }
-    git(worktree, &["add", "-A"])?;
-    let base = r.base.unwrap_or_else(|| "HEAD".into());
+    change(worktree, r.base.as_deref().unwrap_or("HEAD"))
+}
+
+/// The change in a checkout against `base`, staged to be read and never committed: a patch for
+/// everything outside its submodules, and the change inside each submodule checked out here,
+/// against the commit `base` pins it at.
+///
+/// # Errors
+/// git fails, or a submodule checked out here lacks the commit it is pinned at.
+pub fn change(dir: &Path, base: &str) -> Result<Change, String> {
+    git(dir, &["add", "-A"])?;
+    let staged = gitlinks(dir, &["ls-files", "--stage", "-z"], 1)?;
+    let mut args: Vec<String> = [
+        "diff",
+        "--cached",
+        "--binary",
+        "--no-color",
+        "--no-ext-diff",
+        base,
+        "--",
+        ".",
+    ]
+    .map(String::from)
+    .to_vec();
+    let mut submodules = Vec::new();
+    for (path, pinned) in gitlinks(dir, &["ls-tree", "-r", "-z", base], 2)? {
+        if !staged.iter().any(|(p, _)| *p == path) {
+            continue;
+        }
+        args.push(format!(":(exclude,literal){path}"));
+        let inside = dir.join(&path);
+        if !is_repository(&inside) {
+            continue;
+        }
+        let change = change(&inside, &pinned).map_err(|e| format!("{path}: {e}"))?;
+        if !change.is_empty() {
+            submodules.push(Submodule {
+                path,
+                base: pinned,
+                change,
+            });
+        }
+    }
     let out = Command::new("git")
         .arg("-C")
-        .arg(worktree)
-        .args([
-            "diff",
-            "--cached",
-            "--binary",
-            "--no-color",
-            "--no-ext-diff",
-            &base,
-        ])
+        .arg(dir)
+        .args(&args)
         .output()
         .map_err(|e| format!("git: {e}"))?;
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    Ok(Change {
+        patch: String::from_utf8_lossy(&out.stdout).into_owned(),
+        submodules,
+    })
+}
+
+/// The submodules a listing of `git ls-files --stage -z` or `git ls-tree -z` names, as their path
+/// and pinned commit; `sha_at` is the field the commit is in.
+fn gitlinks(dir: &Path, args: &[&str], sha_at: usize) -> Result<Vec<(String, String)>, String> {
+    let listed = git(dir, args)?;
+    Ok(listed
+        .split('\0')
+        .filter_map(|entry| {
+            let (meta, path) = entry.split_once('\t')?;
+            let fields: Vec<&str> = meta.split_whitespace().collect();
+            let sha = fields
+                .get(sha_at)
+                .filter(|_| fields.first() == Some(&"160000"))?;
+            Some((path.to_string(), (*sha).to_string()))
+        })
+        .collect())
+}
+
+/// Whether a directory is the top of a repository of its own, as opposed to an empty submodule
+/// directory that git reads as part of the repository around it.
+#[must_use]
+pub fn is_repository(dir: &Path) -> bool {
+    let top = git(dir, &["rev-parse", "--show-toplevel"]).ok();
+    let real = |p: &Path| fs::canonicalize(p).ok();
+    top.is_some_and(|t| real(Path::new(&t)).is_some() && real(Path::new(&t)) == real(dir))
 }
 
 /// Stop a job's process group, the whole of it, and record that it was killed.

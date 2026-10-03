@@ -95,7 +95,10 @@ lead. Run it in the foreground and wait for it. Then, for each job that ended si
 A job never commits: `collect` takes the change it left in its worktree,
 commits it here on the job's branch with the message the job proposed, adds
 the job's `OBSERVE` lines to the item, and clears the job from its machine. Commits are made on this machine only; the
-others build and test.
+others build and test. A change inside a submodule is committed in this
+checkout's clone of it, on a branch of the job's name, and the job's commit
+points at it: push it nowhere. A collect that cannot commit keeps the job, so
+fix what it names and collect again.
 
 Merge it into your branch through a worktree, so your checkout only ever
 fast-forwards:

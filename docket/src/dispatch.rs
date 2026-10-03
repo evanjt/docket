@@ -1,13 +1,17 @@
-//! What a lead does to a machine: choose one with a free slot, reach it, push a branch to it and fetch
-//! one back. A machine is the one this client runs on when its name is the host of this client's key,
+//! What a lead does to a machine: choose one with a free slot, reach it, push a branch to it, fetch
+//! one back and commit a job's change here. A machine is the one this client runs on when its name is the host of this client's key,
 //! and any other is reached over ssh at the address the server records for it. Nothing here names a
 //! machine, an address or a path: they all come from the server and the machine itself.
 
 use std::collections::BTreeMap;
-use std::path::Path;
-use std::process::Command;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use docket_core::machine::Machine;
+
+use crate::job::Change;
 
 /// The job role an item's kind gives when the lead names none: a plan's audit, an investigation's
 /// or a decided question's planning, anything else a build. A new plan with nothing opened is planned,
@@ -185,6 +189,182 @@ pub fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
         );
     }
     output(&mut cmd, "git")
+}
+
+/// The commits a job's change was made into here, none of them on a branch yet.
+#[derive(Debug)]
+pub struct Made {
+    /// The commit in the lead's checkout.
+    pub sha: String,
+    /// Each submodule's commit, with the repository it was made in.
+    pub inside: Vec<(PathBuf, String)>,
+}
+
+impl Made {
+    /// The branch set to these commits, in the checkout and in each submodule they were made in.
+    ///
+    /// # Errors
+    /// git refuses to set a branch.
+    pub fn keep(&self, repo: &Path, branch: &str) -> Result<(), String> {
+        for (dir, sha) in &self.inside {
+            git(dir, &["branch", "-f", branch, sha])?;
+        }
+        git(repo, &["branch", "-f", branch, &self.sha]).map(|_| ())
+    }
+}
+
+/// A job's change committed with `message` on `base`, in a worktree of `repo` removed afterwards.
+/// Each submodule's change is first made a commit in this checkout's own repository of that
+/// submodule, on the commit it is pinned at, and the commit here points at it. No branch moves.
+///
+/// # Errors
+/// A submodule is not checked out here or lacks its pinned commit, a patch does not apply, or a
+/// commit is refused.
+pub fn commit_change(
+    repo: &Path,
+    base: &str,
+    change: &Change,
+    message: &str,
+) -> Result<Made, String> {
+    let mut inside = Vec::new();
+    let pins = commit_submodules(repo, change, message, &mut inside)?;
+    let tmp = scratch("worktree");
+    let tmp_s = tmp.display().to_string();
+    git(repo, &["worktree", "add", "--detach", &tmp_s, base])?;
+    let done = (|| {
+        if !change.patch.trim().is_empty() {
+            apply(&tmp, None, "--index", &change.patch)?;
+        }
+        pin(&tmp, None, &pins)?;
+        git(&tmp, &["commit", "-q", "-m", message])?;
+        git(&tmp, &["rev-parse", "HEAD"])
+    })();
+    let _ = git(repo, &["worktree", "remove", "--force", &tmp_s]);
+    Ok(Made { sha: done?, inside })
+}
+
+/// Each submodule's change committed in its repository under `dir`, as the path and commit to pin.
+fn commit_submodules(
+    dir: &Path,
+    change: &Change,
+    message: &str,
+    inside: &mut Vec<(PathBuf, String)>,
+) -> Result<Vec<(String, String)>, String> {
+    let mut pins = Vec::new();
+    for s in &change.submodules {
+        let sha = commit_inside(&dir.join(&s.path), &s.base, &s.change, message, inside)
+            .map_err(|e| format!("submodule {}: {e}", s.path))?;
+        pins.push((s.path.clone(), sha));
+    }
+    Ok(pins)
+}
+
+/// A submodule's change as one commit on `base` in its repository at `dir`, made through an index of
+/// its own so the checkout there is left as it is. Never signed and never pushed.
+fn commit_inside(
+    dir: &Path,
+    base: &str,
+    change: &Change,
+    message: &str,
+    inside: &mut Vec<(PathBuf, String)>,
+) -> Result<String, String> {
+    if !crate::job::is_repository(dir) {
+        return Err(format!(
+            "not checked out at {}: git submodule update --init, then collect again",
+            dir.display()
+        ));
+    }
+    git(dir, &["cat-file", "-e", &format!("{base}^{{commit}}")]).map_err(|_| {
+        format!(
+            "no commit {base} in {}, the one it is pinned at",
+            dir.display()
+        )
+    })?;
+    let pins = commit_submodules(dir, change, message, inside)?;
+    let index = scratch("index");
+    let made = (|| {
+        let at = Some(index.as_path());
+        index_git(dir, at, &["read-tree", base])?;
+        if !change.patch.trim().is_empty() {
+            apply(dir, at, "--cached", &change.patch)?;
+        }
+        pin(dir, at, &pins)?;
+        let tree = index_git(dir, at, &["write-tree"])?;
+        git(
+            dir,
+            &[
+                "commit-tree",
+                "--no-gpg-sign",
+                &tree,
+                "-p",
+                base,
+                "-m",
+                message,
+            ],
+        )
+    })();
+    let _ = std::fs::remove_file(&index);
+    let sha = made?;
+    inside.push((dir.to_path_buf(), sha.clone()));
+    Ok(sha)
+}
+
+/// Each submodule at `path` pinned at its commit in the index.
+fn pin(dir: &Path, index: Option<&Path>, pins: &[(String, String)]) -> Result<(), String> {
+    for (path, sha) in pins {
+        let info = format!("160000,{sha},{path}");
+        index_git(dir, index, &["update-index", "--cacheinfo", &info])?;
+    }
+    Ok(())
+}
+
+/// A patch applied to the index, given on standard input so nothing of it is lost on the way.
+fn apply(dir: &Path, index: Option<&Path>, to: &str, patch: &str) -> Result<(), String> {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
+        .arg(dir)
+        .args(["apply", to, "--binary"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(i) = index {
+        cmd.env("GIT_INDEX_FILE", i);
+    }
+    let mut child = cmd.spawn().map_err(|e| format!("git: {e}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        let mut text = patch.to_string();
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+        stdin
+            .write_all(text.as_bytes())
+            .map_err(|e| format!("git apply: {e}"))?;
+    }
+    let out = child.wait_with_output().map_err(|e| format!("git: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    Err(format!(
+        "git apply: {}",
+        String::from_utf8_lossy(&out.stderr).trim()
+    ))
+}
+
+/// `git ARGS` on the index at `index`, or the repository's own when none is given.
+fn index_git(dir: &Path, index: Option<&Path>, args: &[&str]) -> Result<String, String> {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(dir).args(args);
+    if let Some(i) = index {
+        cmd.env("GIT_INDEX_FILE", i);
+    }
+    output(&mut cmd, "git")
+}
+
+/// A path for a scratch file or worktree of this process, a different one on every call.
+fn scratch(kind: &str) -> PathBuf {
+    static N: AtomicU32 = AtomicU32::new(0);
+    let n = N.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("docket-collect-{}-{n}.{kind}", std::process::id()))
 }
 
 #[cfg(test)]

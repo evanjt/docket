@@ -548,8 +548,8 @@ pub enum JobCmd {
     Status { job: Option<String> },
     /// the checkout of -p SLUG on this machine, where a lead pushes a job's branch
     Where,
-    /// a finished job's change against the commit it started from, as a patch for the lead to
-    /// commit on its own machine
+    /// a finished job's change against the commit it started from, the change inside each
+    /// submodule included, for the lead to commit on its own machine
     Diff { job: String },
     /// remove a finished job: its worktree, its branch in the checkout and its record
     Remove {

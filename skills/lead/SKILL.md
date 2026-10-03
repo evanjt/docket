@@ -101,7 +101,10 @@ dispatching. Bring its change here and commit it:
 A job never commits: `collect` takes the change it left in its worktree,
 commits it here on the job's branch with the message the job proposed, adds
 the job's `OBSERVE` lines to the item, and clears the job from its machine.
-Commits are made on this machine only; the others build and test. Check the
+Commits are made on this machine only; the others build and test. A change
+inside a submodule is committed in this checkout's clone of it, on a branch of
+the job's name, and the job's commit points at it: push it nowhere. A collect
+that cannot commit keeps the job, so fix what it names and collect again. Check the
 branch moved past your branch (`git log --oneline -1 <the job's branch>`): a
 report of DONE with no commit is a lost change, sent back as FAILED.
 

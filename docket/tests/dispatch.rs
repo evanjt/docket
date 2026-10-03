@@ -38,8 +38,10 @@ exec sh -c "$*"
 "#;
 
 /// The stand-in agent: one change left in its worktree, uncommitted, then its report as a Claude
-/// Code result. `AGENT_SAYS` replaces the report, for an agent that proposes no message.
+/// Code result. `AGENT_DOES` is shell it runs first, and `AGENT_SAYS` replaces the report, for an
+/// agent that proposes no message.
 const AGENT: &str = r#"#!/bin/sh
+eval "$AGENT_DOES"
 echo "$DOCKET_JOB" > made-by-job
 said=${AGENT_SAYS:-'NOTE wrote made-by-job\nMESSAGE Write the job marker\nDONE'}
 printf '{"type":"result","result":"%s","usage":{"output_tokens":7}}\n' "$said"
@@ -50,6 +52,8 @@ struct World {
     _tmp: tempfile::TempDir,
     /// What the stand-in agent reports instead of its usual note, message and DONE.
     says: String,
+    /// Shell the stand-in agent runs in its worktree before its usual change.
+    does: String,
     machines: PathBuf,
     bin: PathBuf,
     server: Server,
@@ -57,6 +61,15 @@ struct World {
 
 impl World {
     fn new() -> Self {
+        Self::build(false)
+    }
+
+    /// A world whose project pins a submodule at `lib`, checked out in each machine's clone.
+    fn with_submodule() -> Self {
+        Self::build(true)
+    }
+
+    fn build(submodule: bool) -> Self {
         let tmp = tempfile::tempdir().unwrap();
         let machines = tmp.path().join("machines");
         let bin = tmp.path().join("bin");
@@ -65,6 +78,7 @@ impl World {
         script(&bin.join("agent"), AGENT);
         let w = World {
             says: String::new(),
+            does: String::new(),
             machines,
             bin,
             server: serve(SEED, "alpha owner key-alpha\nbeta owner key-beta"),
@@ -74,15 +88,36 @@ impl World {
         fs::create_dir_all(&origin).unwrap();
         sh(
             &origin,
-            "git init -q -b main && git -c user.name=o -c user.email=o@example.org commit -q --allow-empty -m start",
+            "git init -q -b main && printf 'first\\n\\n' > notes.txt && git add notes.txt \
+             && git -c user.name=o -c user.email=o@example.org commit -q -m start",
         );
+        if submodule {
+            let lib = w.machines.join("lib");
+            fs::create_dir_all(&lib).unwrap();
+            sh(
+                &lib,
+                "git init -q -b main && echo one > lib.txt && git add lib.txt \
+                 && git -c user.name=o -c user.email=o@example.org commit -q -m 'Add lib'",
+            );
+            sh(
+                &origin,
+                &format!(
+                    "git -c protocol.file.allow=always submodule add -q {} lib \
+                     && git -c user.name=o -c user.email=o@example.org commit -q -m 'Pin lib'",
+                    lib.display()
+                ),
+            );
+        }
         for name in ["alpha", "beta"] {
             let home = w.home(name);
             fs::create_dir_all(home.join("src")).unwrap();
             fs::write(home.join("key"), format!("key-{name}")).unwrap();
             sh(
                 &home.join("src"),
-                &format!("git clone -q {} p", origin.display()),
+                &format!(
+                    "git -c protocol.file.allow=always clone -q --recurse-submodules {} p",
+                    origin.display()
+                ),
             );
             let out = w.docket(name, &home.join("src/p"), &["bind", "o/p"]);
             assert!(out.status.success(), "{}", text(&out));
@@ -124,6 +159,7 @@ impl World {
             .env("DOCKET_JOB_RUNNER_CODEX", self.bin.join("agent"))
             .env("MACHINES", &self.machines)
             .env("AGENT_SAYS", &self.says)
+            .env("AGENT_DOES", &self.does)
             .env("GIT_AUTHOR_NAME", "lead")
             .env("GIT_AUTHOR_EMAIL", "lead@example.org")
             .env("GIT_COMMITTER_NAME", "lead")
@@ -342,5 +378,113 @@ fn test_collect_appends_a_jobs_observations_to_its_item() {
     assert!(
         body.contains("- the retry sleeps a fixed second\n- the log names no host"),
         "{body}"
+    );
+}
+
+/// The stand-in agent checks the submodule out in its worktree from the machine's own clone, commits
+/// one change inside it and leaves another there uncommitted.
+const EDITS_LIB: &str = r#"
+sha=$(git ls-tree HEAD lib | awk '{print $3}')
+main=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
+rmdir lib && git clone -q --no-checkout "$main/lib" lib && git -C lib checkout -q "$sha"
+echo committed > lib/committed.txt
+git -C lib add committed.txt
+git -C lib -c user.name=j -c user.email=j@example.org commit -q -m 'Commit inside the job'
+echo two > lib/lib.txt
+"#;
+
+#[test]
+fn test_collect_commits_a_change_inside_a_submodule_in_the_leads_submodule() {
+    let mut w = World::with_submodule();
+    w.does = EDITS_LIB.into();
+    assert!(w.lead(&["dispatch", "T1", "--on", "beta"]).status.success());
+    let branch = w.show("T1")["claim_branch"].as_str().unwrap().to_string();
+    let _ = w.lead(&["jobs", "--wait", "--every", "1"]);
+    let alpha = w.home("alpha").join("src/p");
+    let pinned = sh(&alpha.join("lib"), "git rev-parse HEAD");
+
+    let out = w.lead(&["collect", "T1"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let lib = alpha.join("lib");
+    assert_eq!(sh(&lib, &format!("git show {branch}:lib.txt")), "two");
+    assert_eq!(
+        sh(&lib, &format!("git show {branch}:committed.txt")),
+        "committed"
+    );
+    assert_eq!(
+        sh(&lib, &format!("git log --format=%s {pinned}..{branch}")),
+        "Write the job marker",
+        "one commit in the submodule, on the commit the project pinned"
+    );
+    let pointer = sh(&alpha, &format!("git rev-parse {branch}:lib"));
+    assert_eq!(pointer, sh(&lib, &format!("git rev-parse {branch}")));
+    assert_eq!(
+        sh(&alpha, &format!("git show {branch}:made-by-job")),
+        branch.replace('/', "-")
+    );
+    assert_eq!(
+        sh(&alpha, &format!("git log --format=%s main..{branch}")),
+        "Write the job marker"
+    );
+    assert_eq!(
+        sh(&lib, "git rev-parse HEAD"),
+        pinned,
+        "the checkout is left"
+    );
+    assert_eq!(sh(&lib, "git status --porcelain"), "");
+    assert_eq!(
+        sh(&w.machines.join("lib"), "git log --all --format=%s"),
+        "Add lib",
+        "nothing was pushed"
+    );
+    let beta = w.home("beta").join("src/p");
+    assert_eq!(sh(&beta, "git worktree list").lines().count(), 1);
+}
+
+#[test]
+fn test_a_change_that_cannot_be_committed_here_keeps_the_job() {
+    let w = World::new();
+    assert!(w.lead(&["dispatch", "T1", "--on", "beta"]).status.success());
+    let branch = w.show("T1")["claim_branch"].as_str().unwrap().to_string();
+    let _ = w.lead(&["jobs", "--wait", "--every", "1"]);
+    let alpha = w.home("alpha").join("src/p");
+    let hook = alpha.join(".git/hooks/pre-commit");
+    script(&hook, "#!/bin/sh\necho refused here >&2\nexit 1\n");
+
+    let out = w.lead(&["collect", "T1"]);
+    assert!(!out.status.success(), "{}", text(&out));
+    let beta = w.home("beta").join("src/p");
+    assert_eq!(sh(&beta, "git worktree list").lines().count(), 2);
+    assert!(text(&out).contains("refused here"), "{}", text(&out));
+    assert!(text(&out).contains("kept on beta"), "{}", text(&out));
+    let name = branch.replace('/', "-");
+    let status = w.docket("beta", &beta, &["-p", "o/p", "job", "status", &name]);
+    assert!(text(&status).contains("done"), "{}", text(&status));
+    assert_eq!(w.show("T1")["claim_branch"], branch.as_str());
+    assert_eq!(sh(&alpha, &format!("git branch --list {branch}")), "");
+
+    fs::remove_file(&hook).unwrap();
+    let again = w.lead(&["collect", "T1"]);
+    assert!(again.status.success(), "{}", text(&again));
+    assert_eq!(sh(&alpha, &format!("git show {branch}:made-by-job")), name);
+    assert_eq!(sh(&beta, "git worktree list").lines().count(), 1);
+}
+
+#[test]
+fn test_a_patch_ending_in_a_blank_context_line_is_committed_whole() {
+    let mut w = World::new();
+    w.does = "printf 'second\\n\\n' > notes.txt".into();
+    assert!(w.lead(&["dispatch", "T1", "--on", "beta"]).status.success());
+    let branch = w.show("T1")["claim_branch"].as_str().unwrap().to_string();
+    let _ = w.lead(&["jobs", "--wait", "--every", "1"]);
+    let out = w.lead(&["collect", "T1"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let alpha = w.home("alpha").join("src/p");
+    assert_eq!(
+        sh(
+            &alpha,
+            &format!("git show {branch}:notes.txt | od -c | head -1")
+        ),
+        sh(&alpha, "printf 'second\\n\\n' | od -c | head -1")
     );
 }

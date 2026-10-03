@@ -65,7 +65,12 @@ pub fn job(flags: &Flags, what: &JobCmd) -> Result<i32> {
         }
         JobCmd::Diff { job: name } => {
             let dir = job::find(&root, name, flags.project.as_deref()).map_err(Fail::refused)?;
-            print!("{}", job::diff(&dir).map_err(Fail::refused)?);
+            let change = job::diff(&dir).map_err(Fail::refused)?;
+            if flags.json {
+                println!("{}", serde_json::to_string(&change).unwrap_or_default());
+            } else {
+                print!("{}", change.text());
+            }
             Ok(0)
         }
         JobCmd::Kill { job: name } => {

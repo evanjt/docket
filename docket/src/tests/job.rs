@@ -497,3 +497,15 @@ fn test_a_side_finding_below_the_bar_is_an_observation() {
         assert!(!text.contains("docket add"), "{role}");
     }
 }
+
+#[test]
+fn test_an_audit_files_only_critical_and_high_gaps() {
+    let text = brief("audit", "A3", "lead/a3-7").unwrap();
+    assert!(text.contains("Only a critical or high gap is filed"));
+    assert!(text.contains("normal or low gap is an `OBSERVE` line"));
+    assert!(
+        text.contains("outside the plan is an `OBSERVE` line too, unless it is critical or high")
+    );
+    assert!(text.contains("    OBSERVE "));
+    assert!(!text.contains("at the priority it earns"));
+}

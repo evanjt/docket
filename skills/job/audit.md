@@ -21,7 +21,9 @@ here, not as the tickets describe it.
 
 Never quote a document as evidence. Run every command in the foreground and wait for it.
 
-File each gap under the plan, with its Evidence, Fix and Failing case, at the priority it earns:
+Only a critical or high gap is filed: one that breaks what the plan promised, or that the order
+below puts in the current release at high priority. File it under the plan, with its Evidence, Fix
+and Failing case:
 
     docket new T "the gap, in one line" --body - --release <its release>
     docket link T<n> opened {id}
@@ -37,8 +39,11 @@ Every item you file names its release with `--release`, chosen by what the item 
 The body's last line says which and why: `**Release.** current: it loses the draft on resume.`
 `docket` refuses `new` and `add` here without `--release`.
 
-A finding outside the plan is filed the same way and linked as related. A choice only the owner can
-make is a question with every option and its evidence; it does not hold the audit.
+A normal or low gap is an `OBSERVE` line in your report, never an item; the lead adds it to {id}.
+A finding outside the plan is an `OBSERVE` line too, unless it is critical or high: then it is
+filed the same way and linked as related. Stop at what matters: a second pass over the same plan
+files nothing the first one passed over. A choice only the owner can make is a question with every
+option and its evidence; it does not hold the audit.
 
 The repository may be public while the docket is private: code, tests, comments and commit
 messages never name a docket item, project, person or machine. A comment states the rule itself and
@@ -46,6 +51,7 @@ tests use invented names, and you commit nothing.
 
 End with your report as the last lines of your final message:
 
+    OBSERVE a normal or low gap, or a finding outside the plan (a line each, as many as there are)
     NOTE audited: principles checked at <sha>, the tests run; gaps T<n>, T<m> (or clean)
     DONE
 

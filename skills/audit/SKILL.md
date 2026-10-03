@@ -46,17 +46,23 @@ describe it.
 
 Never quote a document as evidence. Re-read the working tree.
 
-## 4. File each gap under the plan
+## 4. File each critical or high gap under the plan
 
-    docket new T "the gap, in one line" --body -
+Only a gap that is critical or high is filed: one that breaks what the plan
+promised, or that the order below puts in the current release at high
+priority.
+
+    docket new T "the gap, in one line" --body - --release <its release>
     docket link T30 opened A3
 
 The body holds the **Evidence** (`file:line`, or the failing test and its
 output), the **Fix**, and the **Failing case**, as the plan skill writes them.
-A defect is a `B`. Give each the priority it earns: a gap that breaks what the
-plan promised is high or critical, a cosmetic one low. A finding outside the
-plan's principles and area is filed the same way but linked as related, not
-opened (`docket link T31 related A3`), and left for planning.
+A defect is a `B`. A normal or low gap is an observation in the close note,
+never a ticket. A finding outside the plan's principles and area is an
+observation too, unless it is critical or high: then it is filed the same way
+but linked as related, not opened (`docket link T31 related A3`), and left for
+planning. Stop at what matters: a second audit of the same plan files nothing
+the first passed over.
 
 Every item filed names its release with `--release`, chosen by what it is,
 in this order. Its nature: a crash, a hang, data loss or wrong numbers,
@@ -73,10 +79,10 @@ evidence (`docket new Q ... --body -`); it does not hold the audit.
 
 ## 5. Close the plan
 
-    docket close A3 "audited: principles 1-5 checked at <sha>, tickets' tests pass; gaps T30, T31"
+    docket close A3 "audited: principles 1-5 checked at <sha>, tickets' tests pass; gaps T30, T31; observed: <each normal or low gap>"
 
-Name what was checked, the commit it was checked at, and every gap filed, or
-`clean` when there is none. The plan closes with its gaps open: they are its
+Name what was checked, the commit it was checked at, every gap filed, or
+`clean` when there is none, and the observations. The plan closes with its gaps open: they are its
 remainder, worked as tickets.
 
 The repository may be public while the docket is private. Code, tests,

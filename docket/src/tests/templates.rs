@@ -228,3 +228,12 @@ fn test_no_template_files_every_side_finding() {
         assert!(!text.contains("docket add"), "{name}");
     }
 }
+
+#[test]
+fn test_the_audit_skill_files_only_critical_and_high_gaps() {
+    let audit = SKILLS.iter().find(|s| s.name == "audit").unwrap();
+    for text in [audit.claude, audit.codex] {
+        assert!(text.contains("critical or high gap"));
+        assert!(text.contains("normal or low gap is an observation"));
+    }
+}

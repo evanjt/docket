@@ -22,10 +22,12 @@ fix, not even a one-line gap.
    failing case passes when run; each dropped ticket's subject is gone, not
    moved. Grep the whole tree for the fact a principle names, not only the
    files the tickets cite.
-4. Each gap: `docket new T "the gap" --body -` with **Evidence**, **Fix** and
-   **Failing case** (`B` for a defect), the priority it earns, and `docket
-   link T30 opened A3`. A finding outside the plan's area is linked `related`
-   instead and left for planning. A choice only the owner can make is a
+4. Only a critical or high gap is filed, one that breaks what the plan
+   promised: `docket new T "the gap" --body -` with **Evidence**, **Fix** and
+   **Failing case** (`B` for a defect), and `docket link T30 opened A3`. A
+   normal or low gap is an observation in the close note, never a ticket. A
+   finding outside the plan's area is an observation too, unless critical or
+   high: then it is linked `related` and left for planning. A choice only the owner can make is a
    question; it does not hold the audit.
    Every item filed names its release with `--release`, by what it is: a
    crash, hang, data loss, wrong numbers, upgrade safety, security, privacy or
@@ -33,8 +35,8 @@ fix, not even a one-line gap.
    work is `current`; otherwise a feature or polish goes to a later release, and
    tests, CI and hooks to the theme the project keeps for them. The body's last line says
    which and why (`**Release.** current: ...`).
-5. `docket close A3 "audited: principles 1-5 checked at <sha>; gaps T30, T31"`,
-   or `clean` with no gaps. The gaps stay open as tickets.
+5. `docket close A3 "audited: principles 1-5 checked at <sha>; gaps T30, T31;
+   observed: ..."`, or `clean` with no gaps. The gaps stay open as tickets.
 
 Say `stop` when done. No summary.
 The repository may be public while the docket is private. Code, tests,

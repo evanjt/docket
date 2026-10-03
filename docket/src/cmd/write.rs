@@ -76,6 +76,18 @@ pub fn refuse_in_job(verb: &str) -> Result<()> {
     }
 }
 
+/// A job names the release of every item it files.
+///
+/// # Errors
+/// `DOCKET_JOB` names the job this runs in, and no release is given.
+fn refuse_unreleased(verb: &str, release: Option<&String>) -> Result<()> {
+    let job = std::env::var("DOCKET_JOB").ok();
+    match crate::job::unreleased(verb, job.as_deref(), release.map(String::as_str)) {
+        Some(why) => Err(Fail::refused(why)),
+        None => Ok(()),
+    }
+}
+
 pub struct New<'a> {
     pub key: &'a str,
     pub title: &'a str,
@@ -84,12 +96,14 @@ pub struct New<'a> {
     pub complexity: Option<&'a String>,
     pub priority: Option<&'a String>,
     pub theme: Option<&'a String>,
+    pub release: Option<&'a String>,
     pub group: Option<&'a String>,
 }
 
 /// # Errors
 /// The server refuses.
 pub fn new(ctx: &mut Ctx, n: &New) -> Result<i32> {
+    refuse_unreleased("new", n.release)?;
     let common = ctx.common(false)?;
     let body = read_body(n.body)?;
     let req = NewRequest {
@@ -101,6 +115,7 @@ pub fn new(ctx: &mut Ctx, n: &New) -> Result<i32> {
         complexity: n.complexity.cloned(),
         priority: n.priority.cloned(),
         theme: n.theme.cloned(),
+        release: n.release.filter(|r| !r.is_empty()).cloned(),
         group: n.group.cloned(),
     };
     let out: Opened = ctx.api.post("new", &req)?;
@@ -154,7 +169,9 @@ pub fn add(
     key: Option<&String>,
     body: Option<&String>,
     from: Option<&String>,
+    release: Option<&String>,
 ) -> Result<i32> {
+    refuse_unreleased("add", release)?;
     let common = ctx.common(false)?;
     let body = read_body(body)?;
     let req = AddRequest {
@@ -163,6 +180,7 @@ pub fn add(
         key: key.filter(|k| !k.is_empty()).cloned(),
         body: body.clone(),
         from: from.filter(|f| !f.is_empty()).cloned(),
+        release: release.filter(|r| !r.is_empty()).cloned(),
     };
     let out: Opened = ctx.api.post("add", &req)?;
     opened(ctx, &out, body.as_deref());

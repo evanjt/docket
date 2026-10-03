@@ -59,7 +59,19 @@ reads:
 - **Failing case.** The test that fails until the fix lands, at the lowest
   level that can fail for the right reason.
 
-A defect is a `B` rather than a `T`. Then:
+A defect is a `B` rather than a `T`.
+
+Every item filed names its release with `--release`, chosen by what it is,
+in this order. Its nature: a crash, a hang, data loss or wrong numbers,
+migration or upgrade safety, security or privacy, or release work is
+`--release current` at high priority. What it serves: a blocker or member of
+current-release work is `--release current`. Otherwise a feature or polish
+goes to a later release, and tests, CI and hooks to the theme the project
+keeps for them (`docket skills releases` lists the releases, the current
+first). The body's last line says which and why: `**Release.** current: it
+loses the draft on resume.`
+
+Then:
 
     docket link T14 T15 T16 opened A3
     docket priority T14 high            # critical, high, normal or low; normal is the default

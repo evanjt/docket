@@ -17,7 +17,7 @@ What {id} is decides the work:
 
 Each ticket is one change that lands on its own:
 
-    docket new T "the change, in one line" --body -
+    docket new T "the change, in one line" --body - --release <its release>
     docket link T<n> opened {id}
     docket priority T<n> high
     docket rate T<n> medium
@@ -25,6 +25,17 @@ Each ticket is one change that lands on its own:
 The body holds the **Evidence** (`file:line` read from the tree, never quoted from a document), the
 **Fix**, and the **Failing case**. A defect is a `B`. Before filing, `docket search` the words: what
 already covers part of it is linked, not written again.
+
+Every item you file names its release with `--release`, chosen by what the item is, in this order:
+
+1. Its nature: a crash, a hang, data loss or wrong numbers, migration or upgrade safety, security
+   or privacy, or release work is `--release current`, at high priority.
+2. What it serves: a blocker of current-release work, or a member of it, is `--release current`.
+3. Otherwise a feature or polish goes to a later release, and tests, CI and hooks to the theme the
+   project keeps for them. `docket skills releases` lists the releases, the current first.
+
+The body's last line says which and why: `**Release.** current: it loses the draft on resume.`
+`docket` refuses `new` and `add` here without `--release`.
 
 A routine choice of implementation is a line in a ticket's Fix, never a question. A question,
 derived or not, is for a choice the owner will see in the product. One a decided question or

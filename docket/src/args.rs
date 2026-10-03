@@ -138,6 +138,9 @@ pub enum Cmd {
         priority: Option<String>,
         #[arg(long)]
         theme: Option<String>,
+        /// the release it is filed for: current, a listed release, or a theme in use; required in a job
+        #[arg(long, value_name = "RELEASE")]
+        release: Option<String>,
         #[arg(long)]
         group: Option<String>,
     },
@@ -153,6 +156,9 @@ pub enum Cmd {
         /// the fleet job that saw it, so the brakes count it
         #[arg(long = "from", value_name = "JOB")]
         from: Option<String>,
+        /// the release it is filed for: current, a listed release, or a theme in use; required in a job
+        #[arg(long, value_name = "RELEASE")]
+        release: Option<String>,
     },
     /// claim an item on this branch
     Start {

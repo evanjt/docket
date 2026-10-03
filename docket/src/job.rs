@@ -160,6 +160,18 @@ pub fn refusal(verb: &str, job: Option<&str>) -> Option<String> {
     })
 }
 
+/// Why `new` or `add` is refused inside a job: every item a job files names its release.
+#[must_use]
+pub fn unreleased(verb: &str, job: Option<&str>, release: Option<&str>) -> Option<String> {
+    let job = job.filter(|j| !j.is_empty())?;
+    release.is_none_or(|r| r.trim().is_empty()).then(|| {
+        format!(
+            "docket {verb} inside the job {job} needs --release: current, a later release, or a \
+             theme in use, chosen by what the item is, as the brief's triage says."
+        )
+    })
+}
+
 /// The report a job ends its final message with.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "word", content = "what", rename_all = "UPPERCASE")]

@@ -131,6 +131,9 @@ pub struct NewRequest {
     pub priority: Option<String>,
     #[serde(default)]
     pub theme: Option<String>,
+    /// The release it is filed for: `current`, a listed release, or a theme in use; sets the theme.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<String>,
     #[serde(default)]
     pub group: Option<String>,
 }
@@ -147,6 +150,9 @@ pub struct AddRequest {
     /// The fleet job that saw it, so the brakes count it.
     #[serde(default)]
     pub from: Option<String>,
+    /// The release it is filed for, as `NewRequest::release`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

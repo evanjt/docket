@@ -37,6 +37,13 @@ opened A3`, `docket priority T14 high` where it is more urgent than normal,
 `docket rate T14 medium`, and `docket release A3`: the plan waits on its
 tickets.
 
+Every item filed names its release with `--release`, by what it is: a
+crash, hang, data loss, wrong numbers, upgrade safety, security, privacy or
+release work is `current` at high priority; a blocker or member of current
+work is `current`; otherwise a feature or polish goes to a later release, and
+tests, CI and hooks to the theme the project keeps for them. The body's last line says
+which and why (`**Release.** current: ...`).
+
 ## An investigation
 
 Measure it with the source `docket skills measure` names, append the result

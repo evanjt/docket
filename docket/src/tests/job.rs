@@ -443,3 +443,32 @@ fn test_a_brief_keeps_a_routine_choice_out_of_the_questions() {
         assert!(text.contains("--carried-by"), "{role}");
     }
 }
+
+#[test]
+fn test_a_job_files_nothing_without_naming_its_release() {
+    let why = unreleased("new", Some("lead-t14-7"), None).unwrap();
+    assert!(why.contains("--release"), "{why}");
+    assert_eq!(
+        unreleased("add", Some("lead-t14-7"), Some("")),
+        Some(why.replace("new", "add"))
+    );
+    assert_eq!(unreleased("new", Some("lead-t14-7"), Some("current")), None);
+    assert_eq!(unreleased("new", None, None), None);
+    assert_eq!(unreleased("new", Some(""), None), None);
+}
+
+#[test]
+fn test_every_brief_triages_a_filing_by_what_it_is() {
+    for (role, _) in BRIEFS {
+        let text = brief(role, "T14", "lead/t14-7").unwrap();
+        let nature = text.find("Its nature").unwrap_or(usize::MAX);
+        let serves = text.find("What it serves").unwrap_or(usize::MAX);
+        let otherwise = text.find("Otherwise").unwrap_or(usize::MAX);
+        assert!(
+            nature < serves && serves < otherwise && otherwise < usize::MAX,
+            "{role}"
+        );
+        assert!(text.contains("--release current"), "{role}");
+        assert!(text.contains("**Release.**"), "{role}");
+    }
+}

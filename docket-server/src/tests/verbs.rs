@@ -297,6 +297,54 @@ async fn test_a_derived_answer_with_its_carrier_closes_and_never_lists_for_plann
 }
 
 #[tokio::test]
+async fn test_a_release_sets_the_theme_an_item_is_filed_under() {
+    let s = Scratch::new().await;
+    s.db.seed(&format!(
+        "UPDATE projects SET skills = '{{\"releases\": \"1.0 1.1\"}}' WHERE slug = '{SLUG}'"
+    ))
+    .await;
+    s.ok(
+        "new",
+        json!({ "key": "B", "title": "Crash on resume", "release": "current" }),
+    )
+    .await;
+    s.ok(
+        "new",
+        json!({ "key": "T", "title": "Dark map style", "release": "1.1" }),
+    )
+    .await;
+    s.ok(
+        "new",
+        json!({ "key": "T", "title": "Lint the hooks", "theme": "upkeep" }),
+    )
+    .await;
+    s.ok(
+        "add",
+        json!({ "title": "Hook runs twice", "release": "upkeep" }),
+    )
+    .await;
+    assert_eq!(s.item("B1").await["theme"], "1.0");
+    assert_eq!(s.item("T1").await["theme"], "1.1");
+    assert_eq!(s.item("B2").await["theme"], "upkeep");
+    assert_eq!(
+        s.refused(
+            "new",
+            json!({ "key": "T", "title": "Later", "release": "2.0" })
+        )
+        .await,
+        "2.0 is neither a release nor a theme in use here: give current, one of 1.0 1.1, or a theme items already carry"
+    );
+    assert_eq!(
+        s.refused(
+            "new",
+            json!({ "key": "T", "title": "Both", "release": "1.0", "theme": "1.1" })
+        )
+        .await,
+        "give the release or the theme, not both: a release sets the theme."
+    );
+}
+
+#[tokio::test]
 async fn test_a_new_question_lists_the_decided_questions_close_to_it() {
     let s = Scratch::new().await;
     s.open("Q", "Retry policy for the order queue").await;

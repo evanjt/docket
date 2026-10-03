@@ -263,6 +263,39 @@ pub fn releases(value: Option<&str>) -> Vec<String> {
         .collect()
 }
 
+/// The theme an item filed for a release carries: `current` is the first release, and none while the
+/// project lists none; a listed release, or a theme items already carry (an area outside the releases,
+/// which ranks with the current release), is itself.
+///
+/// # Errors
+/// Refused when the name is empty, or is neither a release nor a theme in use.
+pub fn release_theme(
+    given: &str,
+    listed: &[String],
+    in_use: bool,
+) -> Result<Option<String>, Refused> {
+    let given = given.trim();
+    let choices = if listed.is_empty() {
+        String::new()
+    } else {
+        format!(" one of {},", listed.join(" "))
+    };
+    if given.is_empty() {
+        return Err(Refused(format!(
+            "a release is current,{choices} or a theme items already carry"
+        )));
+    }
+    if given == "current" {
+        return Ok(listed.first().cloned());
+    }
+    if in_use || listed.iter().any(|r| r == given) {
+        return Ok(Some(given.to_string()));
+    }
+    Err(Refused(format!(
+        "{given} is neither a release nor a theme in use here: give current,{choices} or a theme items already carry"
+    )))
+}
+
 /// Digits only, and not all of them zero.
 fn is_count(value: &str) -> bool {
     !value.is_empty()

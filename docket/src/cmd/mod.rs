@@ -191,6 +191,7 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             complexity,
             priority,
             theme,
+            release,
             group,
         } => write::new(
             ctx,
@@ -202,6 +203,7 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
                 complexity: complexity.as_ref(),
                 priority: priority.as_ref(),
                 theme: theme.as_ref(),
+                release: release.as_ref(),
                 group: group.as_ref(),
             },
         ),
@@ -210,7 +212,15 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             key,
             body,
             from,
-        } => write::add(ctx, title, key.as_ref(), body.as_ref(), from.as_ref()),
+            release,
+        } => write::add(
+            ctx,
+            title,
+            key.as_ref(),
+            body.as_ref(),
+            from.as_ref(),
+            release.as_ref(),
+        ),
         Cmd::Start {
             id,
             force,

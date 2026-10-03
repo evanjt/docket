@@ -210,3 +210,14 @@ fn test_a_derived_answer_names_its_carrier_and_a_routine_choice_is_a_note() {
         }
     }
 }
+
+#[test]
+fn test_every_template_names_the_release_of_what_it_files() {
+    for (name, text) in texts() {
+        if name.starts_with("lead/") {
+            continue;
+        }
+        assert!(text.contains("--release"), "{name}");
+        assert!(text.contains("data loss"), "{name}");
+    }
+}

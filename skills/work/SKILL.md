@@ -136,6 +136,16 @@ reply by asking the owner to choose: the question is in the docket.
 Work only the owner can do (`docket skills hands`), a login, a device, an
 account, is handed over with `docket ask T14 "what is needed"`.
 
+Every item filed names its release with `--release`, chosen by what it is,
+in this order. Its nature: a crash, a hang, data loss or wrong numbers,
+migration or upgrade safety, security or privacy, or release work is
+`--release current` at high priority. What it serves: a blocker or member of
+current-release work is `--release current`. Otherwise a feature or polish
+goes to a later release, and tests, CI and hooks to the theme the project
+keeps for them (`docket skills releases` lists the releases, the current
+first). The body's last line says which and why: `**Release.** current: it
+loses the draft on resume.`
+
 Something found on the way that is not this ticket is filed, never left in a
 reply: `docket add "title" --body -` files it as a low-priority ticket. A bug
 that stops the work, or is critical, gets `docket new B` at its own priority.

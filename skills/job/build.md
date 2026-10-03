@@ -35,6 +35,17 @@ out and the one fact that would settle it. Then the ticket waits and you stop:
     docket new Q "the decision, in one line" --body -
     docket wait {id} --on Q<n>
 
+Every item you file names its release with `--release`, chosen by what the item is, in this order:
+
+1. Its nature: a crash, a hang, data loss or wrong numbers, migration or upgrade safety, security
+   or privacy, or release work is `--release current`, at high priority.
+2. What it serves: a blocker of current-release work, or a member of it, is `--release current`.
+3. Otherwise a feature or polish goes to a later release, and tests, CI and hooks to the theme the
+   project keeps for them. `docket skills releases` lists the releases, the current first.
+
+The body's last line says which and why: `**Release.** current: it loses the draft on resume.`
+`docket` refuses `new` and `add` here without `--release`.
+
 Something found on the way that is not this ticket is filed, never left in the report:
 `docket add "title" --body -`. A part of {id} left undone is a ticket of its own, filed before you
 report and named in the note.

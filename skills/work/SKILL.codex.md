@@ -68,6 +68,13 @@ would settle it, then `docket wait T14 --on Q<n>` and take another ticket. A
 measurement nobody has taken is `docket new I`. Work only the owner can do is
 `docket ask T14 "what is needed"`.
 
+Every item filed names its release with `--release`, by what it is: a
+crash, hang, data loss, wrong numbers, upgrade safety, security, privacy or
+release work is `current` at high priority; a blocker or member of current
+work is `current`; otherwise a feature or polish goes to a later release, and
+tests, CI and hooks to the theme the project keeps for them. The body's last line says
+which and why (`**Release.** current: ...`).
+
 A side finding is `docket add "title" --body -`, a low-priority ticket. Never
 weaken a test to avoid a question. Cite `file:line` from the working tree, not
 a document.

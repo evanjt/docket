@@ -164,10 +164,15 @@ impl Ctx {
             self.project_row(&slug)?;
             return Ok(slug);
         }
-        if let Some(slug) = self.roots.bound(&local::realpath(&self.cwd)) {
+        let (top, urls) = local::outermost_repo(&self.cwd);
+        let top_s = top.as_ref().map(|t| t.display().to_string());
+        if let Some(slug) = bound_at(
+            &self.roots.roots,
+            &local::realpath(&self.cwd),
+            top_s.as_deref(),
+        ) {
             return Ok(slug);
         }
-        let (top, urls) = local::outermost_repo(&self.cwd);
         let shown = self.cwd.display().to_string();
         if let Some(repo) = &self.repo {
             let repo = local::realpath(&local::expand("", repo));
@@ -214,6 +219,14 @@ impl Ctx {
         );
         Ok(slug)
     }
+}
+
+/// The project bound to a directory, else to the outermost checkout it belongs to, so a worktree kept
+/// outside its checkout's root takes the checkout's binding instead of binding the checkout afresh.
+#[must_use]
+pub fn bound_at(roots: &[Root], cwd: &str, top: Option<&str>) -> Option<String> {
+    docket_client::roots::bound(roots, cwd)
+        .or_else(|| top.and_then(|t| docket_client::roots::bound(roots, t)))
 }
 
 impl Ctx {

@@ -146,8 +146,8 @@ pub async fn audit(
     } else if let Some(t) = &q.theme {
         rows(
             &db,
-            "SELECT * FROM items WHERE project=? AND theme ILIKE ? ESCAPE '' ORDER BY state, rid",
-            vec![q.project.clone().into(), format!("%{t}%").into()],
+            "SELECT * FROM items WHERE project=? AND lower(theme)=lower(?) ORDER BY state, rid",
+            vec![q.project.clone().into(), t.clone().into()],
         )
         .await?
     } else if let Some(id) = &q.id {

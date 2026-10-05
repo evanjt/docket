@@ -18,6 +18,7 @@ export const MEANING: Record<string, string> = {
   standing: 'a concept or idea, open for good',
 };
 
+/** Tiers and levels in order, for the filters, the sort and the new-item form; the item panel reads the server's. */
 export const PRIORITIES = ['critical', 'high', 'normal', 'low'] as const;
 export const LEVELS = ['high', 'medium', 'low'] as const;
 

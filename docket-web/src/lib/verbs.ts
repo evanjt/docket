@@ -1,23 +1,17 @@
-import type { Kind, Shown } from './types';
+import type { Offer, Offers } from './types';
 
-/** The verbs that fit an item as it stands, in the order its panel offers them. */
+/** The verbs an item can take, as the server names them. */
 export type Verb =
-  | 'answer' | 'reply' | 'start' | 'close' | 'release' | 'resume' | 'ask' | 'wait' | 'reopen' | 'drop';
+  | 'answer' | 'reply' | 'retry' | 'start' | 'close' | 'release' | 'resume' | 'ask' | 'wait' | 'reopen' | 'drop';
 
-export function verbs(item: Shown, kind: Kind, owner: boolean): Verb[] {
-  const word = item.word;
-  if (word === 'done' || word === 'dropped') return ['reopen'];
-  if (word === 'standing') return [];
-  const out: Verb[] = [];
-  const question = kind === 'decision';
-  if (question && owner && !item.decision) out.push('answer');
-  if (word === 'parked' && !question) out.push('reply');
-  if (item.claim_branch) out.push('close', 'release');
-  else if (word === 'ready') out.push('start');
-  if (word === 'blocked') out.push('resume');
-  if (word !== 'parked' && word !== 'blocked') out.push('ask', 'wait');
-  out.push('drop');
-  return out;
+/** The verbs the server says an item takes now, the ones this page has a form for, in the server's order. */
+export function verbs(offers: Offers | undefined): Offer[] {
+  return (offers?.verbs ?? []).filter((o) => o.verb in WORDING);
+}
+
+/** Whether the text holds what the offer is refused without. */
+export function filled(offer: Offer | undefined, text: string): boolean {
+  return !offer || offer.needs.length === 0 || text.trim().length > 0;
 }
 
 /** What each verb's button says, and what its toast says once it lands. */
@@ -27,6 +21,7 @@ export const WORDING: Record<Verb, { label: string; done: string }> = {
   start: { label: 'Start', done: 'Started' },
   close: { label: 'Close', done: 'Closed' },
   release: { label: 'Release', done: 'Released' },
+  retry: { label: 'Retry', done: 'Retried' },
   resume: { label: 'Resume', done: 'Resumed' },
   ask: { label: 'Park for me', done: 'Parked' },
   wait: { label: 'Wait', done: 'Waiting' },

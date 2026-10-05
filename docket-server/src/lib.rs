@@ -110,6 +110,7 @@ fn routes(db: &DatabaseConnection, keys: Keys, stopping: watch::Receiver<bool>) 
         .split_for_parts();
     Router::new()
         .route("/show/{id}", get(show::show))
+        .route("/offers/{id}", get(show::offers))
         .merge(reads::router())
         .merge(facts::router())
         .merge(machines::router())

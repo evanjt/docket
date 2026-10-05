@@ -1339,3 +1339,17 @@ async fn test_a_theme_edit_that_puts_a_hold_into_a_later_release_is_refused() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn test_linking_a_waiter_under_the_plan_it_waits_on_is_refused() {
+    let s = Scratch::new().await;
+    s.open("B", "Till freezes at opening").await;
+    s.open("A", "Shelf plan").await;
+    s.ok("start", json!({ "id": "B1" })).await;
+    s.ok("wait", json!({ "id": "B1", "on": "A1" })).await;
+    let said = s
+        .refused("link", json!({ "a": ["B1"], "b": "A1", "kind": "opened" }))
+        .await;
+    assert!(said.contains("would wait forever"), "{said}");
+    assert_eq!(s.item("B1").await["opened"], json!([]));
+}

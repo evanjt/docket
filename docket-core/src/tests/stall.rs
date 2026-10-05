@@ -56,3 +56,32 @@ fn test_a_hold_runs_into_a_later_release_only_when_the_holder_ships_after_the_he
     assert!(runs_later(&releases, Some("upkeep"), Some("0.4.2")));
     assert!(!runs_later(&[], Some("0.4.1"), Some("0.4.2")));
 }
+
+const DAY: i64 = 86_400;
+
+fn at(kind: &'static str, days_ago: i64) -> (&'static str, i64) {
+    (kind, 100 * DAY - days_ago * DAY)
+}
+
+#[test]
+fn test_an_edit_does_not_count_as_activity_but_an_unclaim_does() {
+    let now = 100 * DAY;
+    let edited = [at("claimed", 10), at("edited", 1)];
+    assert_eq!((now - idle_since(&edited).unwrap()) / DAY, 10);
+    let released = [at("claimed", 10), at("released", 1)];
+    assert_eq!((now - idle_since(&released).unwrap()) / DAY, 1);
+}
+
+#[test]
+fn test_only_events_that_move_an_item_forward_count() {
+    for kind in ["edited", "renumbered", "claim_lost", "queue", "audited"] {
+        assert_eq!(idle_since(&[at("opened", 5), at(kind, 1)]), Some(95 * DAY));
+    }
+    for kind in [
+        "opened", "claimed", "released", "waited", "resumed", "asked", "replied", "decided",
+        "closed", "dropped", "reopened",
+    ] {
+        assert_eq!(idle_since(&[at("opened", 5), at(kind, 1)]), Some(99 * DAY));
+    }
+    assert_eq!(idle_since(&[at("edited", 1)]), None);
+}

@@ -43,6 +43,7 @@ pub fn router() -> Router<DatabaseConnection> {
         .route("/context/{id}", get(detail::context))
         .route("/files", get(detail::files))
         .route("/citations", get(detail::citations))
+        .route("/open_bodies", get(detail::open_bodies))
         .route("/audit", get(audit::audit))
 }
 

@@ -229,6 +229,25 @@ pub fn bound_at(roots: &[Root], cwd: &str, top: Option<&str>) -> Option<String> 
         .or_else(|| top.and_then(|t| docket_client::roots::bound(roots, t)))
 }
 
+/// The root of a project that holds the directory, else the outermost checkout it belongs to: the
+/// checkout a command runs in, not whichever root of the project is shortest.
+#[must_use]
+pub fn root_at(roots: &[Root], project: &str, cwd: &str, top: Option<&str>) -> Option<String> {
+    let mine: Vec<Root> = roots
+        .iter()
+        .filter(|r| r.project == project)
+        .cloned()
+        .collect();
+    let held = |dir: &str| {
+        mine.iter()
+            .map(|r| r.path.trim_end_matches('/'))
+            .filter(|p| dir == *p || dir.starts_with(&format!("{p}/")))
+            .max_by_key(|p| p.len())
+            .map(str::to_string)
+    };
+    held(cwd).or_else(|| top.and_then(held))
+}
+
 impl Ctx {
     /// A directory bound to a project in this machine's roots file.
     ///

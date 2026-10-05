@@ -16,6 +16,7 @@ use docket_client::{Api, Config};
 use crate::app::App;
 use crate::doc::Target;
 use crate::source::{Http, Source};
+use crate::starter::{self, Start};
 use crate::view;
 
 /// What the change stream tells the screen.
@@ -27,6 +28,12 @@ enum Notice {
 
 /// The least time between two reads of a page, so a burst of commits is read once.
 const SETTLE: Duration = Duration::from_secs(1);
+
+/// How often the screen looks for a project that has no lead.
+const LEAD_LOOK: Duration = Duration::from_secs(5);
+
+/// Starts a lead on this machine for a project that has none.
+pub type Launcher = dyn Fn(&Start) -> Result<String, String>;
 
 /// The terminal taken: raw, on the alternate screen, and reporting the mouse.
 fn init() -> DefaultTerminal {
@@ -170,9 +177,29 @@ fn settle_hover<S: Source>(app: &mut App<S>, hover: Option<MouseEvent>) -> bool 
     *app.cursor() != cursor || app.hover != hovered
 }
 
-fn run_loop(app: &mut App<Http>, rx: &Receiver<Notice>) -> std::io::Result<()> {
+/// One look at the projects bound here, starting a lead where the rule allows. The screen is drawn
+/// again when a start was tried.
+fn look_for_leads(app: &mut App<Http>, launch: &Launcher) -> bool {
+    let roots = docket_client::roots::path().map(docket_client::roots::Roots::load);
+    let bound = |slug: &str| roots.as_ref().map(|r| r.of(slug)).unwrap_or_default();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+    let before = app.starts.clone();
+    starter::tick(&app.source, &bound, &mut app.starts, now, launch);
+    app.starts != before
+}
+
+fn run_loop(
+    app: &mut App<Http>,
+    rx: &Receiver<Notice>,
+    launch: Option<&Launcher>,
+) -> std::io::Result<()> {
     let mut terminal = init();
     let (mut moved, mut read) = (false, Instant::now());
+    let mut looked = Instant::now()
+        .checked_sub(LEAD_LOOK)
+        .unwrap_or_else(Instant::now);
     let mut redraw = true;
     while !app.quit {
         if redraw {
@@ -192,13 +219,25 @@ fn run_loop(app: &mut App<Http>, rx: &Receiver<Notice>) -> std::io::Result<()> {
             (moved, read) = (false, Instant::now());
             redraw = true;
         }
+        if let Some(launch) = launch
+            && looked.elapsed() >= LEAD_LOOK
+        {
+            looked = Instant::now();
+            redraw |= look_for_leads(app, launch);
+        }
     }
     Ok(())
 }
 
-/// The screen over the server the config names, opened on a project when one is given.
+/// The screen over the server the config names, opened on a project when one is given. With a
+/// `launch`, it starts a lead for each project bound here that has none while it is open.
 #[must_use]
-pub fn main(config: Config, project: Option<String>, name: &str) -> ExitCode {
+pub fn main(
+    config: Config,
+    project: Option<String>,
+    name: &str,
+    launch: Option<&Launcher>,
+) -> ExitCode {
     let api = match Api::new(&config) {
         Ok(a) => a,
         Err(e) => {
@@ -213,7 +252,7 @@ pub fn main(config: Config, project: Option<String>, name: &str) -> ExitCode {
         app.open(Target::Project(slug));
     }
     release_mouse_on_panic();
-    let result = run_loop(&mut app, &rx);
+    let result = run_loop(&mut app, &rx, launch);
     restore();
     match result {
         Ok(()) => ExitCode::SUCCESS,

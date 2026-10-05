@@ -10,6 +10,7 @@ use crate::doc::{Cursor, Doc, Listing, Target};
 use crate::mouse::{Map, Zone};
 use crate::page::{Browser, Detail, Help, Home, Page, Plans, Project, Queue, Settings, Typing};
 use crate::source::Source;
+use crate::starter::Starts;
 use crate::view;
 use crate::write::{Ask, Prompt};
 use docket_core::board::Board;
@@ -39,6 +40,8 @@ pub struct App<S: Source> {
     pub generation: u64,
     /// The last Project page document, with what it was built from.
     pub doc_cache: RefCell<Option<(DocKey, Rc<Doc>)>>,
+    /// The last look at each project for a lead to start, which the project page reads.
+    pub starts: Starts,
 }
 
 /// What the Project page's document depends on: the generation, the project, the width and the moves shown.
@@ -64,6 +67,7 @@ impl<S: Source> App<S> {
             hover: None,
             generation: 0,
             doc_cache: RefCell::new(None),
+            starts: Starts::default(),
         };
         app.load();
         app

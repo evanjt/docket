@@ -15,6 +15,7 @@
 
   const ctx = project();
   const shown = resource(() => api.show(ctx.slug, id));
+  const offers = resource(() => api.offers(ctx.slug, id));
   const log = resource(() => api.log(ctx.slug, id));
 
   const item = $derived(shown.data?.id === id ? shown.data : undefined);
@@ -79,7 +80,7 @@
       </div>
     {/if}
 
-    <Actions {item} {kind} slug={ctx.slug} />
+    <Actions {item} {kind} offers={offers.data?.id === id ? offers.data : undefined} slug={ctx.slug} />
 
     {#if body}
       <div class="prose body">{@html body}</div>

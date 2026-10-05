@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 
-use crate::like;
 use crate::member::{Tie, opened_under};
 use crate::word::Kind;
 
@@ -100,7 +99,7 @@ fn takeable(c: &Candidate, f: &Filter, ties: &[Tie], open: &HashSet<i64>) -> boo
         && f.complexity.is_none_or(|x| c.complexity == Some(x))
         && f.key.is_none_or(|k| c.key == k)
         && f.theme
-            .is_none_or(|t| c.theme.is_some_and(|mine| like::contains(mine, t)))
+            .is_none_or(|t| c.theme.is_some_and(|mine| mine.eq_ignore_ascii_case(t)))
 }
 
 /// The queue an agent takes from, as `(rid, tier)`: the earliest release first, then the most urgent,

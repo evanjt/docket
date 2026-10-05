@@ -3,8 +3,8 @@
   import { project } from '../lib/context';
   import { ASIDE, FLOW, PRIORITIES, byId } from '../lib/flow';
   import { resource } from '../lib/live.svelte';
-  import { SORTS, applies, filterChanges, nextParams, parseFilter, searchParams, sortRows } from '../lib/filter';
-  import { caption, countOf, pageSize } from '../lib/lists';
+  import { SORTS, applies, filterChanges, nextParams, pagedParams, parseFilter, searchParams, sortRows } from '../lib/filter';
+  import { caption, countOf, pageSize, queueNodes, wordList } from '../lib/lists';
   import { releaseOf } from '../lib/releases';
   import { at, go, withParams } from '../lib/router.svelte';
   import { act } from '../lib/session.svelte';
@@ -31,7 +31,8 @@
 
   const q = $derived(at.params.get('q') ?? '');
   const word = $derived(at.params.get('word'));
-  const list = $derived(q || word ? null : (at.params.get('list') ?? 'next'));
+  const wordRoute = $derived(word ? wordList(word) : null);
+  const list = $derived(q ? null : word ? wordRoute : (at.params.get('list') ?? 'next'));
   const selected = $derived(at.params.get('i'));
   const filter = $derived(parseFilter(at.params));
   const release = $derived(filter.release);
@@ -46,25 +47,24 @@
 
   const fetched = resource<Shape[]>(() => {
     if (q) return api.search(ctx.slug, q, 200, searchParams(filter));
-    if (word) return null;
+    if (word && !wordRoute) return null;
     // With a filter chosen, the whole queue is read: next lists the earlier releases first.
     if (list === 'next') return api.next(ctx.slug, narrowed ? 5000 : Math.max(200, pageSize(more, false)), nextParams(filter));
     if (list === 'derived') {
-      return api.derived(ctx.slug, pageSize(more, narrowed)).then((ds) =>
+      return api.derived(ctx.slug, pageSize(more, narrowed), pagedParams(filter)).then((ds) =>
         ds.map((d) => ({ id: d.id, title: d.title, word: d.state, turn_note: `${d.chose ?? ''} (from ${d.basis})` })),
       );
     }
-    return api.list(list ?? 'next', ctx.slug, pageSize(more, narrowed)).then((rows) =>
+    return api.list(list ?? 'next', ctx.slug, pageSize(more, narrowed), list === 'done' || list === 'dropped' ? pagedParams(filter) : {}).then((rows) =>
       list === 'groups' ? rows.map((r) => ({ ...r, aside: r.group ?? '' })) : rows,
     );
   });
 
-  /** Rows of one word come from the board, which every list route leaves some words out of. */
+  /** A word no list route covers is read from the board, leaving out the plans and packages the Plans page shows. */
   const rows = $derived.by<Shape[]>(() => {
-    if (word) {
+    if (word && !wordRoute) {
       if (!ctx.board) return [];
-      return [...ctx.board.nodes.values()]
-        .filter((n) => n.word === word)
+      return queueNodes(ctx.board, word)
         .sort((a, b) => byId(a.id, b.id))
         .map((n) => ({ id: n.id, title: n.title, word: n.word, theme: n.theme }));
     }
@@ -101,7 +101,7 @@
   const total = $derived(narrowed || q || word || !list ? null : countOf(list, status.data));
   const cut = $derived(!narrowed && !q && !word && list !== 'next' && list !== 'groups' && list !== 'derived' && total !== null && total > shown.length);
 
-  const loading = $derived(word ? !ctx.board : fetched.loading && !fetched.data);
+  const loading = $derived(word && !wordRoute ? !ctx.board : fetched.loading && !fetched.data);
   const heading = $derived(q ? `Search: ${q}` : word ? `Every item ${word}` : LISTS.find((l) => l.name === list)?.label);
 
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -264,7 +264,7 @@
       </div>
     {/if}
 
-    {#if fetched.error && !word}
+    {#if fetched.error && !(word && !wordRoute)}
       <p class="error">{fetched.error}</p>
     {:else if !loading && shown.length === 0}
       <p class="empty">

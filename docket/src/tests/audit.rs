@@ -10,19 +10,81 @@ fn test_shas_finds_hex_words_of_seven_or_more() {
     );
 }
 
+fn git_in(dir: &Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?}: {out:?}");
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+fn commit_file(dir: &Path, name: &str, body: &str) -> String {
+    std::fs::write(dir.join(name), body).unwrap();
+    git_in(dir, &["add", "."]);
+    git_in(dir, &["commit", "-m", name]);
+    git_in(dir, &["rev-parse", "HEAD"])
+}
+
 #[test]
-fn test_unreachable_sorts_done_work_by_where_its_sha_is() {
+fn test_sha_state_is_measured_against_the_integration_ref_not_head() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    git_in(dir, &["init", "-b", "main"]);
+    commit_file(dir, "base", "base");
+    let merged = commit_file(dir, "merged", "m");
+    git_in(dir, &["checkout", "-b", "audit/x"]);
+    let unmerged = commit_file(dir, "unmerged", "u");
+    git_in(dir, &["checkout", "-b", "lost"]);
+    let lost = commit_file(dir, "lost", "l");
+    git_in(dir, &["checkout", "audit/x"]);
+    git_in(dir, &["branch", "-D", "lost"]);
+    git_in(dir, &["checkout", "main"]);
+    let picked = {
+        git_in(dir, &["checkout", "-b", "feature"]);
+        let c = commit_file(dir, "picked", "p");
+        git_in(dir, &["checkout", "main"]);
+        git_in(dir, &["cherry-pick", &c]);
+        c
+    };
+    git_in(dir, &["checkout", "audit/x"]);
+    let dirs = [dir.to_path_buf()];
+    let state = |sha: &str| sha_state(&dirs, sha, Some("main"));
+    assert_eq!(state(&merged[..10]), ShaState::OnIntegration);
+    assert_eq!(
+        state(&unmerged[..10]),
+        ShaState::Unmerged(vec!["audit/x".into()])
+    );
+    assert_eq!(state(&lost[..10]), ShaState::NoBranch);
+    assert_eq!(state("0123456789abcdef"), ShaState::Gone);
+    // The patch is on main under another sha, so a rewrite is not reported as lost work.
+    assert_eq!(state(&picked[..10]), ShaState::OnIntegration);
+    // With no integration ref the checkout's own HEAD is the measure.
+    assert_eq!(sha_state(&dirs, &merged, None), ShaState::OnIntegration);
+}
+
+#[test]
+fn test_closed_work_is_sorted_by_its_best_sha() {
     let done = [
-        json!({"id": "B1", "state": "done", "kind": "work", "resolution": "abc1234"}),
+        json!({"id": "B1", "state": "done", "kind": "work", "resolution": "abc1234 def5678"}),
         json!({"id": "B2", "state": "done", "kind": "work", "resolution": "def5678"}),
         json!({"id": "B3", "state": "done", "kind": "work", "resolution": "no sha"}),
         json!({"id": "Q1", "state": "done", "kind": "decision", "resolution": "opened B1"}),
     ];
-    let head: HashSet<String> = ["abc1234ffff".to_string()].into();
-    let known: HashSet<String> = ["abc1234ffff".to_string(), "def5678000".to_string()].into();
-    let (off, nowhere) = unreachable(&done, &head, &known);
-    assert_eq!(off, ["B2"]);
-    assert_eq!(nowhere, ["B3"]);
+    let states = closed_states(&done, |s| match s {
+        "abc1234" => ShaState::OnIntegration,
+        _ => ShaState::Unmerged(vec!["audit/x".into()]),
+    });
+    assert_eq!(
+        states,
+        [
+            ("B1".to_string(), ShaState::OnIntegration),
+            ("B2".to_string(), ShaState::Unmerged(vec!["audit/x".into()])),
+            ("B3".to_string(), ShaState::Gone),
+        ]
+    );
 }
 
 #[test]
@@ -61,4 +123,151 @@ fn test_sections_are_found_by_word_and_open_counts_the_flow_words() {
     assert_eq!(section(&sections, "blocked").len(), 2);
     assert_eq!(open_count(&sections), 4);
     assert!(section(&sections, "inbox").is_empty());
+}
+
+fn file(path: &str, lines: usize) -> (String, usize) {
+    (path.to_string(), lines)
+}
+
+#[test]
+fn test_a_cited_line_past_the_end_of_the_file_is_reported() {
+    let found = [file("/r/src/hooks/useSplits.ts", 59)];
+    assert_eq!(
+        judge("cites_file", Some(132), &found, false),
+        Verdict::PastEnd(59)
+    );
+    assert_eq!(
+        judge("cites_file", Some(59), &found, false),
+        Verdict::Resolves
+    );
+    assert_eq!(judge("cites_file", None, &found, false), Verdict::Resolves);
+}
+
+#[test]
+fn test_a_line_is_judged_against_the_longest_file_that_matches() {
+    let found = [file("/r/a/lib.rs", 10), file("/r/b/lib.rs", 200)];
+    assert_eq!(
+        judge("cites_file", Some(150), &found, false),
+        Verdict::Resolves
+    );
+}
+
+#[test]
+fn test_a_cited_test_that_resolves_only_under_benches_is_reported() {
+    let found = [file("/r/benches/parse.rs", 40)];
+    assert_eq!(
+        judge("cites_test", Some(5), &found, false),
+        Verdict::Benches
+    );
+    assert_eq!(
+        judge("cites_file", Some(5), &found, false),
+        Verdict::Resolves
+    );
+    let both = [
+        file("/r/benches/parse.rs", 40),
+        file("/r/tests/parse.rs", 40),
+    ];
+    assert_eq!(judge("cites_test", None, &both, false), Verdict::Resolves);
+}
+
+#[test]
+fn test_nothing_found_is_missing_unless_a_dependency_holds_it() {
+    assert_eq!(judge("cites_file", None, &[], false), Verdict::Missing);
+    assert_eq!(judge("cites_file", Some(9), &[], true), Verdict::Resolves);
+}
+
+fn git(dir: &Path, args: &[&str]) {
+    let ok = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["-c", "user.email=a@b.c", "-c", "user.name=t"])
+        .args(args)
+        .output()
+        .unwrap()
+        .status
+        .success();
+    assert!(ok, "git {args:?}");
+}
+
+#[test]
+fn test_index_lists_tracked_files_and_not_worktrees_or_untracked_copies() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let repo = root.join("app");
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(repo.join("src/kept.ts"), "x").unwrap();
+    std::fs::write(repo.join("src/gone.ts"), "x").unwrap();
+    git(&repo, &["init", "-q"]);
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "one"]);
+    git(&repo, &["worktree", "add", "-q", "../app-side"]);
+    git(&repo, &["rm", "-q", "src/gone.ts"]);
+    git(&repo, &["commit", "-qm", "two"]);
+    std::fs::write(repo.join("src/loose.ts"), "x").unwrap();
+
+    let roots = vec![root.to_string_lossy().into_owned()];
+    let mut index = Index::default();
+    assert!(!index.find(&roots, "src/kept.ts").0.is_empty());
+    assert!(index.find(&roots, "src/gone.ts").0.is_empty());
+    assert!(index.find(&roots, "src/loose.ts").0.is_empty());
+}
+
+#[test]
+fn test_cited_branches_skip_wildcards_and_scripts() {
+    let body = "Parked on `audit/z9-1234`; also audit/z9-77. Not audit/z1xx, audit/z9-*, \
+                audit/z9-$n, audit-status.sh or audit/ alone.";
+    assert_eq!(cited_branches(body), ["audit/z9-1234", "audit/z9-77"]);
+}
+
+#[test]
+fn test_gone_branches_are_those_no_repository_has() {
+    let dir = std::env::temp_dir().join(format!("docket-branches-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let run = |args: &[&str]| assert!(local::git(args, &dir).is_some(), "git {args:?}");
+    run(&["init", "-q"]);
+    run(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@example.invalid",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "x",
+    ]);
+    run(&["branch", "audit/z9-1234"]);
+    let rows = vec![
+        ("Z1".to_string(), "audit/z9-1234".to_string()),
+        ("Z1".into(), "audit/z9-5678".into()),
+    ];
+    let gone = gone_branches(&rows, std::slice::from_ref(&dir));
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(gone, [("Z1".to_string(), "audit/z9-5678".to_string())]);
+}
+
+#[test]
+fn test_closes_another_item_reads_the_id_a_commit_subject_closes() {
+    assert_eq!(closes_another("I20", "Close I19 and rewrite"), Some("I19"));
+    assert_eq!(closes_another("I20", "Close I20 with the fix"), None);
+    assert_eq!(closes_another("I20", "Record I19 as done"), None);
+    assert_eq!(closes_another("I2", "Close I20"), Some("I20"));
+}
+
+#[test]
+fn test_misattributed_lists_done_items_whose_commit_closes_another_item() {
+    let done = [
+        json!({"id": "B1", "state": "done", "kind": "work", "resolution": "abc1234"}),
+        json!({"id": "B2", "state": "done", "kind": "work", "resolution": "def5678 and abc1234"}),
+        json!({"id": "B3", "state": "done", "kind": "work", "resolution": "no sha"}),
+    ];
+    let subject = |sha: &str| match sha {
+        "abc1234" => Some("Close B1 with the fix".to_string()),
+        "def5678" => Some("Tidy the parser".to_string()),
+        _ => None,
+    };
+    assert_eq!(
+        misattributed(&done, &subject),
+        [("B2".to_string(), "B1".to_string())]
+    );
 }

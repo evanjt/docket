@@ -219,3 +219,15 @@ fn test_releases_are_the_current_then_the_version_themes_in_order() {
     );
     assert_eq!(releases_of("1.0", &[]), ["1.0"]);
 }
+
+#[tokio::test]
+async fn test_a_waiter_held_by_the_plan_it_waits_on_refuses_the_run() {
+    let s = seeded().await;
+    s.db.execute_unprepared(
+        "UPDATE items SET wait_on='item', wait_item=1, wait_ref='PK1', wait_since='w' WHERE rid=2",
+    )
+    .await
+    .unwrap();
+    let said = simplify(&s.db, "testbox", true).await.unwrap_err();
+    assert!(said.contains("T1 would wait forever"), "{said}");
+}

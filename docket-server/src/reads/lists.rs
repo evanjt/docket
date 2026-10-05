@@ -1,5 +1,6 @@
 use axum::Json;
 use axum::extract::{Query, State};
+use axum::http::StatusCode;
 use sea_orm::{DatabaseConnection, FromQueryResult};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -7,8 +8,9 @@ use serde_json::{Value, json};
 use docket_core::flow::{DERIVED, derived_parts};
 use docket_core::word::Kind;
 
+use crate::entities::project;
 use crate::reads::public::{
-    Failure, Kinds, items_where, marks, one_of, project_of, public_rows, sql,
+    Failure, Kinds, failure, items_where, marks, one_of, project_of, public_rows, sql,
 };
 
 fn like(words: &str) -> sea_orm::Value {
@@ -160,14 +162,53 @@ pub struct Recent {
     #[serde(default = "twenty")]
     n: i64,
     key: Option<String>,
+    release: Option<String>,
 }
 
 fn twenty() -> i64 {
     20
 }
 
+/// The condition and values selecting the items of one release, on the theme column `column`.
+/// An item belongs to the release its theme names; a theme the project's releases do not list, or
+/// none, belongs to the current (first) release, as the queue orders them.
+///
+/// # Errors
+/// 400 when the project lists releases and `release` is not one of them, or lists none.
+fn in_release(
+    project: &project::Model,
+    release: &str,
+    column: &str,
+) -> Result<(String, Vec<sea_orm::Value>), Failure> {
+    let listed = docket_core::fact::releases(project.skills["releases"].as_str());
+    if !listed.iter().any(|r| r == release) {
+        return Err(failure(
+            StatusCode::BAD_REQUEST,
+            &format!("release: choose from {}", listed.join(", ")),
+        ));
+    }
+    if listed[0] != release {
+        return Ok((format!(" AND {column}=?"), vec![release.into()]));
+    }
+    let mut values: Vec<sea_orm::Value> = vec![release.into()];
+    values.extend(listed.iter().map(|r| sea_orm::Value::from(r.as_str())));
+    Ok((
+        format!(
+            " AND ({column} IS NULL OR {column}=? OR {column} NOT IN ({}))",
+            marks(listed.len())
+        ),
+        values,
+    ))
+}
+
 async fn in_state(db: &DatabaseConnection, q: Recent, state: &str) -> Result<Json<Value>, Failure> {
+    let project = project_of(db, &q.project).await?;
     let (mut tail, mut values) = ("AND state=?".to_string(), vec![state.into()]);
+    if let Some(release) = &q.release {
+        let (cond, vals) = in_release(&project, release, "theme")?;
+        tail.push_str(&cond);
+        values.extend(vals);
+    }
     if let Some(key) = q.key {
         tail.push_str(" AND key=?");
         values.push(key.to_uppercase().into());
@@ -227,6 +268,7 @@ pub struct Newest {
     project: String,
     #[serde(default = "forty")]
     n: i64,
+    release: Option<String>,
 }
 
 fn forty() -> i64 {
@@ -262,14 +304,23 @@ pub async fn derived(
 ) -> Result<Json<Value>, Failure> {
     let project = project_of(&db, &q.project).await?;
     let qkeys = Kinds::of(&project).keys(Kind::Decision);
+    let (own, own_values) = match &q.release {
+        Some(r) => in_release(&project, r, "theme")?,
+        None => (String::new(), vec![]),
+    };
+    let (joined, joined_values) = match &q.release {
+        Some(r) => in_release(&project, r, "i.theme")?,
+        None => (String::new(), vec![]),
+    };
     let mut values: Vec<sea_orm::Value> = vec![q.project.clone().into()];
     values.extend(qkeys.iter().map(|k| k.clone().into()));
     values.push(format!("{DERIVED}%").into());
+    values.extend(own_values);
     values.push(q.n.into());
     let questions = DerivedQuestion::find_by_statement(sql(
         &format!(
             "SELECT id, state, decided_at, title, decision FROM items WHERE project=? AND key IN ({}) \
-             AND decision ILIKE ? ESCAPE '' ORDER BY decided_at DESC, rid LIMIT ?",
+             AND decision ILIKE ? ESCAPE ''{own} ORDER BY decided_at DESC, rid LIMIT ?",
             marks(qkeys.len())
         ),
         values,
@@ -277,11 +328,16 @@ pub async fn derived(
     .all(&db)
     .await
     .map_err(|e| crate::reads::public::internal(&e))?;
+    let mut event_values: Vec<sea_orm::Value> = vec![q.project.clone().into()];
+    event_values.extend(joined_values);
+    event_values.push(q.n.into());
     let events = DerivedEvent::find_by_statement(sql(
-        "SELECT e.at, e.note, e.data, i.id, i.state, i.title FROM events e JOIN items i ON i.rid=e.rid \
-         WHERE e.project=? AND e.kind='decided' AND e.data::text ILIKE '%\"derived\"%' ESCAPE '' \
-         ORDER BY e.at DESC, e.seq DESC LIMIT ?",
-        vec![q.project.into(), q.n.into()],
+        &format!(
+            "SELECT e.at, e.note, e.data, i.id, i.state, i.title FROM events e JOIN items i ON i.rid=e.rid \
+             WHERE e.project=? AND e.kind='decided' AND e.data::text ILIKE '%\"derived\"%' ESCAPE ''{joined} \
+             ORDER BY e.at DESC, e.seq DESC LIMIT ?"
+        ),
+        event_values,
     ))
     .all(&db)
     .await

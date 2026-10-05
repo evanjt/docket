@@ -1,5 +1,6 @@
 //! Each verb to its command.
 
+pub mod admin;
 pub mod audit;
 pub mod dispatch;
 pub mod instructions;
@@ -122,6 +123,7 @@ pub fn run(ctx: &mut Ctx, cmd: Option<&Cmd>) -> Result<i32> {
         | Cmd::Jobs { .. }
         | Cmd::Collect { .. } => run_lead(ctx, cmd),
         Cmd::Private { what } => private::private(ctx, what),
+        Cmd::Admin { what } => admin::admin(ctx, what),
         _ => run_write(ctx, cmd),
     }
 }

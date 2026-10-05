@@ -33,7 +33,32 @@ fn screen(cli: &Cli) -> ExitCode {
     let project = Ctx::new(false, cli.project.clone(), cli.branch.clone())
         .and_then(|mut ctx| ctx.project())
         .ok();
-    docket_tui::run::main(config, project, "docket")
+    docket_tui::run::main(config, project, "docket", Some(&start_lead))
+}
+
+/// Starts a lead in the project's checkout on this machine, through the job state `docket jobs` reads.
+fn start_lead(start: &docket_tui::starter::Start) -> Result<String, String> {
+    let Some(root) = start
+        .roots
+        .iter()
+        .find(|r| std::path::Path::new(r).is_dir())
+    else {
+        return Err(format!("no root of {} exists here", start.slug));
+    };
+    let rel = start.skills.get("checkout").filter(|c| !c.is_empty());
+    let checkout = local::expand(root, rel.map_or(".", String::as_str));
+    let env = [("DOCKET_PROJECT", start.slug.as_str())];
+    let mut started = job::start_lead(
+        &start.slug,
+        &checkout,
+        &job::state_root(),
+        &start.model,
+        &env,
+        &job::program(&start.model.runner),
+    )?;
+    let name = started.name.clone();
+    std::thread::spawn(move || started.child.wait());
+    Ok(format!("started {name}"))
 }
 
 /// Ends the process quietly when the reader of its output goes away, as a pipe into `head` does.

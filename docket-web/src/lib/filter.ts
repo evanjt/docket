@@ -50,6 +50,11 @@ export function nextParams(f: Filter) {
   return { key: f.key || undefined, priority: f.priority || undefined, complexity: f.complexity || undefined, under: f.under || undefined };
 }
 
+/** What `/done`, `/dropped` and `/derived` take of a filter: the release, which they apply before the page is cut. */
+export function pagedParams(f: Filter) {
+  return { release: f.release || undefined };
+}
+
 /** What `/search` takes of a filter; the rest is applied to the rows. */
 export function searchParams(f: Filter) {
   return { key: f.key || undefined, state: f.state || undefined };

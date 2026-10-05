@@ -14,12 +14,23 @@ INSERT INTO projects (slug, keys, themes, skills, created_at, updated_at) VALUES
   '[{"key":"T","kind":"work"},{"key":"Q","kind":"decision"},{"key":"A","kind":"audit"},
     {"key":"PK","kind":"package"},{"key":"CON","kind":"concept"}]',
   '[{"name":"sync"}]', '{}', 'c', 'u'),
-  ('o/r', '[{"key":"T","kind":"work"}]', '[]', '{"releases":"1.0 1.1 1.2"}', 'c', 'u');
+  ('o/r', '[{"key":"T","kind":"work"},{"key":"Q","kind":"decision"}]', '[]', '{"releases":"1.0 1.1 1.2"}', 'c', 'u');
 INSERT INTO items (rid, project, key, num, title, state, turn, tags, theme, body, opened_at, updated_at) VALUES
   (130, 'o/r', 'T', 1, 'Two releases out', 'open', 'agent', '["high"]', '1.2', '', 'o30', 'u30'),
   (131, 'o/r', 'T', 2, 'Next release', 'open', 'agent', '[]', '1.1', '', 'o31', 'u31'),
   (132, 'o/r', 'T', 3, 'This release, low', 'open', 'agent', '["low"]', NULL, '', 'o32', 'u32'),
   (133, 'o/r', 'T', 4, 'Docs', 'open', 'agent', '[]', 'docs', '', 'o33', 'u33');
+INSERT INTO items (rid, project, key, num, title, state, resolution, tags, theme, body, opened_at, updated_at)
+  SELECT 200 + n, 'o/r', 'T', 100 + n, 'Closed ' || n, 'done', 'ok', '[]',
+         CASE WHEN n <= 5 THEN '1.2' WHEN n = 6 THEN NULL WHEN n = 7 THEN 'docs' ELSE '1.1' END,
+         '', 'o' || lpad(n::text, 3, '0'), 'u' || lpad((100 - n)::text, 3, '0')
+  FROM generate_series(1, 30) AS n;
+INSERT INTO items (rid, project, key, num, title, state, resolution, tags, theme, body, opened_at, updated_at) VALUES
+  (240, 'o/r', 'T', 140, 'Dropped in next', 'dropped', 'dup', '[]', '1.1', '', 'o40', 'u40'),
+  (241, 'o/r', 'T', 141, 'Dropped in current', 'dropped', 'dup', '[]', NULL, '', 'o41', 'u41');
+INSERT INTO items (rid, project, key, num, title, state, resolution, decision, decided_at, tags, theme, opened_at, updated_at) VALUES
+  (242, 'o/r', 'Q', 1, 'Decided in next', 'done', 'ok', 'Derived from X: yes', 'd42', '[]', '1.1', 'o42', 'u42'),
+  (243, 'o/r', 'Q', 2, 'Decided in current', 'done', 'ok', 'Derived from X: no', 'd43', '[]', NULL, 'o43', 'u43');
 INSERT INTO items (rid, project, key, num, title, state, turn, tags, rank, complexity, scope, theme,
                    group_name, body, opened_at, updated_at) VALUES
   (1, 'o/p', 'T', 1, 'Plain fix', 'open', 'agent', '[]', NULL, NULL, NULL, NULL, NULL, '', 'o01', 'u01'),
@@ -123,7 +134,7 @@ async fn test_next_by_role() {
 
 #[tokio::test]
 async fn test_next_narrows_by_key_priority_under_theme_and_complexity() {
-    assert_eq!(ids("/next?theme=road").await, ["T9"]);
+    assert_eq!(ids("/next?theme=roadmap").await, ["T9"]);
     assert_eq!(
         ids("/next?key=t").await,
         ["T2", "T1", "T3", "T5", "T8", "T9"]
@@ -174,6 +185,27 @@ async fn test_state_lists_waiting_wip_done_dropped_groups() {
     assert_eq!(ids("/groups?name=none").await, Vec::<String>::new());
     let (_, wip) = get("/wip").await;
     assert_eq!(wip[0]["word"], "building");
+}
+
+#[tokio::test]
+async fn test_done_and_dropped_filter_by_release_before_the_page_is_cut() {
+    let done = |release: &str, n: u32| format!("/done?project=o/r&release={release}&n={n}");
+    assert_eq!(ids(&done("1.2", 20)).await.len(), 5);
+    assert_eq!(ids(&done("1.2", 3)).await.len(), 3);
+    assert_eq!(ids(&done("1.0", 40)).await, ["Q2", "T106", "T107"]);
+    assert_eq!(ids("/done?project=o/r&n=20").await.len(), 20);
+    assert_eq!(ids("/dropped?project=o/r&release=1.1").await, ["T140"]);
+    assert_eq!(ids("/dropped?project=o/r&release=1.0").await, ["T141"]);
+    assert_eq!(
+        get("/done?project=o/r&release=9.9").await.0,
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[tokio::test]
+async fn test_derived_filters_by_release_before_the_page_is_cut() {
+    assert_eq!(ids("/derived?project=o/r&release=1.1").await, ["Q1"]);
+    assert_eq!(ids("/derived?project=o/r&release=1.0&n=1").await, ["Q2"]);
 }
 
 #[tokio::test]

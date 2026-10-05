@@ -511,3 +511,30 @@ fn test_retry_refuses_a_held_or_closed_item() {
         refusal(retry(&done("B3"), Some("x"))).starts_with("B3 is done (abc1234); retry needs")
     );
 }
+
+#[test]
+fn supersede_relabels_every_earlier_decision() {
+    let body =
+        "Why.\n\n**Decision, 2026-09-14.** one\n\n**Decision, 2026-09-14, derived.** two. Basis: b";
+    let (out, n) = supersede_decisions(body);
+    assert_eq!(n, 2);
+    assert_eq!(
+        out,
+        "Why.\n\n**Superseded decision, 2026-09-14.** one\n\n**Superseded decision, 2026-09-14.** two. Basis: b"
+    );
+}
+
+#[test]
+fn supersede_leaves_other_text_alone() {
+    let body = "Mentions **Decision, x** inline.\n\n**Superseded decision, 2026-09-14.** old";
+    assert_eq!(supersede_decisions(body), (body.to_string(), 0));
+}
+
+#[test]
+fn repeat_answer_is_the_stored_decision() {
+    let mut row = open("Q1");
+    row.decision = Some("Go home".into());
+    assert!(is_repeat_answer(&row, " Go home\n", None));
+    assert!(!is_repeat_answer(&row, "Stay", None));
+    assert!(!is_repeat_answer(&row, "Go home", Some("a basis")));
+}

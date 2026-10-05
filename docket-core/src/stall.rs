@@ -52,6 +52,24 @@ pub fn runs_later(releases: &[String], held: Option<&str>, holder: Option<&str>)
     release_rank(releases, holder) > release_rank(releases, held)
 }
 
+/// The events that move an item forward. Edits, links, labels and release moves are bookkeeping and
+/// leave an item as idle as it was.
+const FORWARD: [&str; 11] = [
+    "opened", "claimed", "released", "waited", "resumed", "asked", "replied", "decided", "closed",
+    "dropped", "reopened",
+];
+
+/// When an item last moved forward: the latest of its `(kind, epoch seconds)` events that is one of
+/// the forward kinds; none when it has none.
+#[must_use]
+pub fn idle_since(events: &[(&str, i64)]) -> Option<i64> {
+    events
+        .iter()
+        .filter(|(kind, _)| FORWARD.contains(kind))
+        .map(|(_, at)| *at)
+        .max()
+}
+
 #[cfg(test)]
 #[path = "tests/stall.rs"]
 mod tests;

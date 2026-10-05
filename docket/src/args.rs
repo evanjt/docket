@@ -494,11 +494,40 @@ pub enum Cmd {
         #[command(subcommand)]
         what: PrivateCmd,
     },
+    /// the owner's one-off moves of the data: migrate prints what moving onto the core changes
+    Admin {
+        #[command(subcommand)]
+        what: AdminCmd,
+    },
     /// bind this directory to a project by hand
     Bind {
         slug: Option<String>,
         #[arg(long)]
         root: Option<String>,
+    },
+}
+
+/// `docket admin`: one-off moves of the data.
+#[derive(Subcommand, Debug)]
+pub enum AdminCmd {
+    /// what moving the project's rows onto the core changes: releases, dependencies, parents,
+    /// labels and assignments, with every risky case; refused without --dry-run while a case waits
+    /// on a decision
+    Migrate {
+        /// print every change and risky case and write nothing
+        #[arg(long)]
+        dry_run: bool,
+        /// every project in the server's dump, not only this one
+        #[arg(long)]
+        all: bool,
+        /// a plan held by work in a later release: the later work leaves it, the plan moves to the
+        /// latest release, or the later work moves into the plan's; undecided when not given
+        #[arg(long, value_parser = ["detach", "move-plan", "pull-children"])]
+        held: Option<String>,
+        /// an item whose theme is not a release: to the current release or the backlog, labelled
+        /// with the theme either way; undecided when not given
+        #[arg(long, value_parser = ["current", "backlog"])]
+        areas: Option<String>,
     },
 }
 

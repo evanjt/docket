@@ -62,46 +62,144 @@ pub fn shas(resolution: &str) -> Vec<String> {
         .collect()
 }
 
-/// `(off HEAD, nowhere)`: done work whose sha is in some ref but not HEAD, and done work naming no
-/// commit any of the project's repositories here has.
+/// Where a closing sha sits against the integration branch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShaState {
+    OnIntegration,
+    /// On branches other than the integration branch only.
+    Unmerged(Vec<String>),
+    /// A commit no branch holds, a tag or a dangling object.
+    NoBranch,
+    /// No repository here has the commit, or the resolution names none.
+    Gone,
+}
+
+impl ShaState {
+    fn rank(&self) -> u8 {
+        match self {
+            Self::OnIntegration => 3,
+            Self::Unmerged(_) => 2,
+            Self::NoBranch => 1,
+            Self::Gone => 0,
+        }
+    }
+}
+
+/// Where one sha sits in the first of the directories that has it. The integration ref is the
+/// measure, and HEAD only when the project stores none. A commit whose patch is already on the
+/// integration branch under another sha, as after a squash or cherry-pick, counts as on it.
 #[must_use]
-pub fn unreachable(
+pub fn sha_state(dirs: &[PathBuf], sha: &str, integration: Option<&str>) -> ShaState {
+    let target = integration.filter(|r| !r.is_empty()).unwrap_or("HEAD");
+    let mut best = ShaState::Gone;
+    for d in dirs {
+        let commit = format!("{sha}^{{commit}}");
+        let Some(full) = local::git(&["rev-parse", "--verify", "--quiet", &commit], d) else {
+            continue;
+        };
+        if local::git(&["merge-base", "--is-ancestor", &full, target], d).is_some() {
+            return ShaState::OnIntegration;
+        }
+        // A root commit has no parent, so it cannot be compared by patch.
+        let parent = format!("{full}^");
+        let picked = local::git(&["cherry", target, &full, &parent], d)
+            .is_some_and(|out| out.starts_with('-'));
+        if picked {
+            return ShaState::OnIntegration;
+        }
+        let listed = local::git(
+            &[
+                "branch",
+                "--all",
+                "--contains",
+                &full,
+                "--format=%(refname:short)",
+            ],
+            d,
+        )
+        .unwrap_or_default();
+        let branches: Vec<String> = listed
+            .lines()
+            .map(str::trim)
+            .filter(|b| !b.is_empty() && !b.ends_with("/HEAD") && !b.starts_with('('))
+            .map(str::to_string)
+            .collect();
+        let state = if branches.is_empty() {
+            ShaState::NoBranch
+        } else {
+            ShaState::Unmerged(branches)
+        };
+        if state.rank() > best.rank() {
+            best = state;
+        }
+    }
+    best
+}
+
+/// Each done work item with the best state any of its resolution's shas has. One naming no sha is
+/// gone.
+pub fn closed_states(
     done: &[Value],
-    head: &HashSet<String>,
-    known: &HashSet<String>,
-) -> (Vec<String>, Vec<String>) {
-    let found = |shas: &[String], pool: &HashSet<String>| {
-        shas.iter()
-            .any(|s| pool.iter().any(|full| full.starts_with(s.as_str())))
-    };
-    let (mut off_head, mut nowhere) = (Vec::new(), Vec::new());
+    mut state: impl FnMut(&str) -> ShaState,
+) -> Vec<(String, ShaState)> {
+    let mut out = Vec::new();
     for r in done {
         if r["state"] != "done" || r["kind"] != "work" {
             continue;
         }
-        let shas = shas(r["resolution"].as_str().unwrap_or_default());
-        if !shas.is_empty() && found(&shas, head) {
-            continue;
-        }
-        let id = r["id"].as_str().unwrap_or_default().to_string();
-        if !shas.is_empty() && found(&shas, known) {
-            off_head.push(id);
-        } else {
-            nowhere.push(id);
-        }
+        let best = shas(r["resolution"].as_str().unwrap_or_default())
+            .iter()
+            .map(|s| state(s))
+            .max_by_key(ShaState::rank)
+            .unwrap_or(ShaState::Gone);
+        out.push((r["id"].as_str().unwrap_or_default().to_string(), best));
     }
-    (off_head, nowhere)
+    out
 }
 
-/// Every commit on HEAD, and every commit in any ref, across the directories.
-fn commits(dirs: &[PathBuf]) -> (HashSet<String>, HashSet<String>) {
-    let (mut head, mut known) = (HashSet::new(), HashSet::new());
-    for d in dirs {
-        let list = |spec: &str| local::git(&["rev-list", spec], d).unwrap_or_default();
-        head.extend(list("HEAD").split_whitespace().map(str::to_string));
-        known.extend(list("--all").split_whitespace().map(str::to_string));
+static CLOSE_SUBJECT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^Close ([A-Za-z]+\d+)\b").unwrap());
+
+/// The other item a commit subject says it closes, when it names one that is not `id`.
+#[must_use]
+pub fn closes_another<'a>(id: &str, subject: &'a str) -> Option<&'a str> {
+    CLOSE_SUBJECT
+        .captures(subject)
+        .and_then(|m| m.get(1))
+        .map(|m| m.as_str())
+        .filter(|other| !other.eq_ignore_ascii_case(id))
+}
+
+/// `(item, other)` for each done item whose resolution names a commit whose subject closes `other`.
+/// `subject_of` gives a sha's commit subject, none for a sha no repository here resolves.
+#[must_use]
+pub fn misattributed(
+    done: &[Value],
+    subject_of: &dyn Fn(&str) -> Option<String>,
+) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for r in done {
+        if r["state"] != "done" {
+            continue;
+        }
+        let id = r["id"].as_str().unwrap_or_default();
+        let other = shas(r["resolution"].as_str().unwrap_or_default())
+            .iter()
+            .find_map(|s| {
+                subject_of(s).and_then(|subj| closes_another(id, &subj).map(str::to_string))
+            });
+        if let Some(other) = other {
+            out.push((id.to_string(), other));
+        }
     }
-    (head, known)
+    out
+}
+
+/// The subject of a commit in any of the directories.
+fn subject_in(dirs: &[PathBuf], sha: &str) -> Option<String> {
+    dirs.iter()
+        .find_map(|d| local::git(&["log", "-1", "--format=%s", sha], d))
+        .filter(|s| !s.is_empty())
 }
 
 /// The project's repositories on this machine: its roots, shortest first, with its repos under each.
@@ -149,8 +247,19 @@ pub fn audit(ctx: &mut Ctx, t: &Target) -> Result<i32> {
         .iter()
         .map(|r| (*r).clone())
         .collect();
-    let (head, known) = commits(&repo_dirs(ctx, &slug, &project));
-    let (off_head, nowhere) = unreachable(&done, &head, &known);
+    let dirs = repo_dirs(ctx, &slug, &project);
+    let integration = project["integration_ref"].as_str();
+    let states = closed_states(&done, |s| sha_state(&dirs, s, integration));
+    let ids = |keep: fn(&ShaState) -> bool| -> Vec<String> {
+        states
+            .iter()
+            .filter(|(_, st)| keep(st))
+            .map(|(i, _)| i.clone())
+            .collect()
+    };
+    let off_head = ids(|st| matches!(st, ShaState::Unmerged(_)));
+    let nowhere = ids(|st| matches!(st, ShaState::NoBranch | ShaState::Gone));
+    let wrong_close = misattributed(&done, &|sha| subject_in(&dirs, sha));
     let breakdown = breakdown_lines(&a["breakdown"]);
     let report = Report {
         a: &a,
@@ -158,6 +267,7 @@ pub fn audit(ctx: &mut Ctx, t: &Target) -> Result<i32> {
         sections: &sections,
         off_head: &off_head,
         nowhere: &nowhere,
+        wrong_close: &wrong_close,
         breakdown: &breakdown,
     };
     if ctx.json {
@@ -240,6 +350,7 @@ struct Report<'a> {
     sections: &'a [(&'a str, Vec<&'a Value>)],
     off_head: &'a [String],
     nowhere: &'a [String],
+    wrong_close: &'a [(String, String)],
     breakdown: &'a [String],
 }
 
@@ -328,6 +439,15 @@ impl Report<'_> {
             ),
             ("closed_off_head".into(), Py::strs(self.off_head)),
             ("closed_on_no_commit".into(), Py::strs(self.nowhere)),
+            (
+                "closed_on_another_items_close".into(),
+                Py::List(
+                    self.wrong_close
+                        .iter()
+                        .map(|(id, other)| Py::str(format!("{id} closes {other}")))
+                        .collect(),
+                ),
+            ),
             ("principles".into(), Py::Dict(principles)),
             ("bound".into(), Py::Dict(bound)),
             ("breakdown".into(), Py::strs(self.breakdown)),
@@ -367,10 +487,10 @@ impl Report<'_> {
             }
         }
         for (ids, what) in [
-            (self.nowhere, "closed naming no commit any repo has"),
+            (self.nowhere, "closed naming no commit on any branch"),
             (
                 self.off_head,
-                "closed on a commit not on HEAD (unmerged, or rewritten by a squash)",
+                "closed on a commit only an unmerged branch has",
             ),
         ] {
             if !ids.is_empty() {
@@ -381,6 +501,18 @@ impl Report<'_> {
                     ids[..ids.len().min(25)].join(" ")
                 );
             }
+        }
+        if !self.wrong_close.is_empty() {
+            let list: Vec<String> = self
+                .wrong_close
+                .iter()
+                .map(|(id, other)| format!("{id} (commit closes {other})"))
+                .collect();
+            println!(
+                "  {} closed on a commit whose subject closes another item: {}",
+                list.len(),
+                list.join(" ")
+            );
         }
         self.print_principles(target["id"].as_str().unwrap_or_default());
         self.print_bound();
@@ -468,8 +600,35 @@ const VENDOR_DIRS: [&str; 3] = ["node_modules", "vendor", ".cargo"];
 static CRATE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[A-Za-z0-9_.-]+-\d+\.\d+\.\d+").unwrap());
 
-/// Every file under a directory, not following links, skipping the pruned names.
+/// The files a repository tracks, or none when git cannot list them.
+fn tracked(repo: &Path) -> Vec<String> {
+    let listed = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["ls-files", "-z"])
+        .output();
+    let Ok(listed) = listed else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&listed.stdout)
+        .split('\0')
+        .filter(|f| !f.is_empty())
+        .map(|f| repo.join(f).to_string_lossy().into_owned())
+        .collect()
+}
+
+/// Every file under a directory, not following links, skipping the pruned names. A repository
+/// contributes only what it tracks, and a linked worktree is skipped, so untracked copies and
+/// stale checkouts of a deleted file do not resolve a citation to it.
 fn walk(top: &Path, prune: &dyn Fn(&str) -> bool, out: &mut Vec<String>) {
+    let marker = top.join(".git");
+    if marker.is_file() {
+        return;
+    }
+    if marker.is_dir() {
+        out.extend(tracked(top));
+        return;
+    }
     let Ok(entries) = std::fs::read_dir(top) else {
         return;
     };
@@ -520,25 +679,110 @@ impl Index {
         })
     }
 
-    /// Whether a citation names a file under a root: as a path, by its ending, or in a dependency.
-    fn resolves(&mut self, roots: &[String], path: &str) -> bool {
+    /// The files a citation names under the roots, as a path or by its ending, and whether a
+    /// dependency tree holds it when none does.
+    fn find(&mut self, roots: &[String], path: &str) -> (Vec<String>, bool) {
         let bare = path.trim_start_matches(['.', '/']);
         let suffix = format!("/{bare}");
-        if roots.iter().any(|s| Path::new(s).join(path).exists()) {
-            return true;
-        }
-        if roots
+        let mut found: Vec<String> = roots
             .iter()
-            .any(|s| self.own(s).iter().any(|f| f.ends_with(&suffix)))
-        {
-            return true;
+            .map(|s| Path::new(s).join(path))
+            .filter(|p| p.exists())
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        for s in roots {
+            found.extend(self.own(s).iter().filter(|f| f.ends_with(&suffix)).cloned());
+        }
+        if !found.is_empty() {
+            return (found, false);
         }
         let first = bare.split('/').next().unwrap_or_default();
-        CRATE.is_match(first)
+        let held = CRATE.is_match(first)
             || roots
                 .iter()
-                .any(|s| self.vendored(s).iter().any(|f| f.ends_with(&suffix)))
+                .any(|s| self.vendored(s).iter().any(|f| f.ends_with(&suffix)));
+        (found, held)
     }
+}
+
+/// How a citation stands against the files it resolves to.
+#[derive(Debug, PartialEq, Eq)]
+enum Verdict {
+    Resolves,
+    Missing,
+    /// The cited line is past the end of the longest matching file, which has this many lines.
+    PastEnd(usize),
+    /// A cited test that resolves only under a `benches` directory, which `cargo test` does not run.
+    Benches,
+}
+
+/// Judge one citation from its link kind, its line, the files it resolved to with their line
+/// counts, and whether a dependency tree held it when no file did.
+fn judge(kind: &str, line: Option<u64>, found: &[(String, usize)], held: bool) -> Verdict {
+    if found.is_empty() {
+        return if held {
+            Verdict::Resolves
+        } else {
+            Verdict::Missing
+        };
+    }
+    let in_benches = |p: &str| {
+        Path::new(p)
+            .components()
+            .any(|c| c.as_os_str() == "benches")
+    };
+    let candidates: Vec<&(String, usize)> = if kind == "cites_test" {
+        found.iter().filter(|(p, _)| !in_benches(p)).collect()
+    } else {
+        found.iter().collect()
+    };
+    if candidates.is_empty() {
+        return Verdict::Benches;
+    }
+    let longest = candidates.iter().map(|(_, n)| *n).max().unwrap_or(0);
+    match line {
+        Some(n) if n > longest as u64 => Verdict::PastEnd(longest),
+        _ => Verdict::Resolves,
+    }
+}
+
+/// The number of lines in a file, 0 when it cannot be read as text.
+fn line_count(path: &str) -> usize {
+    std::fs::read_to_string(path).map_or(0, |t| t.lines().count())
+}
+
+static BRANCH_TOKEN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"audit/[^\s`'",;)\]]+"#).unwrap());
+static BRANCH_NAME: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^audit/[A-Za-z]+[0-9]+-[0-9]+$").unwrap());
+
+/// The `audit/<key><number>-<n>` branches a body names, once each. A wildcard, a placeholder or a
+/// script name is not a branch.
+#[must_use]
+pub fn cited_branches(body: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for m in BRANCH_TOKEN.find_iter(body) {
+        let name = m.as_str().trim_end_matches('.');
+        if BRANCH_NAME.is_match(name) && !out.iter().any(|o| o == name) {
+            out.push(name.to_string());
+        }
+    }
+    out
+}
+
+/// The `(item, branch)` pairs whose branch no directory has as a local branch.
+#[must_use]
+pub fn gone_branches(cited: &[(String, String)], dirs: &[PathBuf]) -> Vec<(String, String)> {
+    cited
+        .iter()
+        .filter(|(_, b)| {
+            let r = format!("refs/heads/{b}");
+            !dirs
+                .iter()
+                .any(|d| local::git(&["rev-parse", "--verify", "-q", &r], d).is_some())
+        })
+        .cloned()
+        .collect()
 }
 
 /// # Errors
@@ -572,46 +816,214 @@ pub fn stale(ctx: &mut Ctx, open_only: bool) -> Result<i32> {
         &[("open_only", open_only.then(|| "true".into()))],
     )?;
     let mut index = Index::default();
-    let mut cache: HashMap<String, bool> = HashMap::new();
-    let mut missing: Vec<(String, String)> = Vec::new();
+    let mut cache: HashMap<String, (Vec<String>, bool)> = HashMap::new();
+    let mut lines: HashMap<String, usize> = HashMap::new();
+    let mut found_none: Vec<Finding> = Vec::new();
     for c in cited.as_array().into_iter().flatten() {
         let path = c["path"].as_str().unwrap_or_default().to_string();
-        let ok = *cache
+        let kind = c["kind"].as_str().unwrap_or("cites_file");
+        let line = c["line"].as_u64();
+        let (files, held) = cache
             .entry(path.clone())
-            .or_insert_with(|| index.resolves(&search, &path));
-        if !ok {
-            missing.push((c["id"].as_str().unwrap_or_default().to_string(), path));
+            .or_insert_with(|| index.find(&search, &path))
+            .clone();
+        let sized: Vec<(String, usize)> = files
+            .into_iter()
+            .map(|f| {
+                let n = if line.is_some() {
+                    *lines.entry(f.clone()).or_insert_with(|| line_count(&f))
+                } else {
+                    0
+                };
+                (f, n)
+            })
+            .collect();
+        let reason = match judge(kind, line, &sized, held) {
+            Verdict::Resolves => continue,
+            Verdict::Missing => Reason::Missing,
+            Verdict::PastEnd(n) => Reason::PastEnd(line.unwrap_or(0), n),
+            Verdict::Benches => Reason::Benches,
+        };
+        found_none.push(Finding {
+            id: c["id"].as_str().unwrap_or_default().to_string(),
+            path,
+            reason,
+        });
+    }
+    let bodies = ctx.read("/open_bodies", &[])?;
+    let mut branches: Vec<(String, String)> = Vec::new();
+    for b in bodies.as_array().into_iter().flatten() {
+        let id = b["id"].as_str().unwrap_or_default();
+        for name in cited_branches(b["body"].as_str().unwrap_or_default()) {
+            branches.push((id.to_string(), name));
         }
     }
-    print_stale(ctx, &missing, search.len());
+    let gone = gone_branches(&branches, &repo_dirs(ctx, &slug, &project));
+    let closed = closed_off_integration(ctx, &slug, &project)?;
+    print_stale(ctx, &found_none, &gone, search.len());
+    print_closed(ctx, &closed);
     Ok(0)
 }
 
-fn print_stale(ctx: &Ctx, missing: &[(String, String)], roots: usize) {
+/// The done work items whose closing sha is not on the integration branch, with where it is.
+fn closed_off_integration(
+    ctx: &Ctx,
+    slug: &str,
+    project: &Value,
+) -> Result<Vec<(String, ShaState)>> {
+    let dirs = repo_dirs(ctx, slug, project);
+    if dirs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let filter = serde_json::json!({ "project": slug, "state": "done" }).to_string();
+    let rows = ctx.api.get(
+        "/items",
+        &[("filter", filter), ("range", "[0,99999]".to_string())],
+    )?;
+    let other: Vec<String> = project["keys"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|k| k["kind"] != "work")
+        .filter_map(|k| k["key"].as_str().map(str::to_string))
+        .collect();
+    let done: Vec<Value> = rows
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|r| {
+            let mut r = r.clone();
+            let key = r["key"].as_str().unwrap_or_default();
+            r["kind"] = Value::from(if other.iter().any(|k| k == key) {
+                "other"
+            } else {
+                "work"
+            });
+            r
+        })
+        .collect();
+    let integration = project["integration_ref"].as_str();
+    let mut cache: HashMap<String, ShaState> = HashMap::new();
+    let mut states = closed_states(&done, |s| {
+        cache
+            .entry(s.to_string())
+            .or_insert_with(|| sha_state(&dirs, s, integration))
+            .clone()
+    });
+    states.retain(|(_, st)| *st != ShaState::OnIntegration);
+    Ok(states)
+}
+
+fn print_closed(ctx: &Ctx, closed: &[(String, ShaState)]) {
     if ctx.json {
-        let rows = missing
+        return;
+    }
+    for (i, st) in closed {
+        let what = match st {
+            ShaState::OnIntegration => continue,
+            ShaState::Unmerged(b) => format!("only on unmerged {}", b.join(", ")),
+            ShaState::NoBranch => "on no branch".to_string(),
+            ShaState::Gone => "gone, or names no commit".to_string(),
+        };
+        println!("{i} closed {what}");
+    }
+}
+
+/// Why a citation is reported.
+enum Reason {
+    Missing,
+    /// The cited line, and the length of the longest matching file.
+    PastEnd(u64, usize),
+    Benches,
+}
+
+struct Finding {
+    id: String,
+    path: String,
+    reason: Reason,
+}
+
+/// Whether a finding belongs in a section of the report.
+type Pick = fn(&Reason) -> bool;
+
+fn print_stale(ctx: &Ctx, found: &[Finding], gone: &[(String, String)], roots: usize) {
+    if ctx.json {
+        let rows = found
             .iter()
-            .map(|(i, p)| Py::Dict(vec![("id".into(), Py::str(i)), ("path".into(), Py::str(p))]))
+            .map(|f| {
+                let reason = match f.reason {
+                    Reason::Missing => "missing",
+                    Reason::PastEnd(..) => "past_end",
+                    Reason::Benches => "benches",
+                };
+                Py::Dict(vec![
+                    ("id".into(), Py::str(&f.id)),
+                    ("path".into(), Py::str(&f.path)),
+                    ("reason".into(), Py::str(reason)),
+                ])
+            })
+            .chain(gone.iter().map(|(i, b)| {
+                Py::Dict(vec![
+                    ("id".into(), Py::str(i)),
+                    ("branch".into(), Py::str(b)),
+                ])
+            }))
             .collect();
         ctx.emit(&Py::List(rows));
         return;
     }
-    if missing.is_empty() {
+    if found.is_empty() && gone.is_empty() {
         println!("Every citation resolves.");
         return;
     }
-    let mut last: Option<&str> = None;
-    for (i, p) in missing {
-        if last != Some(i.as_str()) {
-            println!("{i}");
-            last = Some(i);
-        }
-        println!("  {p}");
+    if found.is_empty() {
+        println!("Every cited path resolves.");
+    } else {
+        print_findings(found, roots);
     }
-    let items: HashSet<&str> = missing.iter().map(|(i, _)| i.as_str()).collect();
+    if !gone.is_empty() {
+        println!("\nBranches an open item names that no repository here has:");
+        for (i, b) in gone {
+            println!("  {i}  {b}");
+        }
+        println!("A gone branch is not proof of lost work: it may be merged and deleted.");
+    }
+}
+
+fn print_findings(found: &[Finding], roots: usize) {
+    let sections: [(&str, Pick); 3] = [
+        ("Do not resolve:", |r| matches!(r, Reason::Missing)),
+        ("Cite a line past the end of the file:", |r| {
+            matches!(r, Reason::PastEnd(..))
+        }),
+        (
+            "Cite a test that resolves only under benches/, which cargo test does not run:",
+            |r| matches!(r, Reason::Benches),
+        ),
+    ];
+    for (title, pick) in sections {
+        let rows: Vec<&Finding> = found.iter().filter(|f| pick(&f.reason)).collect();
+        if rows.is_empty() {
+            continue;
+        }
+        println!("{title}");
+        let mut last: Option<&str> = None;
+        for f in rows {
+            if last != Some(f.id.as_str()) {
+                println!("{}", f.id);
+                last = Some(&f.id);
+            }
+            match f.reason {
+                Reason::PastEnd(at, n) => println!("  {}:{at} (the file has {n} lines)", f.path),
+                _ => println!("  {}", f.path),
+            }
+        }
+        println!();
+    }
+    let items: HashSet<&str> = found.iter().map(|f| f.id.as_str()).collect();
     println!(
-        "\n{} citations in {} items do not resolve under {roots} roots.",
-        missing.len(),
+        "{} citations in {} items do not resolve under {roots} roots.",
+        found.len(),
         items.len()
     );
 }

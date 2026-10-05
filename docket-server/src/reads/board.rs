@@ -188,13 +188,19 @@ pub async fn problems<C: ConnectionTrait>(db: &C, slug: &str) -> Result<Vec<Valu
     out.extend(stalls(db, slug).await?);
     out.extend(audits_held(db, slug).await?);
     let cutoff = stamp(now_secs().saturating_sub(30 * 86_400));
-    let stale = rows(
+    let waiting = rows(
         db,
         "SELECT * FROM items WHERE project=? AND state='open' AND wait_on='condition' AND wait_since < ? \
          AND wait_ref<>? ORDER BY rid",
         vec![slug.into(), cutoff.clone().into(), GATE.into()],
     )
     .await?;
+    let last = last_forward(db, slug).await?;
+    let limit = i64::try_from(now_secs().saturating_sub(30 * 86_400)).unwrap_or(0);
+    let stale: Vec<_> = waiting
+        .into_iter()
+        .filter(|r| last.get(&r.rid).is_none_or(|t| *t < limit))
+        .collect();
     out.extend(stale.into_iter().map(|r| {
         problem(
             "stale_wait",
@@ -566,9 +572,36 @@ pub async fn shares(
 struct Stamp {
     rid: i64,
     at: String,
+    kind: String,
 }
 
-/// `{rid: flag}` for the claims with no event for longer than the project's `stale_claim` minutes.
+/// `{rid: epoch}` of the last event that moved each item forward.
+async fn last_forward<C: ConnectionTrait>(
+    db: &C,
+    slug: &str,
+) -> Result<HashMap<i64, i64>, Failure> {
+    let stamps = Stamp::find_by_statement(sql(
+        "SELECT rid, at, kind FROM events WHERE project=? AND rid IS NOT NULL",
+        vec![slug.into()],
+    ))
+    .all(db)
+    .await?;
+    let mut by_item: HashMap<i64, Vec<(String, i64)>> = HashMap::new();
+    for e in stamps {
+        if let Some(t) = epoch(&e.at) {
+            by_item.entry(e.rid).or_default().push((e.kind, t));
+        }
+    }
+    Ok(by_item
+        .into_iter()
+        .filter_map(|(rid, events)| {
+            let events: Vec<(&str, i64)> = events.iter().map(|(k, t)| (k.as_str(), *t)).collect();
+            docket_core::stall::idle_since(&events).map(|t| (rid, t))
+        })
+        .collect())
+}
+
+/// `{rid: flag}` for the claims with no forward event for longer than the project's `stale_claim` minutes.
 async fn idle_flags<C: ConnectionTrait>(
     db: &C,
     slug: &str,
@@ -576,19 +609,7 @@ async fn idle_flags<C: ConnectionTrait>(
     claimed: &[crate::entities::item::Model],
 ) -> Result<HashMap<i64, String>, Failure> {
     let limit = fact_int(db, model, "stale_claim", 120).await?;
-    let mut last: HashMap<i64, i64> = HashMap::new();
-    let stamps = Stamp::find_by_statement(sql(
-        "SELECT rid, at FROM events WHERE project=? AND rid IS NOT NULL",
-        vec![slug.into()],
-    ))
-    .all(db)
-    .await?;
-    for e in stamps {
-        if let Some(t) = epoch(&e.at) {
-            let best = last.entry(e.rid).or_insert(t);
-            *best = (*best).max(t);
-        }
-    }
+    let last = last_forward(db, slug).await?;
     let now = i64::try_from(now_secs()).unwrap_or(0);
     let mut out = HashMap::new();
     for r in claimed {

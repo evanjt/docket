@@ -173,10 +173,15 @@ fn test_next_filters_by_theme_and_under() {
         },
     ];
     let themed = Filter {
-        theme: Some("roadmap"),
+        theme: Some("roadmap-2"),
         ..Filter::default()
     };
     assert_eq!(ids(next(&items, &[], &themed, 10)), vec![1]);
+    let prefix = Filter {
+        theme: Some("roadmap"),
+        ..Filter::default()
+    };
+    assert!(next(&items, &[], &prefix, 10).is_empty());
     let under: HashSet<i64> = [3].into_iter().collect();
     let below = Filter {
         under: Some(&under),

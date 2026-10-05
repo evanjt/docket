@@ -561,3 +561,65 @@ fn test_the_default_model_passes_no_model_flag() {
         assert!(!without.contains(&DEFAULT_MODEL.to_string()), "{without:?}");
     }
 }
+
+fn lead_model() -> docket_core::fact::Model {
+    docket_core::fact::Model {
+        runner: "claude".into(),
+        model: "m1".into(),
+        effort: Some("medium".into()),
+    }
+}
+
+#[test]
+fn test_start_lead_runs_in_the_checkout_and_is_listed() {
+    let m = Machine::new();
+    let program = m.runner(r#"printf '%s\n' "$PWD" > ran"#);
+    let mut started = start_lead(
+        "o/sample",
+        &m.checkout(),
+        &m.state(),
+        &lead_model(),
+        &[],
+        &program,
+    )
+    .unwrap();
+    assert!(started.child.wait().unwrap().success());
+    let ran = fs::read_to_string(m.checkout().join("ran")).unwrap();
+    assert_eq!(
+        ran.trim(),
+        fs::canonicalize(m.checkout())
+            .unwrap()
+            .display()
+            .to_string()
+    );
+    let rows = rows(&m.state(), now());
+    let [(r, _)] = rows.as_slice() else {
+        panic!("{rows:?}")
+    };
+    assert_eq!((r.role.as_str(), r.project.as_str()), ("lead", "o/sample"));
+    assert_eq!(r.branch, "main");
+    assert_eq!(r.worktree, m.checkout().display().to_string());
+    let brief = fs::read_to_string(started.dir.join("brief.md")).unwrap();
+    assert!(brief.contains("lead skill"), "{brief}");
+}
+
+#[test]
+fn test_removing_a_lead_job_leaves_the_checkout_and_its_branch() {
+    let m = Machine::new();
+    let program = m.runner("true");
+    let mut started = start_lead(
+        "o/sample",
+        &m.checkout(),
+        &m.state(),
+        &lead_model(),
+        &[],
+        &program,
+    )
+    .unwrap();
+    started.child.wait().unwrap();
+    remove(&started.dir, false).unwrap();
+    assert!(!started.dir.exists());
+    assert!(m.checkout().join(".git").exists());
+    let branch = git(&m.checkout(), &["branch", "--show-current"]).unwrap();
+    assert_eq!(branch, "main");
+}

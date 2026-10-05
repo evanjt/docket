@@ -1,13 +1,12 @@
 <script lang="ts">
   import { project } from '../lib/context';
-  import { LEVELS, PRIORITIES } from '../lib/flow';
   import { releaseOf } from '../lib/releases';
   import { panel } from '../lib/here.svelte';
-  import { act, session } from '../lib/session.svelte';
-  import type { Kind, Shown } from '../lib/types';
-  import { WORDING, editRequest, verbs, type Opened, type Verb } from '../lib/verbs';
+  import { act } from '../lib/session.svelte';
+  import type { Kind, Offers, Shown } from '../lib/types';
+  import { WORDING, editRequest, filled, verbs, type Opened, type Verb } from '../lib/verbs';
 
-  let { item, kind, slug }: { item: Shown; kind: Kind; slug: string } = $props();
+  let { item, kind, offers, slug }: { item: Shown; kind: Kind; offers: Offers | undefined; slug: string } = $props();
 
   type Form = Verb | 'note' | 'edit' | 'link';
   let form = $state<Form | null>(null);
@@ -17,12 +16,13 @@
   let choice = $state('');
   let busy = $state(false);
 
-  const offered = $derived(verbs(item, kind, session.me?.owner ?? false));
+  const offered = $derived(verbs(offers));
+  const offerOf = (f: Form) => offered.find((o) => o.verb === f);
 
   $effect(() => {
     panel.id = item.id;
     panel.offers = [
-      ...offered.map((v) => ({ form: v, label: WORDING[v].label })),
+      ...offered.map((o) => ({ form: o.verb, label: WORDING[o.verb as Verb].label })),
       { form: 'note', label: 'Add note' },
       { form: 'edit', label: 'Edit' },
       { form: 'link', label: 'Link' },
@@ -60,7 +60,7 @@
   /** The request a form makes: its verb, its body and the toast once it lands. */
   function request(f: Form): [string, object, string] | null {
     const id = item.id;
-    const held = item.claim_branch;
+    const held = offerOf(f)?.branch;
     switch (f) {
       case 'answer': return ['answer', { ...common(), id, decision: text.trim() }, 'Answered'];
       case 'reply': return ['reply', { ...common(), id, note: text.trim() }, 'Replied'];
@@ -68,13 +68,14 @@
       case 'close': return ['close', { ...common(held), id, resolution: given(text) }, 'Closed'];
       case 'release': return ['release', { ...common(held), id, note: given(text) }, 'Released'];
       case 'resume': return ['resume', { ...common(), id, note: given(text) }, 'Resumed'];
-      case 'ask': return ['ask', { ...common(), id, note: text.trim() }, 'Parked for you'];
+      case 'retry': return ['retry', { ...common(), id, note: text.trim() }, 'Retried'];
+      case 'ask': return ['ask', { ...common(held), id, note: text.trim() }, 'Parked for you'];
       case 'wait':
         return choice === 'on'
-          ? ['wait', { ...common(), id, on: text.trim().toUpperCase() }, `Waiting on ${text.trim().toUpperCase()}`]
-          : ['wait', { ...common(), id, until: text.trim() }, 'Waiting'];
+          ? ['wait', { ...common(held), id, on: text.trim().toUpperCase() }, `Waiting on ${text.trim().toUpperCase()}`]
+          : ['wait', { ...common(held), id, until: text.trim() }, 'Waiting'];
       case 'reopen': return ['reopen', { ...common(), id, why: text.trim() }, 'Reopened'];
-      case 'drop': return ['drop', { ...common(), id, why: given(text), superseded_by: given(extra)?.toUpperCase() ?? null }, 'Dropped'];
+      case 'drop': return ['drop', { ...common(held), id, why: text.trim(), superseded_by: given(extra)?.toUpperCase() ?? null }, 'Dropped'];
       case 'note': return ['edit', { ...common(), id, append: text.trim() }, 'Note added'];
       case 'edit': {
         const req = editRequest(opened, text, extra, id, common());
@@ -87,8 +88,8 @@
   /** Whether the form holds what its verb cannot go without. */
   const ready = $derived.by(() => {
     if (!form) return false;
-    const needs: Form[] = ['answer', 'reply', 'ask', 'wait', 'reopen', 'note', 'link'];
-    return !needs.includes(form) || text.trim().length > 0;
+    if (form === 'note' || form === 'link') return text.trim().length > 0;
+    return filled(offerOf(form), text);
   });
 
   async function submit(e: SubmitEvent) {
@@ -128,12 +129,13 @@
     reply: { label: 'Reply', field: 'area', placeholder: 'What happened, for the agent that picks it up' },
     start: { label: 'Branch', field: 'line', placeholder: '' },
     close: { label: 'Resolution', field: 'line', placeholder: 'The sha the work landed as, or what closed it' },
+    retry: { label: 'Note', field: 'line', placeholder: 'What changed, for the agent that picks it up' },
     release: { label: 'Note', field: 'line', placeholder: 'Why it goes back (optional)' },
     resume: { label: 'Note', field: 'line', placeholder: 'What changed (optional)' },
     ask: { label: 'What only you can do', field: 'area', placeholder: 'The question or the step, written in full' },
     wait: { label: '', field: 'line', placeholder: '' },
     reopen: { label: 'Why', field: 'line', placeholder: 'What is still wrong' },
-    drop: { label: 'Why', field: 'line', placeholder: 'Why it is no longer wanted (optional)' },
+    drop: { label: 'Why', field: 'line', placeholder: 'Why it is no longer wanted' },
     note: { label: 'Note', field: 'area', placeholder: 'Appended to the body under today’s date' },
     edit: { label: 'Title', field: 'line', placeholder: '' },
     link: { label: '', field: 'line', placeholder: 'An id, like A3' },
@@ -142,7 +144,8 @@
 
 <div class="actions">
   <div class="row">
-    {#each offered as v, i (v)}
+    {#each offered as o, i (o.verb)}
+      {@const v = o.verb as Verb}
       <button
         class="btn small"
         class:primary={i === 0 && v !== 'drop'}
@@ -160,14 +163,14 @@
     <label class="pick">
       <span class="faint">Priority</span>
       <select value={item.priority} onchange={(e) => setPriority(e.currentTarget.value)}>
-        {#each PRIORITIES as p (p)}<option value={p}>{p}</option>{/each}
+        {#each offers?.priorities ?? [item.priority] as p (p)}<option value={p}>{p}</option>{/each}
       </select>
     </label>
     <label class="pick">
       <span class="faint">Effort</span>
       <select value={item.complexity ?? ''} onchange={(e) => setLevel(e.currentTarget.value)}>
         {#if !item.complexity}<option value="" disabled>unrated</option>{/if}
-        {#each LEVELS as l (l)}<option value={l}>{l}</option>{/each}
+        {#each offers?.levels ?? [] as l (l)}<option value={l}>{l}</option>{/each}
       </select>
     </label>
     {#if ctx.releases.length && kind === 'work' && item.state === 'open'}

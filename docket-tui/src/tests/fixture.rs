@@ -3,6 +3,7 @@
 
 use std::sync::Mutex;
 
+use docket_core::api::LeadState;
 use docket_core::flow::tally;
 use docket_core::member::Tie;
 use docket_core::rows::{
@@ -130,6 +131,8 @@ pub struct Fixture {
     pub refuse: Mutex<Option<String>>,
     /// The facts of o/p, which a `fact` write changes.
     pub facts: Mutex<Vec<(String, String)>>,
+    /// The lead claim of every project, when one is held.
+    pub lead: Mutex<Option<docket_core::lead::Lead>>,
 }
 
 impl Default for Fixture {
@@ -140,6 +143,7 @@ impl Default for Fixture {
             posts: Mutex::new(Vec::new()),
             refuse: Mutex::new(None),
             facts: Mutex::new(Vec::new()),
+            lead: Mutex::new(None),
         }
     }
 }
@@ -197,6 +201,14 @@ impl Fixture {
 }
 
 impl Source for Fixture {
+    fn lead(&self, slug: &str) -> Result<LeadState> {
+        Ok(LeadState {
+            project: slug.into(),
+            lead: self.lead.lock().unwrap().clone(),
+            ..LeadState::default()
+        })
+    }
+
     fn post(&self, verb: &str, body: &Value) -> Result<Value> {
         self.posts
             .lock()
@@ -218,7 +230,7 @@ impl Source for Fixture {
     }
 
     fn projects(&self) -> Result<Vec<ProjectRow>> {
-        let run = [("mode", "run"), ("models", "medium=claude:m")];
+        let run = [("mode", "run"), ("models", "medium=claude:m lead=claude:m")];
         let facts = self.facts.lock().unwrap().clone();
         let facts: Vec<(&str, &str)> = facts
             .iter()

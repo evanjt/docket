@@ -106,6 +106,27 @@ async fn test_show_derives_word_from_kind_and_open_members() {
 }
 
 #[tokio::test]
+async fn test_offers_name_the_verbs_the_rules_accept_and_the_tiers() {
+    let (status, body) = get("/offers/T1?project=o/p").await;
+    assert_eq!(status, StatusCode::OK);
+    let verbs: Vec<&str> = body["verbs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["verb"].as_str().unwrap())
+        .collect();
+    assert_eq!(verbs, ["start", "close", "ask", "wait", "drop"]);
+    assert_eq!(
+        body["priorities"],
+        serde_json::json!(["critical", "high", "normal", "low"])
+    );
+    assert_eq!(body["levels"], serde_json::json!(["high", "medium", "low"]));
+    let (_, closed) = get("/offers/T2?project=o/p").await;
+    assert_eq!(closed["verbs"][0]["verb"], "reopen");
+    assert_eq!(get("/offers/T9?project=o/p").await.0, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn test_show_unknown_item_or_project_is_404() {
     assert_eq!(get("/show/T9?project=o/p").await.0, StatusCode::NOT_FOUND);
     assert_eq!(

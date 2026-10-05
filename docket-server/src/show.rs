@@ -5,10 +5,13 @@ use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, Order, QueryFilter, 
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use docket_core::word::Kind;
+use docket_core::offers::offers as rules_offers;
+use docket_core::rules::COMPLEXITIES;
+use docket_core::word::{Kind, PRIORITIES};
 
 use crate::entities::{item, link};
 use crate::reads::public::{Failure, Kinds, id_of, internal, item_of, project_of, public};
+use crate::store::to_item;
 
 #[derive(Deserialize)]
 pub struct InProject {
@@ -92,4 +95,26 @@ pub async fn show(
         );
     }
     Ok(Json(Value::Object(out)))
+}
+
+/// What an item takes now: the verbs the rules accept on it, each with the fields it is refused without and
+/// the branch it is sent with, and the priority tiers and complexity levels the verbs that set them accept.
+///
+/// # Errors
+/// 404 when the project or the item is unknown.
+pub async fn offers(
+    State(db): State<DatabaseConnection>,
+    Path(id): Path<String>,
+    Query(q): Query<InProject>,
+) -> Result<Json<Value>, Failure> {
+    let project = project_of(&db, &q.project).await?;
+    let row = item_of(&db, &q.project, &id).await?;
+    let kind = Kinds::of(&project).kind(&row.key);
+    let id = row.id.clone();
+    Ok(Json(json!({
+        "id": id,
+        "verbs": rules_offers(&to_item(row), kind),
+        "priorities": PRIORITIES,
+        "levels": COMPLEXITIES,
+    })))
 }

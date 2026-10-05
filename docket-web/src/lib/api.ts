@@ -1,4 +1,5 @@
 import type {
+  Offers,
   Context, Count, Derived, EventRow, Facts, Graph, LeadState, Machine, ProjectRow, Row, Shown, Status, Whoami,
 } from './types';
 
@@ -121,10 +122,11 @@ export const api = {
   counts: () => get<Count[]>('/counts'),
   status: (p: string) => get<Status>('/status', of(p)),
   next: (p: string, n = 100, filter: Params = {}) => get<Row[]>('/next', { project: p, n, ...filter }),
-  list: (route: string, p: string, n?: number) => get<Row[]>(`/${route}`, { project: p, n }),
-  derived: (p: string, n?: number) => get<Derived[]>('/derived', { project: p, n }),
+  list: (route: string, p: string, n?: number, filter: Params = {}) => get<Row[]>(`/${route}`, { project: p, n, ...filter }),
+  derived: (p: string, n?: number, filter: Params = {}) => get<Derived[]>('/derived', { project: p, n, ...filter }),
   search: (p: string, q: string, n = 200, filter: Params = {}) => get<Row[]>('/search', { project: p, q, n, state: 'any', ...filter }),
   show: (p: string, id: string) => get<Shown>(`/show/${encodeURIComponent(id)}`, of(p)),
+  offers: (p: string, id: string) => get<Offers>(`/offers/${encodeURIComponent(id)}`, of(p)),
   log: (p: string, id: string) => get<EventRow[]>(`/log/${encodeURIComponent(id)}`, of(p)),
   context: (p: string, id: string) => get<Context>(`/context/${encodeURIComponent(id)}`, of(p)),
   graph: (p: string) => get<Graph>('/graph', of(p)),

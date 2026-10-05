@@ -143,6 +143,52 @@ pub async fn audits_over<C: ConnectionTrait>(
     Ok(out)
 }
 
+/// The refusal for a waiter held by the plan it waits on: that plan cannot close while the waiter is
+/// open, so the wait would never end. None when target is not an open plan over the waiter.
+pub async fn wait_cycle<C: ConnectionTrait>(
+    c: &C,
+    p: &ProjectRow,
+    waiter: &Item,
+    target: &Item,
+) -> Result<Option<Failure>, DbErr> {
+    if target.rid == waiter.rid || target.state != "open" {
+        return Ok(None);
+    }
+    let held = audits_over(c, p, &[waiter.rid])
+        .await?
+        .iter()
+        .any(|a| a.rid == target.rid);
+    Ok(held.then(|| {
+        Failure::Refused(format!(
+            "{t} holds {w} and cannot close while it is open, so {w} would wait forever. Wait on what blocks it, or unlink it from {t} first; resume the wait of {w} on {t} before linking it under {t}.",
+            t = target.id,
+            w = waiter.id
+        ))
+    }))
+}
+
+/// The first open item in the project that waits on a plan holding it, as its refusal.
+pub async fn held_wait<C: ConnectionTrait>(
+    c: &C,
+    p: &ProjectRow,
+) -> Result<Option<Failure>, DbErr> {
+    let waiters = items(
+        c,
+        "SELECT * FROM items WHERE project=? AND state='open' AND wait_on='item' AND wait_item IS NOT NULL ORDER BY key, num",
+        vec![p.rules.slug.clone().into()],
+    )
+    .await?;
+    for w in waiters {
+        let Some(target) = by_rid(c, w.wait_item.unwrap_or_default()).await? else {
+            continue;
+        };
+        if let Some(refused) = wait_cycle(c, p, &w, &target).await? {
+            return Ok(Some(refused));
+        }
+    }
+    Ok(None)
+}
+
 /// Hold each plan over rids while anything it opened is open; release it to its audit when nothing is.
 pub async fn settle_audits(
     tx: &mut Tx,

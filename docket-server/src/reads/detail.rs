@@ -307,9 +307,11 @@ struct Citation {
     id: String,
     state: String,
     to_path: String,
+    to_line: Option<i64>,
+    kind: String,
 }
 
-/// Every path an item of the project cites, once per item, for `docket stale` to resolve on its host.
+/// Every path an item of the project cites with its line and link kind, once per item, for `docket stale` to resolve on its host.
 ///
 /// # Errors
 /// 404 for an unknown project.
@@ -325,9 +327,9 @@ pub async fn citations(
     };
     let found = Citation::find_by_statement(sql(
         &format!(
-            "SELECT DISTINCT i.id, i.state, l.to_path FROM links l JOIN items i ON i.rid=l.rid \
+            "SELECT DISTINCT i.id, i.state, l.to_path, l.to_line, l.kind FROM links l JOIN items i ON i.rid=l.rid \
              WHERE i.project=? AND l.kind IN ('cites_file','cites_test') AND i.state IN ({states}) \
-             ORDER BY i.id, l.to_path"
+             ORDER BY i.id, l.to_path, l.to_line NULLS FIRST, l.kind"
         ),
         vec![q.project.into()],
     ))
@@ -336,7 +338,41 @@ pub async fn citations(
     Ok(Json(json!(
         found
             .into_iter()
-            .map(|c| json!({ "id": c.id, "state": c.state, "path": c.to_path }))
+            .map(|c| json!({ "id": c.id, "state": c.state, "path": c.to_path, "line": c.to_line, "kind": c.kind }))
+            .collect::<Vec<_>>()
+    )))
+}
+
+#[derive(Deserialize)]
+pub struct ProjectQuery {
+    project: String,
+}
+
+#[derive(FromQueryResult)]
+struct OpenBody {
+    id: String,
+    body: String,
+}
+
+/// The id and body of every open item of the project, for `docket stale` to find the branches they name.
+///
+/// # Errors
+/// 404 for an unknown project.
+pub async fn open_bodies(
+    State(db): State<DatabaseConnection>,
+    Query(q): Query<ProjectQuery>,
+) -> Result<Json<Value>, Failure> {
+    project_model(&db, &q.project).await?;
+    let found = OpenBody::find_by_statement(sql(
+        "SELECT id, body FROM items WHERE project=? AND state='open' ORDER BY rid",
+        vec![q.project.into()],
+    ))
+    .all(&db)
+    .await?;
+    Ok(Json(json!(
+        found
+            .into_iter()
+            .map(|b| json!({ "id": b.id, "body": b.body }))
             .collect::<Vec<_>>()
     )))
 }

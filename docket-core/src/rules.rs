@@ -396,6 +396,32 @@ pub fn reply(row: &Item, note: Option<&str>) -> Result<Vec<Field>, Refused> {
     ])
 }
 
+/// An earlier decision paragraph stops standing once a new one is written, so a reader going
+/// top-down never acts on the overturned choice. Returns the body and how many were relabelled.
+///
+/// # Panics
+/// Never: the pattern is a literal.
+#[must_use]
+pub fn supersede_decisions(body: &str) -> (String, usize) {
+    static LABEL: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let label = LABEL.get_or_init(|| {
+        regex::Regex::new(r"(?m)^\*\*Decision, (\d{4}-\d{2}-\d{2})(?:, derived)?\.\*\*")
+            .expect("static pattern")
+    });
+    let mut n = 0;
+    let out = label.replace_all(body, |c: &regex::Captures| {
+        n += 1;
+        format!("**Superseded decision, {}.**", &c[1])
+    });
+    (out.into_owned(), n)
+}
+
+/// A plain answer that repeats the stored decision adds nothing to the body.
+#[must_use]
+pub fn is_repeat_answer(row: &Item, decision: &str, basis: Option<&str>) -> bool {
+    basis.is_none() && row.decision.as_deref() == Some(decision.trim())
+}
+
 /// A derived decision names its basis in the decision itself, so every view and the dump carry it.
 ///
 /// # Errors

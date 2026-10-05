@@ -13,7 +13,7 @@ use docket_core::word::Kind;
 
 use crate::auth::Caller;
 use crate::verbs::graph::{
-    keys_of, refuse_later, refuse_later_after_theme, release_list, settle_audits,
+    held_wait, keys_of, refuse_later, refuse_later_after_theme, release_list, settle_audits,
 };
 use crate::verbs::view::{item_view, item_views};
 use crate::verbs::{Call, Failure};
@@ -223,6 +223,11 @@ pub async fn link(
         call.tx
             .event(&call.slug, Some(a.rid), "edited", Some(&note), None, None)
             .await?;
+    }
+    if req.kind == "opened" && !req.remove {
+        if let Some(refused) = held_wait(&call.tx.conn, &call.project).await? {
+            return Err(refused);
+        }
     }
     if req.kind == "opened" {
         settle_audits(&mut call.tx, &call.project, &[b.rid]).await?;

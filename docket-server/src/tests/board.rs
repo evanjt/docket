@@ -249,7 +249,7 @@ async fn test_files_and_citations_read_the_cited_paths() {
     assert_eq!(c.as_array().unwrap().len(), 3);
     assert_eq!(
         c[0],
-        json!({"id": "T1", "state": "open", "path": "src/a.rs"})
+        json!({"id": "T1", "state": "open", "path": "src/a.rs", "line": 3, "kind": "cites_file"})
     );
     assert_eq!(
         s.ok("/citations?project=o/p&open_only=true")
@@ -501,6 +501,32 @@ async fn test_audit_sections_principles_and_bound_items() {
     found.sort_unstable();
     assert_eq!(found, ["Q1", "T3", "T4", "T5", "T6"]);
     assert_eq!(s.get("/audit?project=o/p").await.0, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_audit_by_theme_lists_every_row_of_that_theme_alone() {
+    let s = Seeded::new().await;
+    let seed = "INSERT INTO projects (slug, keys, created_at, updated_at) VALUES ('o/t', \
+                '[{\"key\":\"T\",\"kind\":\"work\"}]', 'c', 'u'); \
+                INSERT INTO items (rid, project, key, num, title, state, turn, theme, tags, body, opened_at, updated_at) VALUES \
+                (40, 'o/t', 'T', 1, 'Ready', 'open', 'agent', '0.4.1', '[]', '', 'o', 'u'), \
+                (41, 'o/t', 'T', 2, 'Owner turn', 'open', 'user', '0.4.1', '[]', '', 'o', 'u'), \
+                (42, 'o/t', 'T', 3, 'Later release', 'open', 'agent', '0.4.10', '[]', '', 'o', 'u'), \
+                (43, 'o/t', 'T', 4, 'Mixed case', 'open', 'agent', 'Beta', '[]', '', 'o', 'u'); \
+                INSERT INTO items (rid, project, key, num, title, state, turn, wait_on, wait_ref, wait_since, theme, tags, body, opened_at, updated_at) VALUES \
+                (44, 'o/t', 'T', 5, 'Waiting', 'open', 'agent', 'condition', 'later', 'w', '0.4.1', '[]', '', 'o', 'u'); \
+                INSERT INTO items (rid, project, key, num, title, state, turn, claim_branch, claim_host, claim_since, theme, tags, body, opened_at, updated_at) VALUES \
+                (45, 'o/t', 'T', 6, 'Held', 'open', 'agent', 'b', 'h', 'c', '0.4.1', '[]', '', 'o', 'u');";
+    s.db.seed(seed).await;
+    let all = s.ok("/audit?project=o/t&theme=0.4.1").await;
+    let mut found = ids(&all["rows"]);
+    found.sort_unstable();
+    assert_eq!(found, ["T1", "T2", "T5", "T6"]);
+    assert_eq!(
+        ids(&s.ok("/audit?project=o/t&theme=beta").await["rows"]),
+        ["T4"]
+    );
+    assert!(ids(&s.ok("/audit?project=o/t&theme=0.4").await["rows"]).is_empty());
 }
 
 #[tokio::test]

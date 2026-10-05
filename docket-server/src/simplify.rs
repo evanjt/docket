@@ -9,12 +9,13 @@ use sea_orm::DatabaseConnection;
 use serde_json::Value as Json;
 
 use docket_core::item::{Ctx, Field, Item};
+use docket_core::migrate::version;
 use docket_core::rules::{self, GATE, prioritise};
 use docket_core::word::{Kind, priority};
 
 use crate::store::{Tx, column, json, scalar};
 use crate::verbs::Failure;
-use crate::verbs::graph::{keys_of, release_waiters, settle_audits};
+use crate::verbs::graph::{held_wait, keys_of, release_waiters, settle_audits};
 
 /// The note on a package turned into a plan; it also marks a plan whose round audits are a package's.
 const BECAME_A_PLAN: &str = "a plan now: the simple model makes plans the one grouping, audited once when everything it opened is closed";
@@ -143,6 +144,9 @@ async fn project(tx: &mut Tx, slug: &str) -> Result<Change, Failure> {
     let plans_proper = keys_of(&before, &[Kind::Audit]);
     if !packages.is_empty() {
         packages_to_plans(tx, slug, &packages, &mut c).await?;
+    }
+    if let Some(refused) = held_wait(&tx.conn, &tx.project(slug).await?).await? {
+        return Err(refused);
     }
     close_held_rounds(tx, slug, &plans_proper, &mut c).await?;
     gate(tx, slug, &mut c).await?;
@@ -402,20 +406,6 @@ pub fn releases_of(current: &str, themes: &[&str]) -> Vec<String> {
     std::iter::once(current.to_string())
         .chain(later.into_iter().map(|(_, t)| t.to_string()))
         .collect()
-}
-
-/// A theme's version numbers when it names a version: digits joined by dots, at least two, with an
-/// optional leading `v`.
-fn version(theme: &str) -> Option<Vec<u64>> {
-    let parts: Vec<&str> = theme
-        .strip_prefix('v')
-        .unwrap_or(theme)
-        .split('.')
-        .collect();
-    if parts.len() < 2 {
-        return None;
-    }
-    parts.iter().map(|p| p.parse::<u64>().ok()).collect()
 }
 
 #[cfg(test)]

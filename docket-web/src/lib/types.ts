@@ -79,6 +79,20 @@ export interface Shown extends Row {
   progress?: Progress | null;
 }
 
+/** A verb an item takes now, the request fields it is refused without and the branch it is sent with. */
+export interface Offer {
+  verb: string;
+  needs: string[];
+  branch?: string | null;
+}
+
+export interface Offers {
+  id: string;
+  verbs: Offer[];
+  priorities: string[];
+  levels: string[];
+}
+
 export interface Status {
   project: string;
   host: string;

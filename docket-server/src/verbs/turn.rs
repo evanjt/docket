@@ -16,8 +16,8 @@ use docket_core::rules;
 
 use crate::auth::Caller;
 use crate::verbs::graph::{
-    audits_over, is_standing, refuse_later, release_list, release_waiters, settle_audits,
-    similar_rows,
+    is_standing, refuse_later, release_list, release_waiters, settle_audits, similar_rows,
+    wait_cycle,
 };
 use crate::verbs::view::{brief, item_view, kind};
 use crate::verbs::{Call, Failure, chars, given};
@@ -53,15 +53,8 @@ pub async fn wait(
                 t.id, t.state
             )));
         }
-        if audits_over(&call.tx.conn, &call.project, &[r.rid])
-            .await?
-            .iter()
-            .any(|p| p.rid == t.rid && p.rid != r.rid)
-        {
-            return Err(Failure::Refused(format!(
-                "{} holds {} and cannot close while it is open, so {} would wait forever. Wait on what blocks it, or unlink it from {} first.",
-                t.id, r.id, r.id, t.id
-            )));
+        if let Some(refused) = wait_cycle(&call.tx.conn, &call.project, &r, &t).await? {
+            return Err(refused);
         }
         let listed = release_list(&call.tx.conn, &call.slug).await?;
         refuse_later(&listed, &r, &t, call.ctx.force)?;
@@ -211,8 +204,15 @@ pub async fn answer(
         req.derived.as_deref(),
     )?;
     let stamp = call.stamp();
-    let mut body = r.body.trim_end_matches('\n').to_string();
+    let repeat = rules::is_repeat_answer(&r, &req.decision, req.derived.as_deref());
+    let mut body = if repeat {
+        r.body.clone()
+    } else {
+        rules::supersede_decisions(&r.body).0
+    };
+    body.truncate(body.trim_end_matches('\n').len());
     let _ = match &req.derived {
+        _ if repeat => Ok(()),
         None => write!(body, "\n\n**Decision, {stamp}.** {}", req.decision.trim()),
         Some(basis) => write!(
             body,

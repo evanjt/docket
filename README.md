@@ -238,6 +238,21 @@ DATABASE_URL=postgres://... docket-server simplify
 DATABASE_URL=postgres://... docket-server simplify --write
 ```
 
+The move onto the core (releases as rows, dependencies, one parent plan, an origin link, labels, a
+priority column and assignment rows) is planned by one function, `docket_core::migrate::plan`, over
+the rows the full dump carries. `docket admin migrate --dry-run` prints every change it makes to the
+bound project (`--all` for every project), then each risky case and what is done about it: a plan
+held by work in a later release, the edge that closes a cycle (kept as `related`), an item under two
+plans (the earliest open one is its parent), a dependency in a later release (pulled into its
+dependant's), a theme that is not a release, and the change to the dump's item files. A case whose
+repair turns on an undecided rule waits on it, and nothing is written while one does. `--held` and
+`--areas` decide those rules for one run, so the dry run shows each choice.
+
+```bash
+docket admin migrate --dry-run
+docket admin migrate --dry-run --all --held detach --areas current
+```
+
 ## Docker
 
 ```bash

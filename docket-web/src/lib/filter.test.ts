@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applies, filterChanges, nextParams, parseFilter, remainingHref, searchParams, sortRows } from './filter';
+import { applies, filterChanges, nextParams, pagedParams, parseFilter, remainingHref, searchParams, sortRows } from './filter';
 
 const parse = (s: string) => parseFilter(new URLSearchParams(s));
 
@@ -21,6 +21,8 @@ describe('filter state', () => {
     const f = parse('key=b&priority=high&complexity=low&release=1.1&under=A20&state=open');
     expect(nextParams(f)).toEqual({ key: 'b', priority: 'high', complexity: 'low', under: 'A20' });
     expect(searchParams(f)).toEqual({ key: 'b', state: 'open' });
+    expect(pagedParams(f)).toEqual({ release: '1.1' });
+    expect(pagedParams(parse(''))).toEqual({ release: undefined });
   });
 
   it('applies what the routes leave out to rows', () => {

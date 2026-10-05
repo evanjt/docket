@@ -11,6 +11,8 @@ pub mod lead;
 pub mod like;
 pub mod machine;
 pub mod member;
+pub mod migrate;
+pub mod offers;
 pub mod pace;
 pub mod private;
 pub mod project;

@@ -12,11 +12,10 @@ use docket_core::api::{
 use docket_core::assignment::OUTCOMES;
 use docket_core::item::Item;
 use docket_core::rules;
-use docket_core::text::{gates_result, opened_ids};
+use docket_core::text::gates_result;
 use docket_core::word::Kind;
 
 use crate::auth::Caller;
-use crate::store::item_opt;
 use crate::verbs::graph::{
     came_due, hold_waiters, live_overlaps, open_under, release_waiters, settle_audits,
 };
@@ -257,10 +256,11 @@ pub async fn job_report(
     Ok(Json(Moved { item }))
 }
 
-/// Done, under a sha or what it opened; releases waiters.
+/// Done, under a sha or what closed it; releases waiters.
 ///
 /// # Errors
-/// 409 when the rules refuse it, the item is standing, or a plan that never came due opened open work.
+/// 409 when the rules refuse it, the item is standing, or a plan that never came due has open work
+/// under it.
 pub async fn close(
     State(db): State<DatabaseConnection>,
     Extension(caller): Extension<Caller>,
@@ -287,7 +287,7 @@ pub async fn close(
         )));
     }
     if kind == Kind::Audit {
-        let pending: Vec<String> = open_under(&call.tx.conn, r.rid)
+        let pending: Vec<String> = open_under(&call.tx.conn, &call.slug, r.rid)
             .await?
             .into_iter()
             .map(|x| x.id)
@@ -309,28 +309,11 @@ pub async fn close(
             data_or_none(data).as_ref(),
         )
         .await?;
-    let mut opened = Vec::new();
-    if kind == Kind::Decision {
-        let keys: Vec<&str> = call
-            .project
-            .rules
-            .keys
-            .iter()
-            .map(|s| s.key.as_str())
-            .collect();
-        for oid in opened_ids(Some(&resolution), &keys) {
-            if let Some(t) = item_opt(&call.tx.conn, &call.slug, &oid).await? {
-                call.tx.set_link(t.rid, "opened", r.rid, false).await?;
-                opened.push(oid);
-            }
-        }
-    }
     let mut released = release_waiters(&mut call.tx, &call.project, &row, "closed").await?;
     released.extend(settle_audits(&mut call.tx, &call.project, &[r.rid]).await?);
     let out = Closed {
         item: item_view(&call.tx.conn, &call.project, &row).await?,
         released: released.iter().map(brief).collect(),
-        opened,
     };
     call.tx.commit().await?;
     Ok(Json(out))

@@ -235,6 +235,15 @@ fn test_only_the_leads_verbs_are_refused_in_a_job() {
 }
 
 #[test]
+fn test_a_job_reads_the_releases_and_never_changes_them() {
+    let why = releases_refusal("ship", Some("t14-1")).unwrap();
+    assert!(why.contains("the owner's"), "{why}");
+    assert!(releases_refusal("add", Some("t14-1")).is_some());
+    assert!(releases_refusal("list", Some("t14-1")).is_none());
+    assert!(releases_refusal("ship", None).is_none());
+}
+
+#[test]
 fn test_name_of_a_branch() {
     assert_eq!(name_of("lead/t14-123"), "lead-t14-123");
     assert_eq!(name_of("/a b/"), "a-b");
@@ -481,13 +490,14 @@ fn test_a_brief_keeps_a_routine_choice_out_of_the_questions() {
 }
 
 #[test]
-fn test_a_job_files_nothing_without_naming_its_release() {
+fn test_a_job_files_nothing_without_naming_its_release_and_names_the_backlog_as_empty() {
     let why = unreleased("new", Some("lead-t14-7"), None).unwrap();
     assert!(why.contains("--release"), "{why}");
     assert_eq!(
-        unreleased("add", Some("lead-t14-7"), Some("")),
+        unreleased("add", Some("lead-t14-7"), None),
         Some(why.replace("new", "add"))
     );
+    assert_eq!(unreleased("add", Some("lead-t14-7"), Some("")), None);
     assert_eq!(unreleased("new", Some("lead-t14-7"), Some("current")), None);
     assert_eq!(unreleased("new", None, None), None);
     assert_eq!(unreleased("new", Some(""), None), None);

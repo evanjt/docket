@@ -122,9 +122,8 @@ pub async fn open_members<C: ConnectionTrait>(
     slug: &str,
 ) -> Result<HashMap<i64, u64>, DbErr> {
     let stmt = sql(
-        "SELECT l.to_rid AS prid, COUNT(*) AS n FROM links l JOIN items i ON i.rid=l.rid \
-         JOIN items p ON p.rid=l.to_rid WHERE l.kind='opened' AND i.state='open' AND p.project=? \
-         GROUP BY l.to_rid",
+        "SELECT i.parent_rid AS prid, COUNT(*) AS n FROM items i \
+         WHERE i.parent_rid IS NOT NULL AND i.state='open' AND i.project=? GROUP BY i.parent_rid",
         vec![slug.into()],
     );
     Ok(Count::find_by_statement(stmt)
@@ -164,8 +163,16 @@ pub async fn public<C: ConnectionTrait>(
     } else {
         0
     };
+    let release: Option<String> = match row.release_id {
+        Some(id) => {
+            crate::store::scalar(db, "SELECT name FROM releases WHERE id=?", vec![id.into()])
+                .await?
+        }
+        None => None,
+    };
     let mut out = Map::new();
     out.insert("word".into(), json!(word(&facts(&row, kind), open)));
+    out.insert("release".into(), json!(release));
     out.insert(
         "priority".into(),
         json!(tier.map_or_else(|| priority(&tags), |t| PRIORITIES[t])),

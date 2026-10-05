@@ -186,7 +186,7 @@ async fn run(d: &mut Dumped, steps: Vec<(&str, Value, &str)>) {
     }
 }
 
-/// Plans: tickets opened under two plans, a waiter on one of them.
+/// Plans: tickets under two plans, a waiter on one of them.
 async fn plans(d: &mut Dumped) {
     let steps: Vec<(&str, Value, &str)> = vec![
         (
@@ -205,9 +205,9 @@ async fn plans(d: &mut Dumped) {
             "Open A1",
         ),
         (
-            "link",
-            json!({ "a": ["B1", "B2"], "kind": "opened", "b": "A1" }),
-            "Link 2 items to A1",
+            "parent",
+            json!({ "a": ["B1", "B2"], "plan": "A1" }),
+            "Put 2 items under A1",
         ),
         (
             "new",
@@ -220,9 +220,9 @@ async fn plans(d: &mut Dumped) {
             "Open B3",
         ),
         (
-            "link",
-            json!({ "a": ["B3"], "kind": "opened", "b": "A2" }),
-            "Link B3",
+            "parent",
+            json!({ "a": ["B3"], "plan": "A2" }),
+            "Put B3 under A2",
         ),
         (
             "link",
@@ -245,7 +245,7 @@ async fn plans(d: &mut Dumped) {
     run(d, steps).await;
 }
 
-/// Questions and claims: an answer releasing a waiter, a close linking what it opened.
+/// Questions and claims: an answer releasing a waiter, an origin linked before the close.
 async fn questions(d: &mut Dumped) {
     let steps: Vec<(&str, Value, &str)> = vec![
         (
@@ -260,6 +260,11 @@ async fn questions(d: &mut Dumped) {
             "Answer Q1",
         ),
         ("start", json!({ "id": "Q1" }), "Start Q1"),
+        (
+            "link",
+            json!({ "a": ["B4"], "kind": "origin", "b": "Q1" }),
+            "Link B4",
+        ),
         (
             "close",
             json!({ "id": "Q1", "resolution": "opened B4" }),
@@ -322,6 +327,7 @@ async fn moves(d: &mut Dumped) {
             json!({ "a": ["B2"], "kind": "related", "b": "B3", "remove": true }),
             "Link B2",
         ),
+        ("parent", json!({ "a": ["B3"] }), "Edit B3"),
         (
             "key",
             json!({ "key": "I", "kind": "research", "meaning": "investigations" }),

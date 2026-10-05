@@ -170,14 +170,27 @@ pub fn refusal(verb: &str, job: Option<&str>) -> Option<String> {
     })
 }
 
-/// Why `new` or `add` is refused inside a job: every item a job files names its release.
+/// Why a change to the releases is refused inside a job: they are the owner's plan. Listing is not.
+#[must_use]
+pub fn releases_refusal(action: &str, job: Option<&str>) -> Option<String> {
+    let job = job.filter(|j| !j.is_empty())?;
+    (action != "list").then(|| {
+        format!(
+            "docket releases {action} is refused inside the job {job}: the releases are the owner's \
+             plan. Name what should change in your report."
+        )
+    })
+}
+
+/// Why `new` or `add` is refused inside a job: every item a job files names its release, an empty
+/// one the backlog.
 #[must_use]
 pub fn unreleased(verb: &str, job: Option<&str>, release: Option<&str>) -> Option<String> {
     let job = job.filter(|j| !j.is_empty())?;
-    release.is_none_or(|r| r.trim().is_empty()).then(|| {
+    release.is_none().then(|| {
         format!(
-            "docket {verb} inside the job {job} needs --release: current, a later release, or a \
-             theme in use, chosen by what the item is, as the brief's triage says."
+            "docket {verb} inside the job {job} needs --release: current, a later release, or \
+             \"\" for the backlog, chosen by what the item is, as the brief's triage says."
         )
     })
 }

@@ -8,7 +8,7 @@ use sea_orm::{DatabaseConnection, FromQueryResult};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use docket_core::member::{Neighbours, Tie, members_of, opened_under};
+use docket_core::member::{Edge, Neighbours, Tie, descendants, members_of};
 use docket_core::text::{principle_refs, principles};
 use docket_core::touch::declared_files;
 use docket_core::word::Kind;
@@ -18,7 +18,7 @@ use crate::reads::public::{Kinds, facts, open_members, sql};
 use crate::reads::rows::{marks, project_model, rows};
 use crate::store;
 use crate::verbs::Failure;
-use crate::verbs::graph::{concepts_of, package_progress};
+use crate::verbs::graph::{concepts_of, package_progress, project_ties};
 
 #[derive(FromQueryResult)]
 struct TieRow {
@@ -27,25 +27,17 @@ struct TieRow {
     to_rid: Option<i64>,
 }
 
-/// Every item-to-item link leaving an item of the project.
+/// Every tie of the project, as the server's graph reads it.
 async fn ties(db: &DatabaseConnection, slug: &str) -> Result<Vec<Tie>, Failure> {
-    let rows = TieRow::find_by_statement(sql(
-        "SELECT l.rid, l.kind, l.to_rid FROM links l JOIN items i ON i.rid=l.rid \
-         WHERE i.project=? AND l.kind IN ('related', 'opened') ORDER BY i.state, i.rid, l.kind, l.to_rid",
-        vec![slug.into()],
-    ))
-    .all(db)
-    .await?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|t| {
-            Some(Tie {
-                rid: t.rid,
-                opened: t.kind == "opened",
-                to: t.to_rid?,
-            })
-        })
-        .collect())
+    Ok(project_ties(db, slug).await?)
+}
+
+fn tie(t: &TieRow) -> Option<Tie> {
+    Some(Tie {
+        rid: t.rid,
+        edge: Edge::parse(&t.kind)?,
+        to: t.to_rid?,
+    })
 }
 
 /// The rids of the project's standing items.
@@ -73,7 +65,7 @@ async fn standing_rids(
     Ok(found.into_iter().collect())
 }
 
-/// What belongs to a concept or central idea: tied to it either way, and all opened under that.
+/// What belongs to a concept or central idea: tied to it either way, and everything under that.
 ///
 /// # Errors
 /// The database.
@@ -234,27 +226,19 @@ async fn orphans(
         .collect())
 }
 
-/// Every item-to-item link in the database, whichever project holds its ends.
+/// Every item-to-item link and parent edge in the database, whichever project holds its ends.
 async fn all_ties(db: &DatabaseConnection) -> Result<Vec<Tie>, Failure> {
     let rows = TieRow::find_by_statement(sql(
-        "SELECT rid, kind, to_rid FROM links WHERE kind IN ('related', 'opened') AND to_rid IS NOT NULL",
+        "SELECT rid, kind, to_rid FROM links WHERE kind IN ('related', 'origin') AND to_rid IS NOT NULL \
+         UNION ALL SELECT rid, 'parent', parent_rid FROM items WHERE parent_rid IS NOT NULL",
         vec![],
     ))
     .all(db)
     .await?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|t| {
-            Some(Tie {
-                rid: t.rid,
-                opened: t.kind == "opened",
-                to: t.to_rid?,
-            })
-        })
-        .collect())
+    Ok(rows.iter().filter_map(tie).collect())
 }
 
-/// The rows under an id: a standing item's members, or what it opened at any depth, by rid.
+/// The rows under an id: a standing item's members, or its children at any depth, by rid.
 async fn under(
     db: &DatabaseConnection,
     slug: &str,
@@ -271,7 +255,7 @@ async fn under(
         standing_breakdown(db, kinds, t, &found, &ties, &standing, breakdown).await?;
         return Ok(found);
     }
-    let mut rids: Vec<i64> = opened_under(&ties, t.rid).into_iter().collect();
+    let mut rids: Vec<i64> = descendants(&ties, t.rid).into_iter().collect();
     rids.sort_unstable();
     let mut found = Vec::new();
     for rid in rids {
@@ -300,7 +284,7 @@ async fn standing_breakdown(
     for (kind, label) in [(Kind::Audit, "by plan"), (Kind::Package, "by package")] {
         let mut parts: Vec<(i64, Value)> = Vec::new();
         for r in found.iter().filter(|r| kinds.kind(&r.key) == kind) {
-            let below: Vec<i64> = opened_under(ties, r.rid)
+            let below: Vec<i64> = descendants(ties, r.rid)
                 .into_iter()
                 .filter(|x| mine.contains(x))
                 .collect();
@@ -397,29 +381,46 @@ async fn about_target(
 }
 
 /// `[[kind, [{id, title}]]]` for the ideas, stories and concepts tied to the target, or none at all
-/// when no idea, story or concept is tied to it and it belongs to no concept. The links leaving the
-/// target come first, by kind and target, then those reaching it, by link.
+/// when no idea, story or concept is tied to it and it belongs to no concept. Its parent comes first,
+/// then the links leaving the target, by kind and target, then those reaching it, by link, then its
+/// children.
 async fn bound(
     db: &DatabaseConnection,
     slug: &str,
     kinds: &Kinds,
     t: &docket_core::item::Item,
 ) -> Result<Value, Failure> {
-    let near = rows(
+    let mut near = rows(
         db,
-        "SELECT i.* FROM links l JOIN items i ON i.rid = CASE WHEN l.rid=? THEN l.to_rid ELSE l.rid END \
-         WHERE (l.rid=? OR l.to_rid=?) AND l.kind IN ('related', 'opened') \
-         ORDER BY l.rid<>?, CASE WHEN l.rid=? THEN l.kind END, CASE WHEN l.rid=? THEN l.to_rid END, l.id",
-        vec![
-            t.rid.into(),
-            t.rid.into(),
-            t.rid.into(),
-            t.rid.into(),
-            t.rid.into(),
-            t.rid.into(),
-        ],
+        "SELECT p.* FROM items i JOIN items p ON p.rid=i.parent_rid WHERE i.rid=?",
+        vec![t.rid.into()],
     )
     .await?;
+    near.extend(
+        rows(
+            db,
+            "SELECT i.* FROM links l JOIN items i ON i.rid = CASE WHEN l.rid=? THEN l.to_rid ELSE l.rid END \
+             WHERE (l.rid=? OR l.to_rid=?) AND l.kind IN ('related', 'origin') \
+             ORDER BY l.rid<>?, CASE WHEN l.rid=? THEN l.kind END, CASE WHEN l.rid=? THEN l.to_rid END, l.id",
+            vec![
+                t.rid.into(),
+                t.rid.into(),
+                t.rid.into(),
+                t.rid.into(),
+                t.rid.into(),
+                t.rid.into(),
+            ],
+        )
+        .await?,
+    );
+    near.extend(
+        rows(
+            db,
+            "SELECT * FROM items WHERE parent_rid=? ORDER BY rid",
+            vec![t.rid.into()],
+        )
+        .await?,
+    );
     let mut out: Vec<(Kind, Vec<(String, String)>)> = Vec::new();
     for kind in [Kind::Idea, Kind::Story, Kind::Concept] {
         let keys = kinds.keys(kind);

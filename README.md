@@ -191,7 +191,7 @@ it over. A take, a takeover and a give each write a `lead` event on the project;
 | `GET /machines`, `POST /do/machine` | every machine; one set or removed (`remove: true`), on the owner's key |
 | `GET /lead`, `POST /do/lead` | a project's lead claim; `act` take, renew or give, with the holder's `session` |
 | `GET /ui/` | the web client when `DOCKET_WEB` is set, with `/` sent to it; neither asks for a key |
-| `POST /do/{verb}` | `new`, `add`, `start`, `close`, `release`, `drop`, `reopen`, `wait`, `resume`, `ask`, `reply`, `answer`, `decide`, `priority`, `rate`, `edit`, `link`, `key`, `project`, `reindex` |
+| `POST /do/{verb}` | `new`, `add`, `start`, `close`, `release`, `drop`, `reopen`, `wait`, `resume`, `ask`, `reply`, `answer`, `decide`, `priority`, `rate`, `edit`, `link`, `parent`, `key`, `project`, `reindex` |
 
 A refused write answers `409` with the reason, and nothing is written.
 
@@ -252,6 +252,11 @@ repair turns on an undecided rule waits on it, and nothing is written while one 
 docket admin migrate --dry-run
 docket admin migrate --dry-run --all --held detach --areas current
 ```
+
+The parent slice is applied when the server migrates: each item's `opened` links split as the plan
+splits them, into one parent plan (`items.parent_rid`, set with `docket parent T1 A3`) and `origin`
+links (`docket link T1 origin Q2`), which record what spawned an item and add no structure. A dump
+checkout or SQLite store written before then splits the same way on restore or import.
 
 ## Docker
 

@@ -56,10 +56,12 @@ pub fn to_item(m: item::Model) -> Item {
         decided_at: m.decided_at,
         resolution: m.resolution,
         superseded_by: m.superseded_by,
+        parent_rid: m.parent_rid,
         scope: m.scope,
         complexity: m.complexity,
         group_name: m.group_name,
         theme: m.theme,
+        release_id: m.release_id,
         rank: m.rank,
         tags: serde_json::from_value(m.tags).unwrap_or_default(),
         body: m.body,
@@ -169,8 +171,8 @@ pub async fn by_rid<C: ConnectionTrait>(c: &C, rid: i64) -> Result<Option<Item>,
 /// item's state, so a table of large bodies is never loaded to compute it.
 pub const STATE_COLUMNS: &str = "rid, project, key, num, id, title, state, turn, turn_note, asked_at, \
     claim_branch, claim_host, claim_since, claim_runner, claim_job, claim_on, wait_on, wait_item, \
-    wait_ref, wait_since, decision, decided_at, resolution, superseded_by, scope, complexity, \
-    group_name, theme, rank, tags, '' AS body, conflict, opened_at, updated_at";
+    wait_ref, wait_since, decision, decided_at, resolution, superseded_by, parent_rid, scope, complexity, \
+    group_name, theme, release_id, rank, tags, '' AS body, conflict, opened_at, updated_at";
 
 /// An item by rid without its body.
 pub async fn state_by_rid<C: ConnectionTrait>(c: &C, rid: i64) -> Result<Option<Item>, DbErr> {
@@ -231,10 +233,12 @@ fn column_of(f: &Field) -> (&'static str, Value) {
         Field::DecidedAt(v) => ("decided_at", v.into()),
         Field::Resolution(v) => ("resolution", v.into()),
         Field::SupersededBy(v) => ("superseded_by", v.into()),
+        Field::ParentRid(v) => ("parent_rid", v.into()),
         Field::Scope(v) => ("scope", v.into()),
         Field::Complexity(v) => ("complexity", v.into()),
         Field::GroupName(v) => ("group_name", v.into()),
         Field::Theme(v) => ("theme", v.into()),
+        Field::ReleaseId(v) => ("release_id", v.into()),
         Field::Rank(v) => ("rank", v.into()),
         Field::Tags(v) => ("tags", json(serde_json::json!(v))),
         Field::Body(v) => ("body", v.into()),
@@ -253,6 +257,7 @@ pub struct NewItem {
     pub body: String,
     pub complexity: Option<String>,
     pub theme: Option<String>,
+    pub release_id: Option<i64>,
     pub group_name: Option<String>,
     pub scope: Option<String>,
     pub tags: Vec<String>,
@@ -363,8 +368,8 @@ impl Tx {
 
     pub async fn insert(&mut self, cols: NewItem) -> Result<Item, Failure> {
         let text = "INSERT INTO items (project, key, num, title, state, turn, body, complexity, theme, \
-                    group_name, scope, tags, opened_at, updated_at) \
-                    VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *";
+                    release_id, group_name, scope, tags, opened_at, updated_at) \
+                    VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *";
         let values: Vec<Value> = vec![
             cols.project.into(),
             cols.key.into(),
@@ -374,6 +379,7 @@ impl Tx {
             cols.body.into(),
             cols.complexity.into(),
             cols.theme.into(),
+            cols.release_id.into(),
             cols.group_name.into(),
             cols.scope.into(),
             json(serde_json::json!(cols.tags)),

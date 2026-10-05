@@ -147,7 +147,8 @@ impl<S: Source> App<S> {
         }
     }
 
-    /// An item, then what opened it, what it is related to, and what it opened.
+    /// An item, then its plan, what spawned it, what it is related to, its children and what it
+    /// spawned.
     fn ties(&mut self, slug: &str, id: &str) -> crate::source::Result<Vec<Entry>> {
         let shown = self.source.show(slug, id)?;
         let board = self.board(slug).ok_or("no board")?;
@@ -159,15 +160,13 @@ impl<S: Source> App<S> {
             })
         };
         let mut out: Vec<Entry> = entry(id, "this item").into_iter().collect();
-        out.extend(shown.opened.iter().filter_map(|t| entry(t, "opened it")));
+        out.extend(shown.parent.iter().filter_map(|t| entry(t, "its plan")));
+        out.extend(shown.origin.iter().filter_map(|t| entry(t, "spawned it")));
         out.extend(shown.related.iter().filter_map(|t| entry(t, "related")));
+        out.extend(shown.children.iter().filter_map(|t| entry(t, "under it")));
         if let Some(me) = board.get(id) {
-            let kids: Vec<String> = board
-                .children(me.rid)
-                .iter()
-                .map(|c| c.id.clone())
-                .collect();
-            out.extend(kids.iter().filter_map(|t| entry(t, "it opened")));
+            let spawned: Vec<String> = board.spawned(me.rid).iter().map(|c| c.id.clone()).collect();
+            out.extend(spawned.iter().filter_map(|t| entry(t, "it spawned")));
         }
         Ok(out)
     }
@@ -402,19 +401,20 @@ fn moves_of(board: &Board, recent: &[EventRow]) -> Vec<Move> {
 /// nothing, read from the newest events.
 #[must_use]
 pub fn net_of(board: &Board, recent: &[EventRow], since: i64) -> Net {
-    let releases =
-        docket_core::fact::releases(board.project.skills.get("releases").map(String::as_str));
+    let releases = &board.project.releases;
     let counted: Vec<Counted> = recent
         .iter()
         .filter_map(|e| {
             let item = board.by_rid(e.rid?)?;
             let class = match board.kind(item) {
                 Kind::Work => Class::Code {
-                    current: docket_core::queue::release_rank(&releases, item.theme.as_deref())
-                        == 0,
+                    current: docket_core::queue::in_current(
+                        &releases.open,
+                        releases.name(item.release_id),
+                    ),
                 },
                 Kind::Decision | Kind::Research => Class::Research {
-                    opened: !board.children(item.rid).is_empty(),
+                    opened: !board.spawned(item.rid).is_empty(),
                 },
                 _ => Class::Other,
             };

@@ -6,7 +6,7 @@ use crate::word::{Kind, PRIORITIES};
 
 pub const COMPLEXITIES: [&str; 3] = ["high", "medium", "low"];
 pub const DERIVED: &str = "Derived from ";
-/// The wait a plan holds while anything it opened is still open.
+/// The wait a plan holds while anything under it is still open; the words are stored on the wait.
 pub const GATE: &str = "everything it opened is closed";
 
 /// Every column a claim sets, cleared together.
@@ -228,8 +228,8 @@ pub fn came_due<'a>(gate_events: impl IntoIterator<Item = (&'a str, &'a str)>) -
         .is_some_and(|(kind, _)| kind == "resumed")
 }
 
-/// A plan closes once its audit came due, the gaps that audit filed under it still open: one round, and
-/// the gaps are worked as tickets. Before that, anything it opened that is open holds it.
+/// A plan closes once its audit came due, the gaps that audit filed still open: one round, and the
+/// gaps are worked as tickets. Before that, anything under it that is open holds it.
 ///
 /// # Errors
 /// Refused when the plan never came due and opened work that is still open.
@@ -240,7 +240,7 @@ pub fn close_plan(row: &Item, open_under: &[String], due: bool) -> Result<(), Re
     let shown: Vec<&str> = open_under.iter().take(10).map(String::as_str).collect();
     let more = if open_under.len() > 10 { " ..." } else { "" };
     Err(Refused(format!(
-        "{} opened work that is still open: {}{more}. It closes only when nothing it opened is open; unclaim it and it comes back when they close.",
+        "{} has work under it that is still open: {}{more}. It closes only when nothing under it is open; unclaim it and it comes back when they close.",
         row.id,
         shown.join(", ")
     )))
@@ -328,7 +328,7 @@ pub fn depend(row: &Item, ctx: &Ctx, on_rid: i64) -> Result<(), Refused> {
     Ok(())
 }
 
-/// A plan's gate opens by hand only once nothing it opened is open, or by force: `open_members` are
+/// A plan's gate opens by hand only once nothing under it is open, or by force: `open_members` are
 /// the ids of the open items under it.
 ///
 /// # Errors

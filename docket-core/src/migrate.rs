@@ -10,7 +10,6 @@ use serde::Serialize;
 
 use crate::assignment;
 use crate::dump::{DumpPage, EventDump, ItemDump, ProjectDump};
-use crate::fact;
 use crate::item::Refused;
 use crate::rows::{KeySpec, Theme};
 use crate::rules::GATE;
@@ -64,6 +63,8 @@ pub enum Held {
 pub enum Areas {
     Current,
     Backlog,
+    /// Its parent plan's release when that plan is in one, else the backlog.
+    Plan,
 }
 
 /// The rules the cases turn on; `None` is a rule not decided yet.
@@ -432,10 +433,6 @@ fn key_num(id: &str) -> (&str, u64) {
     (&id[..split], id[split..].parse().unwrap_or(0))
 }
 
-fn is_plan(kind: Kind) -> bool {
-    matches!(kind, Kind::Audit | Kind::Story | Kind::Package)
-}
-
 struct Project<'a> {
     rules: Rules,
     items: Vec<&'a ItemDump>,
@@ -450,6 +447,8 @@ struct Project<'a> {
     candidates: BTreeMap<String, Vec<String>>,
     parent: BTreeMap<String, String>,
     deps: Vec<(String, String)>,
+    /// Items whose theme is no release, placed by their plan once the parents are known.
+    by_plan: Vec<String>,
 }
 
 impl<'a> Project<'a> {
@@ -474,6 +473,7 @@ impl<'a> Project<'a> {
             candidates: BTreeMap::new(),
             parent: BTreeMap::new(),
             deps: Vec::new(),
+            by_plan: Vec::new(),
         }
     }
 
@@ -501,7 +501,13 @@ impl<'a> Project<'a> {
 
     /// The releases fact, then the version themes it does not name, in version order.
     fn releases(&mut self, skills: &serde_json::Value) {
-        let listed = fact::releases(skills.get("releases").and_then(|v| v.as_str()));
+        let listed: Vec<String> = skills
+            .get("releases")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .split_whitespace()
+            .map(str::to_string)
+            .collect();
         let mut themes: Vec<(Vec<u64>, &str)> = self
             .items
             .iter()
@@ -548,6 +554,9 @@ impl<'a> Project<'a> {
         for (theme, open) in areas.into_iter().filter(|(_, n)| *n > 0) {
             let action = match self.rules.areas {
                 Some(Areas::Backlog) => "to the backlog with the label".to_string(),
+                Some(Areas::Plan) => {
+                    "to its plan's release, else the backlog, with the label".to_string()
+                }
                 Some(Areas::Current) => {
                     "folded into the current release with the label".to_string()
                 }
@@ -589,7 +598,29 @@ impl<'a> Project<'a> {
         );
         match self.rules.areas {
             Some(Areas::Backlog) => None,
+            Some(Areas::Plan) => {
+                self.by_plan.push(i.id.clone());
+                None
+            }
             Some(Areas::Current) | None => current,
+        }
+    }
+
+    /// Each item waiting on its plan for a release takes the plan's, up the chain of plans.
+    fn area_places(&mut self) {
+        let waiting = std::mem::take(&mut self.by_plan);
+        for _ in 0..waiting.len() {
+            let mut moved = false;
+            for id in &waiting {
+                let at = self.parent.get(id).and_then(|p| self.place_of(p));
+                if at.is_some() && self.place_of(id) != at {
+                    self.place.insert(id.clone(), at);
+                    moved = true;
+                }
+            }
+            if !moved {
+                break;
+            }
         }
     }
 
@@ -660,7 +691,7 @@ impl<'a> Project<'a> {
             if !seen.insert(x) {
                 continue;
             }
-            if x != from && is_plan(self.kind(x)) {
+            if x != from && self.kind(x).is_plan() {
                 out.push(x.to_string());
                 continue;
             }
@@ -672,11 +703,17 @@ impl<'a> Project<'a> {
     }
 
     /// Each item's origins from `opened`, and the plans that could be its parent, earliest open
-    /// first: an opener that is a plan, and the nearest plans above one that is not.
+    /// first: the parent it has already, an opener that is a plan, and the nearest plans above one
+    /// that is not.
     fn openers(&mut self) {
         let items = self.items.clone();
         for i in &items {
-            let mut plans: Vec<String> = Vec::new();
+            let mut plans: Vec<String> = i
+                .parent
+                .iter()
+                .filter(|p| self.by_id.contains_key(p.as_str()))
+                .cloned()
+                .collect();
             let opened: Vec<&str> = i
                 .opened
                 .iter()
@@ -684,7 +721,7 @@ impl<'a> Project<'a> {
                 .filter(|o| self.by_id.contains_key(o))
                 .collect();
             for o in opened {
-                if is_plan(self.kind(o)) {
+                if self.kind(o).is_plan() {
                     plans.push(o.to_string());
                 } else {
                     self.push(
@@ -1042,6 +1079,7 @@ pub fn plan(rows: &Rows, rules: Rules) -> Changes {
     p.waits();
     p.cycles();
     p.parents();
+    p.area_places();
     p.held_plans();
     p.inversions();
     p.assignments(&rows.events);

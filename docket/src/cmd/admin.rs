@@ -40,6 +40,7 @@ pub fn rules(held: Option<&str>, areas: Option<&str>) -> Rules {
         areas: areas.and_then(|a| match a {
             "current" => Some(Areas::Current),
             "backlog" => Some(Areas::Backlog),
+            "plan" => Some(Areas::Plan),
             _ => None,
         }),
     }

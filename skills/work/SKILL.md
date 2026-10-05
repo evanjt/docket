@@ -96,7 +96,8 @@ proportion is filed as its own ticket under the same plan, with the evidence
 and the reason, before the close:
 
     docket new T "the part left undone, in one line" --body -
-    docket link T22 opened A3
+    docket parent T22 A3
+    docket link T22 origin T14
     docket edit T14 --append "Closed short of its fix: <the part> is T22 because <why>."
 
 Remove the worktree once it is merged.
@@ -146,8 +147,9 @@ in this order. Its nature: a crash, a hang, data loss or wrong numbers,
 migration or upgrade safety, security or privacy, or release work is
 `--release current` at high priority. What it serves: a blocker or member of
 current-release work is `--release current`. Otherwise a feature or polish
-goes to a later release, and tests, CI and hooks to the theme the project
-keeps for them (`docket skills releases` lists the releases, the current
+goes to a later release, and tests, CI and hooks to the backlog (`--release ""`)
+under the theme the project keeps for them (`docket skills releases` lists the
+releases, the current
 first). The body's last line says which and why: `**Release.** current: it
 loses the draft on resume.`
 

@@ -34,7 +34,8 @@ fn full_item() -> ItemDump {
         rank: Some(3),
         tags: strings(&["high", "single"]),
         related: strings(&["T10", "CON1", "T9"]),
-        opened: strings(&["PK2", "A1"]),
+        parent: Some("A1".into()),
+        origin: Some(strings(&["Q4", "I2"])),
         depends: Some(strings(&["Q2", "B3"])),
         opened_at: "2026-01-01T00:00:00Z".into(),
         updated_at: "2026-01-03T00:00:00Z".into(),
@@ -256,7 +257,7 @@ fn test_messages_name_each_write_by_its_first_event() {
 
 #[test]
 fn test_messages_tell_edits_apart_by_note() {
-    let cases: [(&[Spec], &str); 8] = [
+    let cases: [(&[Spec], &str); 10] = [
         (&[("a", "edited", Some("T1"), Some("title=x"))], "Edit T1"),
         (
             &[("a", "edited", Some("T1"), Some("complexity low"))],
@@ -284,6 +285,18 @@ fn test_messages_tell_edits_apart_by_note() {
                 ("a", "waited", Some("A3"), Some("everything")),
             ],
             "Link 2 items to A3",
+        ),
+        (
+            &[("a", "edited", Some("T1"), Some("parent A3"))],
+            "Put T1 under A3",
+        ),
+        (
+            &[
+                ("a", "edited", Some("T1"), Some("parent A3")),
+                ("a", "edited", Some("T2"), Some("parent A3")),
+                ("a", "waited", Some("A3"), Some("everything")),
+            ],
+            "Put 2 items under A3",
         ),
         (
             &[("a", "edited", Some("T1"), Some("to the later: why"))],
@@ -364,4 +377,16 @@ fn test_messages_split_a_burst_in_one_second_into_its_writes() {
         "Start T2",
     ];
     assert_eq!(messages(&events), strings(&expected));
+}
+
+#[test]
+fn test_an_older_item_file_reads_its_opened_links_and_never_writes_them() {
+    let text = "---\nid: \"T3\"\ntitle: \"Sift\"\nstate: \"open\"\nopened: [\"A1\", \"Q2\"]\n\
+                opened_at: \"o\"\nupdated_at: \"u\"\n---\n";
+    let (fields, body) = parse_item(text).unwrap();
+    let item = item_from("o/p", fields, body).unwrap();
+    assert_eq!(item.opened, ["A1", "Q2"]);
+    assert_eq!(item.parent, None);
+    assert!(!render_item(&item).contains("opened: "));
+    assert!(parse_item("---\nfolded: 1\n---\n").is_err());
 }

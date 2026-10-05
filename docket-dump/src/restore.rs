@@ -1,5 +1,6 @@
 //! A Postgres database rebuilt from a dump checkout, for disaster recovery: into an empty one only.
-//! The assignment rows are not dumped; they are rebuilt from the events.
+//! The assignment rows are not dumped; they are rebuilt from the events. An older checkout's `opened`
+//! links are split into parents and origins as the migration splits them.
 
 use std::path::Path;
 
@@ -9,6 +10,7 @@ use sea_orm::{
 use serde_json::{Value as Json, json};
 
 use docket_core::dump::{ItemDump, events_path, item_from, item_path, parse_item, project_path};
+use docket_core::release::Release;
 use docket_core::text::{citations, split_id};
 use docket_migration::statement;
 
@@ -47,10 +49,16 @@ pub async fn restore(repo: &Path, url: &str) -> Result<Restored, String> {
         ));
     }
     let tx = conn.begin().await.map_err(|e| e.to_string())?;
+    docket_migration::parents::admit_opened(&tx)
+        .await
+        .map_err(|e| e.to_string())?;
     let mut counts = Restored::default();
     for slug in tree::projects(repo)? {
         restore_project(&tx, repo, &slug, &mut counts).await?;
     }
+    docket_migration::parents::split(&tx)
+        .await
+        .map_err(|e| e.to_string())?;
     docket_migration::assignments::rebuild_all(&tx)
         .await
         .map_err(|e| e.to_string())?;
@@ -139,7 +147,28 @@ async fn insert_project(tx: &DatabaseTransaction, slug: &str, doc: &Json) -> Res
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         values,
     )
-    .await
+    .await?;
+    let releases: Vec<Release> = doc
+        .get("releases")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    for r in releases {
+        exec(
+            tx,
+            "INSERT INTO releases (project, name, position, target_date, shipped_at, note) \
+             VALUES (?, ?, ?, ?, ?, ?)",
+            vec![
+                slug.into(),
+                r.name.into(),
+                r.position.into(),
+                r.target_date.into(),
+                r.shipped_at.into(),
+                r.note.into(),
+            ],
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 fn read_item(repo: &Path, slug: &str, id: &str) -> Result<ItemDump, String> {
@@ -190,13 +219,17 @@ async fn insert_item(tx: &DatabaseTransaction, i: &ItemDump) -> Result<i64, Stri
         i.body.clone().into(),
         json_value(json!(i.tags)),
         i64::from(conflict).into(),
+        i.project.clone().into(),
+        i.release.clone().into(),
     ]);
     scalar(
         tx,
         "INSERT INTO items (project, key, num, title, state, turn, turn_note, asked_at, claim_branch, \
          claim_host, claim_since, claim_runner, claim_job, claim_on, decision, decided_at, resolution, \
-         scope, complexity, theme, rank, opened_at, updated_at, group_name, body, tags, conflict) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+         scope, complexity, theme, rank, opened_at, updated_at, group_name, body, tags, conflict, \
+         release_id) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
+         (SELECT id FROM releases WHERE project=? AND name=?)) \
          RETURNING rid",
         values,
     )
@@ -226,7 +259,8 @@ async fn target(
     .map_err(|_| missing())
 }
 
-/// The second pass: the wait, the replacement, the item links and the search row.
+/// The second pass: the wait, the replacement, the parent, the item links and the search row. The
+/// `opened` links an older dump carries are split into parents and origins once every project is in.
 async fn restore_refs(tx: &DatabaseTransaction, rid: i64, i: &ItemDump) -> Result<(), String> {
     let wait_item = match (i.wait_on.as_deref(), i.wait_ref.as_deref()) {
         (Some("item"), Some(r)) => Some(target(tx, i, r, "waits on").await?),
@@ -237,15 +271,21 @@ async fn restore_refs(tx: &DatabaseTransaction, rid: i64, i: &ItemDump) -> Resul
         Some(r) => Some(target(tx, i, r, "is superseded by").await?),
         None => None,
     };
+    let parent = match i.parent.as_deref() {
+        Some(r) => Some(target(tx, i, r, "is under").await?),
+        None => None,
+    };
     exec(
         tx,
-        "UPDATE items SET wait_on=?, wait_item=?, wait_ref=?, wait_since=?, superseded_by=? WHERE rid=?",
+        "UPDATE items SET wait_on=?, wait_item=?, wait_ref=?, wait_since=?, superseded_by=?, parent_rid=? \
+         WHERE rid=?",
         vec![
             i.wait_on.clone().into(),
             wait_item.into(),
             i.wait_ref.clone().into(),
             i.wait_since.clone().into(),
             superseded.into(),
+            parent.into(),
             rid.into(),
         ],
     )
@@ -266,7 +306,12 @@ async fn restore_refs(tx: &DatabaseTransaction, rid: i64, i: &ItemDump) -> Resul
         )
         .await?;
     }
-    for (kind, ids) in [("related", &i.related), ("opened", &i.opened)] {
+    let origin = i.origin.clone().unwrap_or_default();
+    for (kind, ids) in [
+        ("related", &i.related),
+        ("origin", &origin),
+        ("opened", &i.opened),
+    ] {
         for id in ids {
             let to = target(tx, i, id, &format!("lists under {kind}")).await?;
             exec(

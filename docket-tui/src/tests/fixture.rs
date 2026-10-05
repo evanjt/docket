@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use docket_core::api::{LeadState, Machines};
 use docket_core::flow::tally;
 use docket_core::machine::Machine;
-use docket_core::member::Tie;
+use docket_core::member::{Edge, Tie};
 use docket_core::rows::{
     Derived, EventRow, ItemRow, KeySpec, Progress, ProjectRow, Row, Shown, Status,
 };
@@ -46,6 +46,7 @@ fn project(slug: &str, skills: &[(&str, &str)]) -> ProjectRow {
             .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
             .collect(),
         updated_at: String::new(),
+        ..ProjectRow::default()
     }
 }
 
@@ -83,7 +84,7 @@ fn items() -> Vec<ItemRow> {
     let mut plan = item(8, "A1", "Loaves stay put", "open");
     plan.wait_on = Some("condition".into());
     plan.wait_ref = Some("all closed".into());
-    vec![
+    let mut out = vec![
         item(1, "T1", "First member, done", "done"),
         claimed,
         item(3, "T3", "Fix the loaf count", "open"),
@@ -94,27 +95,21 @@ fn items() -> Vec<ItemRow> {
         plan,
         item(9, "A2", "Orders print at the till", "open"),
         item(10, "T4", "Print the order slips", "done"),
-    ]
+    ];
+    for (rid, parent) in [(1, 4), (2, 4), (4, 8), (3, 8), (10, 9)] {
+        if let Some(i) = out.iter_mut().find(|i| i.rid == rid) {
+            i.parent_rid = Some(parent);
+        }
+    }
+    out
 }
 
 fn ties() -> Vec<Tie> {
-    let opened = |rid, to| Tie {
-        rid,
-        opened: true,
-        to,
-    };
-    vec![
-        opened(1, 4),
-        opened(2, 4),
-        opened(4, 8),
-        opened(3, 8),
-        opened(10, 9),
-        Tie {
-            rid: 3,
-            opened: false,
-            to: 6,
-        },
-    ]
+    vec![Tie {
+        rid: 3,
+        edge: Edge::Related,
+        to: 6,
+    }]
 }
 
 fn body(id: &str) -> String {
@@ -329,26 +324,30 @@ impl Source for Fixture {
         let Some(i) = b.get(id) else {
             return Err(format!("404: no item {id} in o/p"));
         };
-        let opened = b
+        let parent = i.parent_rid.and_then(|p| b.by_rid(p)).map(|p| p.id.clone());
+        let origin = b
             .ties
             .iter()
-            .filter(|t| t.opened && t.rid == i.rid)
+            .filter(|t| t.edge == Edge::Origin && t.rid == i.rid)
             .filter_map(|t| b.by_rid(t.to).map(|p| p.id.clone()))
             .collect();
         let related = b
             .ties
             .iter()
-            .filter(|t| !t.opened && (t.rid == i.rid || t.to == i.rid))
+            .filter(|t| t.edge == Edge::Related && (t.rid == i.rid || t.to == i.rid))
             .filter_map(|t| {
                 b.by_rid(if t.rid == i.rid { t.to } else { t.rid })
                     .map(|p| p.id.clone())
             })
             .collect();
+        let children = b.children(i.rid).iter().map(|c| c.id.clone()).collect();
         let progress: Option<Progress> = (b.kind(i) == Kind::Package).then(|| b.progress(i));
         Ok(Shown {
             row: Self::row(&b, i),
             related,
-            opened,
+            parent,
+            origin,
+            children,
             cites: Vec::new(),
             progress,
         })

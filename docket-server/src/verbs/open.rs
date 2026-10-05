@@ -2,11 +2,10 @@
 
 use axum::Json;
 use axum::extract::{Extension, State};
-use sea_orm::{DatabaseConnection, EntityTrait};
+use sea_orm::DatabaseConnection;
 use serde_json::{Value, json};
 
 use docket_core::api::{AddRequest, Decided, KeyRequest, KeySet, NewRequest, Opened};
-use docket_core::fact::{release_theme, releases};
 use docket_core::item::Field;
 use docket_core::rules::{COMPLEXITIES, default_turn, key_spec, prioritise};
 use docket_core::text::py_repr;
@@ -15,6 +14,7 @@ use docket_core::word::{Kind, PRIORITIES};
 use crate::auth::Caller;
 use crate::store::NewItem;
 use crate::verbs::graph::{decided_like, keys_of};
+use crate::verbs::releases::release_id;
 use crate::verbs::view::item_view;
 use crate::verbs::{Call, Failure, KINDS, TURNS, chars, choice, require_owner};
 
@@ -109,7 +109,10 @@ async fn open_item(
     if turn == "user" {
         crate::verbs::turn::ensure_owner_room(&call).await?;
     }
-    let theme = theme_of(&call, req.release.as_deref(), req.theme).await?;
+    let release_id = match req.release.as_deref() {
+        Some(given) => release_id(&call.tx.conn, &call.slug, given).await?,
+        None => None,
+    };
     let title = req.title.trim().to_string();
     let num = call.tx.next_num(&call.slug, &key).await?;
     let r = call
@@ -122,7 +125,8 @@ async fn open_item(
             turn: turn.clone(),
             body: body.trim_end_matches('\n').to_string(),
             complexity: req.complexity,
-            theme,
+            theme: req.theme,
+            release_id,
             group_name: req.group,
             scope: None,
             tags,
@@ -167,36 +171,6 @@ async fn open_item(
     };
     call.tx.commit().await?;
     Ok(out)
-}
-
-/// The theme an item is filed under: the release it is filed for, else the theme given.
-async fn theme_of(
-    call: &Call,
-    release: Option<&str>,
-    theme: Option<String>,
-) -> Result<Option<String>, Failure> {
-    let Some(release) = release else {
-        return Ok(theme);
-    };
-    if theme.is_some() {
-        return Err(Failure::Refused(
-            "give the release or the theme, not both: a release sets the theme.".to_string(),
-        ));
-    }
-    let in_use: i64 = crate::store::scalar(
-        &call.tx.conn,
-        "SELECT COUNT(*) FROM items WHERE project=? AND theme=?",
-        vec![call.slug.clone().into(), release.trim().into()],
-    )
-    .await?
-    .unwrap_or(0);
-    let skills = crate::entities::project::Entity::find_by_id(call.slug.as_str())
-        .one(&call.tx.conn)
-        .await?
-        .map(|p| p.skills)
-        .unwrap_or_default();
-    let listed = releases(skills["releases"].as_str());
-    Ok(release_theme(release, &listed, in_use > 0)?)
 }
 
 /// Add a key to the project's matrix, or change what it means.

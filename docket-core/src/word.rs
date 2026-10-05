@@ -23,6 +23,12 @@ impl Kind {
         matches!(self, Kind::Concept | Kind::Idea)
     }
 
+    /// A kind that is a plan and holds children: a plan, and the story and package kinds before it.
+    #[must_use]
+    pub fn is_plan(self) -> bool {
+        matches!(self, Kind::Audit | Kind::Story | Kind::Package)
+    }
+
     /// A kind kept to read: plans group the work, so nothing new is filed under these or claimed.
     #[must_use]
     pub fn is_read_only(self) -> bool {

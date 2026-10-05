@@ -61,7 +61,7 @@ pub struct Queue {
     /// only this priority and anything more urgent
     #[arg(long, value_parser = PRIORITIES)]
     pub priority: Option<String>,
-    /// only the current release, the first of the releases fact; later releases are left out
+    /// only the current release, the first not shipped; later releases and the backlog are left out
     #[arg(long)]
     pub current_release: bool,
 }
@@ -149,7 +149,7 @@ pub enum Cmd {
         priority: Option<String>,
         #[arg(long)]
         theme: Option<String>,
-        /// the release it is filed for: current, a listed release, or a theme in use; required in a job
+        /// the release it is filed for: current or a release not shipped; none files it in the backlog; required in a job
         #[arg(long, value_name = "RELEASE")]
         release: Option<String>,
         #[arg(long)]
@@ -167,7 +167,7 @@ pub enum Cmd {
         /// the fleet job that saw it, so the brakes count it
         #[arg(long = "from", value_name = "JOB")]
         from: Option<String>,
-        /// the release it is filed for: current, a listed release, or a theme in use; required in a job
+        /// the release it is filed for: current or a release not shipped; none files it in the backlog; required in a job
         #[arg(long, value_name = "RELEASE")]
         release: Option<String>,
     },
@@ -215,7 +215,7 @@ pub enum Cmd {
         #[arg(long)]
         force: bool,
     },
-    /// done, under a sha or what it opened; unblocks waiters
+    /// done, under a sha or what closed it; unblocks waiters
     #[command(alias = "built")]
     Close {
         id: String,
@@ -260,7 +260,7 @@ pub enum Cmd {
     Resume {
         id: String,
         note: Option<String>,
-        /// open a plan's gate while items it opened are still open
+        /// open a plan's gate while items under it are still open
         #[arg(long)]
         force: bool,
     },
@@ -321,18 +321,53 @@ pub enum Cmd {
         /// title, complexity, theme, group, tags or `turn_note`; priority has `docket priority`
         #[arg(long = "set", value_name = "FIELD=VALUE")]
         set: Vec<String>,
+        /// the release it moves to: current, a release not shipped, or "" for the backlog
+        #[arg(long, value_name = "RELEASE")]
+        release: Option<String>,
         #[arg(long, value_name = "TEXT")]
         append: Option<String>,
         #[arg(long, value_name = "FILE|-")]
         body: Option<String>,
     },
-    /// A related B, or A opened-by B; several A at once
+    /// a project's releases: list them, add one, move one's open items, or ship one
+    Releases {
+        /// list (the default), add, move or ship
+        #[arg(value_parser = ["list", "add", "move", "ship"])]
+        action: Option<String>,
+        /// the release: add takes a version, placed by its version order
+        name: Option<String>,
+        /// move: where its open items go, current, a release, or "" for the backlog
+        #[arg(long, value_name = "RELEASE")]
+        to: Option<String>,
+        /// ship: move what is still open there first; without it ship refuses while any is open
+        #[arg(long = "move-open-to", value_name = "RELEASE")]
+        move_open_to: Option<String>,
+        /// add: the date it is meant to ship
+        #[arg(long, value_name = "DATE")]
+        target: Option<String>,
+        /// add: a line on what it is for
+        #[arg(long)]
+        note: Option<String>,
+        /// list: the shipped releases too
+        #[arg(long)]
+        all: bool,
+    },
+    /// A related B, or B the origin of A, what spawned it; several A at once
     Link {
-        /// A... related|opened B
+        /// A... related|origin B
         #[arg(required = true, num_args = 3.., value_name = "A KIND B")]
         words: Vec<String>,
         #[arg(long)]
         remove: bool,
+    },
+    /// A under plan B, its one parent; several A at once
+    Parent {
+        /// A... PLAN, or A... alone with --none
+        #[arg(required = true, num_args = 1.., value_name = "A PLAN")]
+        words: Vec<String>,
+        /// take A out of its plan
+        #[arg(long)]
+        none: bool,
     },
     /// where a plan, story, package, concept, idea, group or theme stands
     Audit {
@@ -591,9 +626,9 @@ pub enum AdminCmd {
         /// latest release, or the later work moves into the plan's; undecided when not given
         #[arg(long, value_parser = ["detach", "move-plan", "pull-children"])]
         held: Option<String>,
-        /// an item whose theme is not a release: to the current release or the backlog, labelled
-        /// with the theme either way; undecided when not given
-        #[arg(long, value_parser = ["current", "backlog"])]
+        /// an item whose theme is not a release: to the current release, the backlog, or its
+        /// plan's release else the backlog, labelled with the theme each way; undecided when not given
+        #[arg(long, value_parser = ["current", "backlog", "plan"])]
         areas: Option<String>,
     },
 }
@@ -690,6 +725,7 @@ const GROUPS: [(&str, &[&str]); 3] = [
             "graph",
             "groups",
             "skills",
+            "releases",
             "admin",
         ],
     ),
@@ -698,7 +734,7 @@ const GROUPS: [(&str, &[&str]); 3] = [
         &[
             "next", "complex", "show", "log", "new", "add", "start", "unclaim", "close", "drop",
             "reopen", "wait", "dep", "resume", "ask", "decide", "rate", "priority", "edit", "link",
-            "search", "similar", "deps", "files", "check", "stale",
+            "parent", "search", "similar", "deps", "files", "check", "stale",
         ],
     ),
     ("Lead", &["wip", "retry", "machines"]),

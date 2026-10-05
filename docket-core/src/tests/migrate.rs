@@ -408,3 +408,77 @@ fn test_a_wait_on_the_later_of_two_plans_is_still_a_cycle() {
         }
     ));
 }
+
+#[test]
+fn test_an_area_themed_item_takes_its_plans_release_and_the_backlog_without_one() {
+    let project = ProjectDump {
+        slug: s("o/p"),
+        keys: serde_json::json!([{"key": "T", "kind": "work"}, {"key": "A", "kind": "audit"}]),
+        skills: serde_json::json!({"releases": "0.3 0.4"}),
+        ..ProjectDump::default()
+    };
+    let item = |id: &str, theme: &str, opened: &[&str]| ItemDump {
+        project: s("o/p"),
+        id: s(id),
+        title: s(id),
+        state: s("open"),
+        theme: Some(s(theme)),
+        opened: opened.iter().map(|o| s(o)).collect(),
+        ..ItemDump::default()
+    };
+    let items = [
+        item("A1", "0.4", &[]),
+        item("A2", "tooling", &["A1"]),
+        item("T1", "tooling", &["A2"]),
+        item("T2", "tooling", &[]),
+    ];
+    let rows = Rows {
+        project: &project,
+        items: items.iter().collect(),
+        events: Vec::new(),
+    };
+    let c = plan(
+        &rows,
+        Rules {
+            held: Some(Held::PullChildren),
+            areas: Some(Areas::Plan),
+        },
+    );
+    for (id, release) in [("A2", Some(s("0.4"))), ("T1", Some(s("0.4"))), ("T2", None)] {
+        assert!(
+            has(
+                &c,
+                &Change::InRelease {
+                    id: s(id),
+                    release: release.clone()
+                }
+            ),
+            "{id} not in {release:?}"
+        );
+    }
+    assert!(has(
+        &c,
+        &Change::Label {
+            id: s("T1"),
+            label: s("area:tooling")
+        }
+    ));
+}
+
+#[test]
+fn test_a_parent_already_set_is_kept_and_held_like_an_opened_one() {
+    let mut page: DumpPage = serde_json::from_str(PAGE).unwrap();
+    let t2 = page.items.iter_mut().find(|i| i.id == "T2").unwrap();
+    t2.opened.clear();
+    t2.parent = Some(s("A1"));
+    let c = plan(&Rows::of(&page)[0], Rules::default());
+    assert!(has(
+        &c,
+        &Change::Parent {
+            id: s("T2"),
+            parent: s("A1")
+        }
+    ));
+    let held = risky(&c, |k| matches!(k, Case::HeldPlan { .. }));
+    assert_eq!(held.len(), 1, "{:#?}", c.risky);
+}

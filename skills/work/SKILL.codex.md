@@ -49,8 +49,9 @@ Run from the project root. Note the branch the session started on (`git branch
    number you were asked for is reached.
 
 Close a ticket to its full fix. A part left undone is its own ticket under the
-same plan before the close: `docket new T "..." --body -`, `docket link T22
-opened A3`, `docket edit T14 --append "Closed short of its fix: ..."`.
+same plan before the close: `docket new T "..." --body -`, `docket parent T22
+A3`, `docket link T22 origin T14`, `docket edit T14 --append "Closed short of
+its fix: ..."`.
 
 ## Choices
 
@@ -76,7 +77,8 @@ Every item filed names its release with `--release`, by what it is: a
 crash, hang, data loss, wrong numbers, upgrade safety, security, privacy or
 release work is `current` at high priority; a blocker or member of current
 work is `current`; otherwise a feature or polish goes to a later release, and
-tests, CI and hooks to the theme the project keeps for them. The body's last line says
+tests, CI and hooks to the backlog (`--release ""`) under the theme the project keeps
+for them. The body's last line says
 which and why (`**Release.** current: ...`).
 
 A side finding is filed only when it is critical or high, or the order above

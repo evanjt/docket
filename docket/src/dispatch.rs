@@ -14,12 +14,12 @@ use docket_core::machine::Machine;
 use crate::job::Change;
 
 /// The job role an item's kind gives when the lead names none: an investigation's or a decided
-/// question's planning, anything else a build. A plan that has opened something is audited and one
-/// that has opened nothing is planned, as the queue gives it.
+/// question's planning, anything else a build. A plan with children is audited and one with none is
+/// planned, as the queue gives it.
 #[must_use]
-pub fn role_of(kind: &str, opened_any: bool) -> &'static str {
+pub fn role_of(kind: &str, has_children: bool) -> &'static str {
     match kind {
-        "audit" if opened_any => "audit",
+        "audit" if has_children => "audit",
         "audit" | "research" | "decision" => "plan",
         _ => "build",
     }

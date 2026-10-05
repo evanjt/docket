@@ -16,7 +16,8 @@ INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, group
          (3, 'o/p', 'CON', 1, 'Concept', 'open', 'agent', '[]', '', NULL, 'o3', 'u3');
 INSERT INTO items (rid, project, key, num, title, state, resolution, superseded_by, tags, opened_at, updated_at)
   VALUES (4, 'o/p', 'T', 2, 'Old', 'dropped', 'replaced', 1, '[]', 'o4', 'u4');
-INSERT INTO links (rid, kind, to_rid) VALUES (1, 'opened', 2), (1, 'related', 3);
+UPDATE items SET parent_rid=2 WHERE rid=1;
+INSERT INTO links (rid, kind, to_rid) VALUES (1, 'related', 3);
 INSERT INTO links (rid, kind, to_path, to_line) VALUES (1, 'cites_file', 'src/a.rs', 7);
 INSERT INTO events (uid, project, rid, at, host, kind) VALUES ('e1', 'o/p', 1, 'o1', 'devbox', 'opened');
 "#;
@@ -79,11 +80,11 @@ async fn test_show_matches_the_json_of_docket_show() {
         "claim_runner": null, "claim_job": null, "claim_on": null,
         "wait_on": null, "wait_ref": null, "wait_since": null,
         "decision": null, "decided_at": null, "resolution": null,
-        "scope": null, "complexity": null, "theme": null, "rank": null,
+        "scope": null, "complexity": null, "theme": null, "release": null, "rank": null,
         "tags": ["high", "single"], "body": "Body text", "conflict": 0,
         "opened_at": "o1", "updated_at": "u1",
         "group": "g", "word": "ready", "priority": "high", "superseded_by": null,
-        "related": ["CON1"], "opened": ["PK1"],
+        "related": ["CON1"], "parent": "PK1", "origin": [], "children": [],
         "cites": [{"path": "src/a.rs", "line": 7, "kind": "cites_file"}]
         }"#,
     )
@@ -147,7 +148,9 @@ async fn test_resources_list_filter_and_fetch_by_key() {
     assert_eq!(dropped[0]["id"], "T2");
 
     assert_eq!(get("/items/1").await.1["body"], "Body text");
-    assert_eq!(get("/links").await.1.as_array().unwrap().len(), 3);
+    assert_eq!(get("/links").await.1.as_array().unwrap().len(), 2);
+    let (_, children) = get("/items?filter=%7B%22parent_rid%22%3A2%7D").await;
+    assert_eq!(children[0]["id"], "T1");
     assert_eq!(get("/events").await.1[0]["host"], "devbox");
     assert_eq!(get("/projects").await.1[0]["slug"], "o/p");
 }
@@ -281,7 +284,7 @@ INSERT INTO projects (slug, keys, created_at, updated_at) VALUES ('o/p',
 INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, opened_at, updated_at)
   VALUES (1, 'o/p', 'A', 1, 'Plan', 'open', 'agent', '[]', '', 'o1', 'u1'),
          (2, 'o/p', 'T', 1, 'Work', 'open', 'agent', '[]', '', 'o2', 'u2');
-INSERT INTO links (rid, kind, to_rid) VALUES (2, 'opened', 1);
+UPDATE items SET parent_rid=1 WHERE rid=2;
 "#,
     )
     .await;

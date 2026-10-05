@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::member::{Tie, opened_under};
+use crate::member::{Tie, descendants};
 use crate::word::Kind;
 
 /// The stored facts the ready queue filters and orders by; `tier` is the item's own, 0 for critical.
@@ -17,6 +17,8 @@ pub struct Candidate<'a> {
     pub conflict: bool,
     pub complexity: Option<&'a str>,
     pub theme: Option<&'a str>,
+    /// The release by name; none is the backlog.
+    pub release: Option<&'a str>,
     pub tier: usize,
     pub opened_at: &'a str,
 }
@@ -24,7 +26,7 @@ pub struct Candidate<'a> {
 /// The three roles a session takes from the queue with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
-    /// A goal into tickets: a plan that has opened nothing yet, an investigation, a decided question.
+    /// A goal into tickets: a plan with nothing under it yet, an investigation, a decided question.
     Plan,
     /// The tickets.
     Work,
@@ -56,28 +58,35 @@ pub struct Filter<'a> {
     pub under: Option<&'a HashSet<i64>>,
     pub complexity: Option<&'a str>,
     pub theme: Option<&'a str>,
-    /// The releases in the order they ship, from the `releases` fact; empty orders by priority alone.
+    /// The releases not yet shipped, in the order they ship.
     pub releases: &'a [String],
     /// Keep only items of the current release, the first of `releases`.
     pub current_release_only: bool,
 }
 
-/// Where an item's release falls: its theme's place in the releases, and 0, the current release,
-/// for no theme or a theme the releases do not list.
+/// Where an item's release falls among the releases not yet shipped: its position, and the backlog
+/// after them all. `None` for a release they do not list, which no queue offers.
 #[must_use]
-pub fn release_rank(releases: &[String], theme: Option<&str>) -> usize {
-    theme
-        .and_then(|t| releases.iter().position(|r| r == t))
-        .unwrap_or(0)
+pub fn release_rank(releases: &[String], release: Option<&str>) -> Option<usize> {
+    match release {
+        None => Some(releases.len()),
+        Some(name) => releases.iter().position(|r| r == name),
+    }
 }
 
-/// The role an open item is taken by. A plan that has opened something is due for its audit once
-/// everything it opened, at any depth, is closed; before that it belongs to no role.
+/// Whether an item is in the current release, the first not shipped.
+#[must_use]
+pub fn in_current(releases: &[String], release: Option<&str>) -> bool {
+    release.is_some() && release_rank(releases, release) == Some(0)
+}
+
+/// The role an open item is taken by. A plan with children is due for its audit once everything
+/// under it, at any depth, is closed; before that it belongs to no role.
 fn role_of(c: &Candidate, ties: &[Tie], open: &HashSet<i64>) -> Option<Role> {
     match c.kind {
         Kind::Work => Some(Role::Work),
         Kind::Audit => {
-            let under = opened_under(ties, c.rid);
+            let under = descendants(ties, c.rid);
             if under.is_empty() {
                 Some(Role::Plan)
             } else if under.is_disjoint(open) {
@@ -101,7 +110,8 @@ fn takeable(c: &Candidate, f: &Filter, ties: &[Tie], open: &HashSet<i64>) -> boo
         && f.under.is_none_or(|u| u.contains(&c.rid))
         && f.complexity.is_none_or(|x| c.complexity == Some(x))
         && f.key.is_none_or(|k| c.key == k)
-        && (!f.current_release_only || release_rank(f.releases, c.theme) == 0)
+        && release_rank(f.releases, c.release).is_some()
+        && (!f.current_release_only || in_current(f.releases, c.release))
         && f.theme
             .is_none_or(|t| c.theme.is_some_and(|mine| mine.eq_ignore_ascii_case(t)))
 }
@@ -123,7 +133,7 @@ pub fn next(items: &[Candidate], ties: &[Tie], filter: &Filter, limit: usize) ->
     };
     rows.sort_by_key(|c| {
         (
-            release_rank(filter.releases, c.theme),
+            release_rank(filter.releases, c.release),
             role_rank(c),
             c.tier,
             c.opened_at,
@@ -154,6 +164,7 @@ pub struct OwnerRow<'a> {
     pub derived: bool,
     pub need: Option<&'a str>,
     pub theme: Option<&'a str>,
+    pub release: Option<&'a str>,
     pub tier: usize,
     pub asked_at: &'a str,
 }
@@ -218,7 +229,7 @@ pub fn owner_queue(items: &[OwnerRow], filter: &OwnerFilter) -> OwnerQueue {
     rows.sort_by_key(|r| {
         (
             group_of(r).0,
-            release_rank(filter.releases, r.theme),
+            release_rank(filter.releases, r.release).unwrap_or(usize::MAX),
             r.tier,
             r.asked_at,
             r.rid,

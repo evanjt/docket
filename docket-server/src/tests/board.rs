@@ -40,9 +40,10 @@ INSERT INTO dependencies (rid, on_rid, created_at) VALUES (10, 1, '2026-01-01T00
 INSERT INTO items (rid, project, key, num, title, state, turn, resolution, tags, body, opened_at, updated_at) VALUES
   (11, 'o/p', 'A', 2, 'Due plan', 'open', 'agent', NULL, '[]', 'x', '2026-01-01T00:00:00Z', 'u11'),
   (12, 'o/p', 'T', 7, 'Due work', 'done', NULL, 'def5678', '[]', 'x', '2026-01-01T00:00:00Z', 'u12');
-INSERT INTO links (rid, kind, to_rid) VALUES
-  (1, 'opened', 2), (5, 'opened', 2), (1, 'related', 3), (3, 'related', 1), (1, 'opened', 4), (5, 'opened', 4),
-  (8, 'opened', 2), (8, 'opened', 4), (12, 'opened', 11);
+UPDATE items SET parent_rid=2 WHERE rid IN (1, 5, 8);
+UPDATE items SET parent_rid=4 WHERE rid=2;
+UPDATE items SET parent_rid=11 WHERE rid=12;
+INSERT INTO links (rid, kind, to_rid) VALUES (1, 'related', 3), (3, 'related', 1), (8, 'origin', 7);
 INSERT INTO links (rid, kind, to_path, to_line) VALUES
   (1, 'cites_file', 'src/a.rs', 3), (5, 'cites_file', 'src/a.rs', NULL), (6, 'cites_test', 'tests/t.rs', NULL);
 INSERT INTO events (uid, project, rid, at, host, kind, note, data) VALUES
@@ -162,7 +163,15 @@ async fn test_deps_lists_each_tie_and_the_mentions() {
     let d = s.ok("/deps/T1?project=o/p").await;
     assert_eq!(ids(&d["holds"]), ["T6"]);
     assert_eq!(ids(&d["related"]), ["CON1"]);
-    assert_eq!(ids(&d["opened_by"]), ["PK1", "A1"]);
+    assert_eq!(ids(&d["parent"]), ["PK1"]);
+    assert_eq!(ids(&d["children"]), Vec::<&str>::new());
+    let package = s.ok("/deps/PK1?project=o/p").await;
+    assert_eq!(ids(&package["parent"]), ["A1"]);
+    assert_eq!(ids(&package["children"]), ["T1", "T2", "T4"]);
+    let question = s.ok("/deps/Q1?project=o/p").await;
+    assert_eq!(ids(&question["spawned"]), ["T4"]);
+    let t4 = s.ok("/deps/T4?project=o/p").await;
+    assert_eq!(ids(&t4["origin"]), ["Q1"]);
     assert_eq!(ids(&d["group"]), ["T3"]);
     assert_eq!(ids(&d["same_files"]), ["T2"]);
     assert_eq!(d["same_files"][0]["shared"], 1);
@@ -181,7 +190,7 @@ async fn test_deps_words_another_projects_row_by_its_own_keys() {
                 INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, opened_at, updated_at) VALUES \
                 (20, 'o/r', 'P', 1, 'Other package', 'open', 'agent', '[]', '', 'o', 'u'), \
                 (21, 'o/r', 'T', 1, 'Other member', 'open', 'agent', '[]', '', 'o', 'u'); \
-                INSERT INTO links (rid, kind, to_rid) VALUES (21, 'opened', 20); \
+                UPDATE items SET parent_rid=20 WHERE rid=21; \
                 INSERT INTO links (rid, kind, to_path) VALUES (20, 'cites_file', 'src/a.rs');";
     s.db.seed(seed).await;
     let d = s.ok("/deps/T1?project=o/p").await;
@@ -289,7 +298,7 @@ async fn test_graph_nodes_carry_progress_and_due_as_the_core_counts_them() {
     let g = s.ok("/graph?project=o/p").await;
     assert_eq!(
         node(&g, "A1")["progress"],
-        json!({ "done": 1, "total": 3, "live": 1 })
+        json!({ "done": 1, "total": 4, "live": 1 })
     );
     assert_eq!(node(&g, "A1")["due"], false);
     assert_eq!(
@@ -306,18 +315,21 @@ async fn test_graph_nodes_carry_progress_and_due_as_the_core_counts_them() {
 }
 
 #[tokio::test]
-async fn test_graph_counts_what_a_plans_tickets_opened_in_turn() {
+async fn test_graph_counts_what_sits_under_a_plans_sub_plan() {
     let s = Seeded::new().await;
     s.db.seed(
         "INSERT INTO items (rid, project, key, num, title, state, turn, tags, opened_at, updated_at) VALUES \
-         (13, 'o/p', 'T', 8, 'Opened by the due work', 'open', 'agent', '[]', '2026-01-01T00:00:00Z', 'u13'); \
-         INSERT INTO links (rid, kind, to_rid) VALUES (13, 'opened', 12);",
+         (14, 'o/p', 'A', 3, 'Sub plan', 'open', 'agent', '[]', '2026-01-01T00:00:00Z', 'u14'), \
+         (13, 'o/p', 'T', 8, 'Under the sub plan', 'open', 'agent', '[]', '2026-01-01T00:00:00Z', 'u13'); \
+         UPDATE items SET parent_rid=11 WHERE rid=14; \
+         UPDATE items SET parent_rid=14 WHERE rid=13; \
+         INSERT INTO links (rid, kind, to_rid) VALUES (13, 'origin', 12);",
     )
     .await;
     let g = s.ok("/graph?project=o/p").await;
     assert_eq!(
         node(&g, "A2")["progress"],
-        json!({ "done": 1, "total": 2, "live": 0 })
+        json!({ "done": 1, "total": 3, "live": 0 })
     );
     assert_eq!(node(&g, "A2")["due"], false);
     let m = s.ok("/summary?project=o/p").await;
@@ -341,20 +353,23 @@ async fn test_check_finds_an_open_audit_and_bare_bodies() {
 
 const STALLED: &str = r#"
 INSERT INTO projects (slug, keys, themes, skills, remotes, created_at, updated_at) VALUES ('o/s',
-  '[{"key":"T","kind":"work"},{"key":"PK","kind":"package"}]', '[]', '{"releases":"1.0 1.1"}', '[]', 'c', 'u');
-INSERT INTO items (rid, project, key, num, title, state, turn, wait_on, wait_item, wait_ref, wait_since, theme, tags, body, opened_at, updated_at) VALUES
+  '[{"key":"T","kind":"work"},{"key":"PK","kind":"package"}]', '[]', '{}', '[]', 'c', 'u');
+INSERT INTO releases (id, project, name, position) VALUES (11, 'o/s', '1.0', 0), (12, 'o/s', '1.1', 1);
+INSERT INTO items (rid, project, key, num, title, state, turn, wait_on, wait_item, wait_ref, wait_since, release_id, tags, body, opened_at, updated_at) VALUES
   (101, 'o/s', 'PK', 1, 'First package', 'open', 'agent', 'condition', NULL, 'everything it opened is closed', 'w', NULL, '[]', 'x', 'o', 'u'),
   (102, 'o/s', 'PK', 2, 'Second package', 'open', 'agent', 'condition', NULL, 'everything it opened is closed', 'w', NULL, '[]', 'x', 'o', 'u'),
   (103, 'o/s', 'T', 1, 'Member of the first', 'open', 'agent', 'item', 102, 'PK2', 'w', NULL, '[]', 'x', 'o', 'u'),
   (104, 'o/s', 'T', 2, 'Member of the second', 'open', 'agent', 'item', 101, 'PK1', 'w', NULL, '[]', 'x', 'o', 'u'),
-  (105, 'o/s', 'PK', 3, 'Current package', 'open', 'agent', 'condition', NULL, 'everything it opened is closed', 'w', '1.0', '[]', 'x', 'o', 'u'),
-  (106, 'o/s', 'T', 3, 'Later member', 'open', 'agent', NULL, NULL, NULL, NULL, '1.1', '[]', 'x', 'o', 'u'),
-  (107, 'o/s', 'T', 4, 'Current waiter', 'open', 'agent', 'item', 108, 'T5', 'w', NULL, '[]', 'x', 'o', 'u'),
-  (108, 'o/s', 'T', 5, 'Later item', 'open', 'agent', NULL, NULL, NULL, NULL, '1.1', '[]', 'x', 'o', 'u'),
+  (105, 'o/s', 'PK', 3, 'Current package', 'open', 'agent', 'condition', NULL, 'everything it opened is closed', 'w', 11, '[]', 'x', 'o', 'u'),
+  (106, 'o/s', 'T', 3, 'Later member', 'open', 'agent', NULL, NULL, NULL, NULL, 12, '[]', 'x', 'o', 'u'),
+  (107, 'o/s', 'T', 4, 'Current waiter', 'open', 'agent', 'item', 108, 'T5', 'w', 11, '[]', 'x', 'o', 'u'),
+  (108, 'o/s', 'T', 5, 'Later item', 'open', 'agent', NULL, NULL, NULL, NULL, 12, '[]', 'x', 'o', 'u'),
   (109, 'o/s', 'T', 6, 'Waiter on a drop', 'open', 'agent', NULL, NULL, NULL, NULL, NULL, '[]', 'x', 'o', 'u');
 INSERT INTO items (rid, project, key, num, title, state, resolution, tags, body, opened_at, updated_at) VALUES
   (110, 'o/s', 'T', 7, 'Dropped', 'dropped', 'not needed', '[]', 'x', 'o', 'u');
-INSERT INTO links (rid, kind, to_rid) VALUES (103, 'opened', 101), (104, 'opened', 102), (106, 'opened', 105);
+UPDATE items SET parent_rid=101 WHERE rid=103;
+UPDATE items SET parent_rid=102 WHERE rid=104;
+UPDATE items SET parent_rid=105 WHERE rid=106;
 INSERT INTO dependencies (rid, on_rid, created_at) VALUES (103, 102, 'w'), (104, 101, 'w'), (107, 108, 'w'),
   (109, 110, 'w');
 "#;
@@ -402,14 +417,15 @@ async fn test_summary_nets_the_current_tickets_closed_against_those_opened() {
     s.db.seed(&format!(
         r#"
 INSERT INTO projects (slug, keys, themes, skills, remotes, created_at, updated_at) VALUES ('o/n',
-  '[{{"key":"T","kind":"work"}},{{"key":"Q","kind":"decision"}}]', '[]', '{{"releases":"1.0 1.1"}}', '[]', 'c', 'u');
-INSERT INTO items (rid, project, key, num, title, state, turn, resolution, theme, tags, body, opened_at, updated_at) VALUES
+  '[{{"key":"T","kind":"work"}},{{"key":"Q","kind":"decision"}}]', '[]', '{{}}', '[]', 'c', 'u');
+INSERT INTO releases (id, project, name, position) VALUES (21, 'o/n', '1.0', 0), (22, 'o/n', '1.1', 1);
+INSERT INTO items (rid, project, key, num, title, state, turn, resolution, release_id, tags, body, opened_at, updated_at) VALUES
   (201, 'o/n', 'Q', 1, 'Carried out', 'done', NULL, 'carried by T1', NULL, '[]', 'x', 'o', 'u'),
   (202, 'o/n', 'Q', 2, 'Opened nothing', 'done', NULL, 'opened none', NULL, '[]', 'x', 'o', 'u'),
-  (203, 'o/n', 'T', 1, 'Current ticket', 'open', 'agent', NULL, NULL, '[]', 'x', 'o', 'u'),
-  (204, 'o/n', 'T', 2, 'Later ticket', 'open', 'agent', NULL, '1.1', '[]', 'x', 'o', 'u'),
-  (205, 'o/n', 'T', 3, 'Closed ticket', 'done', NULL, 'abc1234', '1.0', '[]', 'x', 'o', 'u');
-INSERT INTO links (rid, kind, to_rid) VALUES (203, 'opened', 201);
+  (203, 'o/n', 'T', 1, 'Current ticket', 'open', 'agent', NULL, 21, '[]', 'x', 'o', 'u'),
+  (204, 'o/n', 'T', 2, 'Later ticket', 'open', 'agent', NULL, 22, '[]', 'x', 'o', 'u'),
+  (205, 'o/n', 'T', 3, 'Closed ticket', 'done', NULL, 'abc1234', 21, '[]', 'x', 'o', 'u');
+INSERT INTO links (rid, kind, to_rid) VALUES (203, 'origin', 201);
 INSERT INTO events (uid, project, rid, at, host, kind, note, data) VALUES
   ('n1', 'o/n', 205, '{old}', 'devbox', 'opened', NULL, NULL),
   ('n2', 'o/n', 201, '{recent}', 'devbox', 'closed', 'carried by T1', NULL),
@@ -461,7 +477,7 @@ async fn test_summary_reads_claims_plans_and_due_audits() {
             &m["plans"][0]["total"],
             &m["plans"][0]["live"]
         ),
-        (&json!(1), &json!(3), &json!(1))
+        (&json!(1), &json!(4), &json!(1))
     );
     assert_eq!(ids(&m["due"]), ["A2"]);
 }
@@ -491,7 +507,7 @@ async fn test_audit_sections_principles_and_bound_items() {
     let s = Seeded::new().await;
     let a = s.ok("/audit?project=o/p&id=A1").await;
     assert_eq!(a["target"]["id"], "A1");
-    assert_eq!(ids(&a["rows"]), ["T1", "T2", "T4"]);
+    assert_eq!(ids(&a["rows"]), ["T1", "PK1", "T2", "T4"]);
     assert_eq!(a["principles"], json!([[1, "One owner."], [2, "No gaps."]]));
     assert_eq!(a["served"]["1"], json!([{"id": "T1", "state": "open"}]));
     let pk = s.ok("/audit?project=o/p&id=PK1").await;

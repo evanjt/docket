@@ -1,6 +1,6 @@
 //! A SQLite docket database copied into an empty Postgres one: every row kept with its rid, event
 //! seq and link id, the search and assignment rows rebuilt, and the counts compared per project and
-//! table before the copy commits.
+//! table before its opened links split into parents and origins and the copy commits.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -216,6 +216,9 @@ pub async fn import(from: &str, to: &DatabaseConnection) -> Result<Counts, Strin
     tx.execute_unprepared("SET CONSTRAINTS ALL DEFERRED")
         .await
         .map_err(|e| e.to_string())?;
+    docket_migration::parents::admit_opened(&tx)
+        .await
+        .map_err(|e| e.to_string())?;
     for table in &TABLES {
         copy(&source, &tx, table).await?;
     }
@@ -234,6 +237,9 @@ pub async fn import(from: &str, to: &DatabaseConnection) -> Result<Counts, Strin
     let had = counts(&source).await?;
     let has = counts(&tx).await?;
     compare(&had, &has)?;
+    docket_migration::parents::split(&tx)
+        .await
+        .map_err(|e| e.to_string())?;
     tx.commit().await.map_err(|e| e.to_string())?;
     Ok(has)
 }

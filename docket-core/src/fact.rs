@@ -47,7 +47,7 @@ pub const FACTS: [(&str, &str); 17] = [
     ),
     (
         "releases",
-        "the releases in the order they ship, the current first, as \"1.0 1.1 2.0\"; an item's theme names its release, and work with no theme or a theme not listed is the current release's. next orders by release, then priority",
+        "the releases not yet shipped in the order they ship, the current first, read from the release rows: docket releases add, move and ship change them. An item with no release is in the backlog. next orders by release, then priority",
     ),
     (
         "job_timeout",
@@ -125,7 +125,7 @@ pub const DEFAULTS: [(&str, &str); 8] = [
 ];
 
 /// Facts docket writes itself, never set by hand.
-pub const WRITTEN: [&str; 1] = ["flow"];
+pub const WRITTEN: [&str; 2] = ["flow", "releases"];
 
 /// Facts without which a lead cannot dispatch: the models its jobs run on.
 pub const NEEDED: [&str; 1] = ["models"];
@@ -305,6 +305,11 @@ pub fn check(key: &str, value: &str) -> Result<(), Refused> {
     if value.is_empty() {
         return Ok(());
     }
+    if key == "releases" {
+        return Err(Refused(
+            "releases are rows: docket releases add, move and ship change them".to_string(),
+        ));
+    }
     if WRITTEN.contains(&key) {
         return Err(Refused(format!(
             "{key} is written by docket, not set by hand"
@@ -333,60 +338,7 @@ fn check_shape(key: &str, value: &str) -> Result<(), Refused> {
     if key == "models" {
         models_of(value).map_err(|why| Refused(format!("models: {why}")))?;
     }
-    if key == "releases" {
-        let names = releases(Some(value));
-        if let Some(twice) = names
-            .iter()
-            .enumerate()
-            .find_map(|(i, n)| names[..i].contains(n).then_some(n))
-        {
-            return Err(Refused(format!("releases names {twice} twice")));
-        }
-    }
     Ok(())
-}
-
-/// The releases a `releases` value lists, in the order they ship.
-#[must_use]
-pub fn releases(value: Option<&str>) -> Vec<String> {
-    value
-        .unwrap_or_default()
-        .split_whitespace()
-        .map(str::to_string)
-        .collect()
-}
-
-/// The theme an item filed for a release carries: `current` is the first release, and none while the
-/// project lists none; a listed release, or a theme items already carry (an area outside the releases,
-/// which ranks with the current release), is itself.
-///
-/// # Errors
-/// Refused when the name is empty, or is neither a release nor a theme in use.
-pub fn release_theme(
-    given: &str,
-    listed: &[String],
-    in_use: bool,
-) -> Result<Option<String>, Refused> {
-    let given = given.trim();
-    let choices = if listed.is_empty() {
-        String::new()
-    } else {
-        format!(" one of {},", listed.join(" "))
-    };
-    if given.is_empty() {
-        return Err(Refused(format!(
-            "a release is current,{choices} or a theme items already carry"
-        )));
-    }
-    if given == "current" {
-        return Ok(listed.first().cloned());
-    }
-    if in_use || listed.iter().any(|r| r == given) {
-        return Ok(Some(given.to_string()));
-    }
-    Err(Refused(format!(
-        "{given} is neither a release nor a theme in use here: give current,{choices} or a theme items already carry"
-    )))
 }
 
 /// Digits only, and not all of them zero.

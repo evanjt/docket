@@ -9,7 +9,7 @@ use docket_core::rows::Row;
 use crate::py::{Py, cut, or_none};
 
 /// The stored columns in the order the database holds them, the order `--json` prints them in.
-pub const COLUMNS: [&str; 30] = [
+pub const COLUMNS: [&str; 31] = [
     "project",
     "key",
     "num",
@@ -30,6 +30,7 @@ pub const COLUMNS: [&str; 30] = [
     "resolution",
     "complexity",
     "theme",
+    "release",
     "rank",
     "tags",
     "body",

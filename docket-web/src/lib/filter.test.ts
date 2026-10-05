@@ -44,8 +44,8 @@ describe('filter state', () => {
 
   it('applies what the routes leave out to rows', () => {
     const rows = [
-      { id: 'B1', priority: 'low', complexity: 'low', state: 'open', theme: '1.1' },
-      { id: 'B2', priority: 'critical', complexity: 'high', state: 'done', theme: null },
+      { id: 'B1', priority: 'low', complexity: 'low', state: 'open', release: '1.1' },
+      { id: 'B2', priority: 'critical', complexity: 'high', state: 'done', release: '1.0' },
     ];
     const releases = ['1.0', '1.1'];
     expect(rows.filter((r) => applies(r, parse('priority=high'), releases, scale.priorities)).map((r) => r.id)).toEqual(['B2']);

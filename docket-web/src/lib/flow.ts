@@ -34,10 +34,14 @@ export function isClosed(word: string): boolean {
 export interface Board {
   nodes: Map<string, GraphNode>;
   byRid: Map<number, GraphNode>;
-  /** Items each item opened: the edges `child opened parent`, read from the parent. */
+  /** The children of each plan: the edges `child parent plan`, read from the plan. */
   children: Map<string, string[]>;
-  /** What opened each item. */
+  /** The plan each item is under, as a list of one. */
   parents: Map<string, string[]>;
+  /** What spawned each item. */
+  origins: Map<string, string[]>;
+  /** What each item spawned. */
+  spawned: Map<string, string[]>;
   related: Map<string, string[]>;
   cites: Map<string, string[]>;
 }
@@ -53,11 +57,16 @@ export function board(g: Graph): Board {
   const nodes = new Map(g.nodes.map((n) => [n.id, n]));
   const byRid = new Map<number, GraphNode>();
   for (const n of g.nodes) if (typeof n.rid === 'number') byRid.set(n.rid, n);
-  const b: Board = { nodes, byRid, children: new Map(), parents: new Map(), related: new Map(), cites: new Map() };
+  const b: Board = {
+    nodes, byRid, children: new Map(), parents: new Map(), origins: new Map(), spawned: new Map(), related: new Map(), cites: new Map(),
+  };
   for (const e of g.edges) {
-    if (e.kind === 'opened') {
+    if (e.kind === 'parent') {
       push(b.children, e.to, e.from);
       push(b.parents, e.from, e.to);
+    } else if (e.kind === 'origin') {
+      push(b.origins, e.from, e.to);
+      push(b.spawned, e.to, e.from);
     } else if (e.kind === 'related') {
       push(b.related, e.from, e.to);
       push(b.related, e.to, e.from);

@@ -4,10 +4,12 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::LazyLock;
 
 use regex::Regex;
-use sea_orm::{ConnectionTrait, DbErr, EntityTrait, Value};
+use sea_orm::{ConnectionTrait, DbErr, Value};
 
 use docket_core::api::Progress;
 use docket_core::item::{Field, Item};
+use docket_core::member::{Edge, Neighbours, Tie, ancestors, descendants};
+use docket_core::release::Listed;
 use docket_core::rules::{GATE, kind_of};
 use docket_core::stall::Target;
 use docket_core::text::split_id;
@@ -33,52 +35,61 @@ pub fn is_standing(p: &ProjectRow, key: &str) -> bool {
     kind_of(&p.rules, key).is_ok_and(Kind::is_standing)
 }
 
-/// The open packages that opened rid, by number.
-pub async fn packages_of<C: ConnectionTrait>(
-    c: &C,
-    p: &ProjectRow,
-    rid: i64,
-) -> Result<Vec<Item>, DbErr> {
-    let pk = keys_of(p, &[Kind::Package]);
-    if pk.is_empty() {
-        return Ok(Vec::new());
+/// Every parent edge of the project, child to plan.
+pub async fn parent_ties<C: ConnectionTrait>(c: &C, slug: &str) -> Result<Vec<Tie>, DbErr> {
+    let rows = c
+        .query_all_raw(sql(
+            "SELECT rid, parent_rid FROM items WHERE project=? AND parent_rid IS NOT NULL ORDER BY rid",
+            vec![slug.into()],
+        ))
+        .await?;
+    let mut out = Vec::with_capacity(rows.len());
+    for r in rows {
+        out.push(Tie {
+            rid: r.try_get_by_index(0)?,
+            edge: Edge::Parent,
+            to: r.try_get_by_index(1)?,
+        });
     }
-    let mut values: Vec<Value> = vec![rid.into()];
-    values.extend(pk.iter().map(|k| k.clone().into()));
-    items(
-        c,
-        &format!(
-            "SELECT p.* FROM links l JOIN items p ON p.rid=l.to_rid WHERE l.rid=? AND l.kind='opened' \
-             AND p.state='open' AND p.key IN ({}) ORDER BY p.num",
-            marks(pk.len())
-        ),
-        values,
-    )
-    .await
+    Ok(out)
 }
 
-/// The open package that opened rid, or none.
+/// The open package rid belongs to, or none.
 pub async fn package_of<C: ConnectionTrait>(
     c: &C,
     p: &ProjectRow,
     rid: i64,
 ) -> Result<Option<Item>, DbErr> {
-    Ok(packages_of(c, p, rid).await?.into_iter().next())
+    let pk = keys_of(p, &[Kind::Package]);
+    if pk.is_empty() {
+        return Ok(None);
+    }
+    let mut values: Vec<Value> = vec![rid.into()];
+    values.extend(pk.iter().map(|k| k.clone().into()));
+    Ok(items(
+        c,
+        &format!(
+            "SELECT p.* FROM items i JOIN items p ON p.rid=i.parent_rid WHERE i.rid=? \
+             AND p.state='open' AND p.key IN ({})",
+            marks(pk.len())
+        ),
+        values,
+    )
+    .await?
+    .into_iter()
+    .next())
 }
 
-/// What a package holds: the items it opened, the direct ones only.
+/// What a package holds: its children, the direct ones only.
 pub async fn package_members<C: ConnectionTrait>(
     c: &C,
     prid: i64,
     open_only: bool,
 ) -> Result<Vec<Item>, DbErr> {
-    let open = if open_only { "AND i.state='open' " } else { "" };
+    let open = if open_only { "AND state='open' " } else { "" };
     items(
         c,
-        &format!(
-            "SELECT i.* FROM links l JOIN items i ON i.rid=l.rid WHERE l.to_rid=? AND l.kind='opened' \
-             {open}ORDER BY i.key, i.num"
-        ),
+        &format!("SELECT * FROM items WHERE parent_rid=? {open}ORDER BY key, num"),
         vec![prid.into()],
     )
     .await
@@ -98,50 +109,54 @@ pub async fn package_progress<C: ConnectionTrait>(c: &C, prid: i64) -> Result<Pr
     })
 }
 
-/// The open items under rid, by rid.
-pub async fn open_under<C: ConnectionTrait>(c: &C, rid: i64) -> Result<Vec<Item>, DbErr> {
-    items(
+/// The open items under rid at any depth, by rid.
+pub async fn open_under<C: ConnectionTrait>(
+    c: &C,
+    slug: &str,
+    rid: i64,
+) -> Result<Vec<Item>, DbErr> {
+    let under = descendants(&parent_ties(c, slug).await?, rid);
+    if under.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(items(
         c,
         &format!(
-            "WITH RECURSIVE below(rid) AS (\
-                 SELECT rid FROM links WHERE kind='opened' AND to_rid=? \
-                 UNION \
-                 SELECT l.rid FROM links l JOIN below b ON l.to_rid=b.rid WHERE l.kind='opened') \
-             SELECT {STATE_COLUMNS} FROM items \
-             WHERE rid IN (SELECT rid FROM below) AND state='open' AND rid<>? ORDER BY rid"
+            "SELECT {STATE_COLUMNS} FROM items WHERE project=? AND state='open' AND parent_rid IS NOT NULL \
+             ORDER BY rid"
         ),
-        vec![rid.into(), rid.into()],
+        vec![slug.into()],
     )
-    .await
+    .await?
+    .into_iter()
+    .filter(|i| under.contains(&i.rid))
+    .collect())
 }
 
-/// The open plans among rids, and every one that opened one of them.
+/// The open plans among rids, and every plan above one of them.
 pub async fn audits_over<C: ConnectionTrait>(
     c: &C,
     p: &ProjectRow,
     rids: &[i64],
 ) -> Result<Vec<Item>, DbErr> {
     let audit_keys = keys_of(p, &[Kind::Audit]);
+    let ties = parent_ties(c, &p.rules.slug).await?;
     let mut seen = HashSet::new();
-    let mut todo: Vec<i64> = rids.to_vec();
     let mut out = Vec::new();
-    while let Some(rid) = todo.pop() {
-        if !seen.insert(rid) {
-            continue;
+    for rid in rids {
+        let mut chain = vec![*rid];
+        chain.extend(ancestors(&ties, *rid));
+        for x in chain {
+            if !seen.insert(x) {
+                continue;
+            }
+            if let Some(r) = state_by_rid(c, x).await?
+                && audit_keys.contains(&r.key)
+                && r.state == "open"
+            {
+                out.push(r);
+            }
         }
-        if let Some(r) = state_by_rid(c, rid).await?
-            && audit_keys.contains(&r.key)
-            && r.state == "open"
-        {
-            out.push(r);
-        }
-        let parents: Vec<i64> = column(
-            c,
-            "SELECT to_rid FROM links WHERE kind='opened' AND rid=? AND to_rid IS NOT NULL ORDER BY to_rid",
-            vec![rid.into()],
-        )
-        .await?;
-        todo.extend(parents);
     }
     Ok(out)
 }
@@ -216,7 +231,7 @@ pub async fn open_dependencies<C: ConnectionTrait>(
 }
 
 /// What holds each open item: each dependency not yet satisfied, by the item that still holds it,
-/// and, for an open plan, each open item it opened.
+/// and, for an open plan, each of its open children.
 pub async fn holds_of<C: ConnectionTrait>(
     c: &C,
     p: &ProjectRow,
@@ -235,9 +250,9 @@ pub async fn holds_of<C: ConnectionTrait>(
         let rows = c
             .query_all_raw(sql(
                 &format!(
-                    "SELECT l.to_rid, l.rid FROM links l JOIN items a ON a.rid=l.to_rid \
-                     JOIN items m ON m.rid=l.rid WHERE a.project=? AND l.kind='opened' \
-                     AND a.state='open' AND m.state='open' AND a.key IN ({}) ORDER BY l.to_rid, l.rid",
+                    "SELECT a.rid, m.rid FROM items m JOIN items a ON a.rid=m.parent_rid \
+                     WHERE a.project=? AND a.state='open' AND m.state='open' AND a.key IN ({}) \
+                     ORDER BY a.rid, m.rid",
                     marks(plans.len())
                 ),
                 values,
@@ -376,7 +391,7 @@ async fn dependants_of<C: ConnectionTrait>(
     Ok(out.into_iter().collect())
 }
 
-/// Hold each plan over rids while anything it opened is open; release it to its audit when nothing is.
+/// Hold each plan over rids while anything under it is open; release it to its audit when nothing is.
 pub async fn settle_audits(
     tx: &mut Tx,
     p: &ProjectRow,
@@ -387,7 +402,7 @@ pub async fn settle_audits(
         if a.claim_branch.is_some() {
             continue;
         }
-        let pending = open_under(&tx.conn, a.rid).await?;
+        let pending = open_under(&tx.conn, &p.rules.slug, a.rid).await?;
         let gated =
             a.wait_on.as_deref() == Some("condition") && a.wait_ref.as_deref() == Some(GATE);
         if !pending.is_empty() && a.wait_on.is_none() {
@@ -537,7 +552,36 @@ pub async fn hold_waiters(tx: &mut Tx, p: &ProjectRow, target: &Item) -> Result<
     Ok(())
 }
 
-/// The concepts an item belongs to: linked to it either way, or to anything that opened it.
+/// Every tie of the project: its items' parent edges, and each related and origin link with an end
+/// in it.
+pub async fn project_ties<C: ConnectionTrait>(c: &C, slug: &str) -> Result<Vec<Tie>, DbErr> {
+    let rows = c
+        .query_all_raw(sql(
+            "SELECT l.rid, l.kind, l.to_rid FROM links l \
+             WHERE l.kind IN ('related', 'origin') AND l.to_rid IS NOT NULL \
+               AND (l.rid IN (SELECT rid FROM items WHERE project=?) \
+                 OR l.to_rid IN (SELECT rid FROM items WHERE project=?)) \
+             UNION ALL SELECT rid, 'parent', parent_rid FROM items WHERE project=? AND parent_rid IS NOT NULL \
+             ORDER BY 1, 2, 3",
+            vec![slug.into(), slug.into(), slug.into()],
+        ))
+        .await?;
+    let mut out = Vec::with_capacity(rows.len());
+    for r in rows {
+        let kind: String = r.try_get_by_index(1)?;
+        if let Some(edge) = Edge::parse(&kind) {
+            out.push(Tie {
+                rid: r.try_get_by_index(0)?,
+                edge,
+                to: r.try_get_by_index(2)?,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// The concepts an item belongs to: linked to it either way, or to any plan above it, by key and
+/// number.
 pub async fn concepts_of<C: ConnectionTrait>(
     c: &C,
     p: &ProjectRow,
@@ -547,42 +591,28 @@ pub async fn concepts_of<C: ConnectionTrait>(
     if con.is_empty() {
         return Ok(Vec::new());
     }
-    let mut seen = HashSet::new();
-    let mut todo = vec![rid];
-    let mut out: Vec<(String, i64, String)> = Vec::new();
-    while let Some(x) = todo.pop() {
-        if !seen.insert(x) {
-            continue;
-        }
-        let rows = c
-            .query_all_raw(sql(
-                "SELECT rid, to_rid FROM links WHERE (rid=? OR to_rid=?) AND kind IN ('related', 'opened')",
-                vec![x.into(), x.into()],
-            ))
-            .await?;
-        for l in rows {
-            let from: i64 = l.try_get_by_index(0)?;
-            let to: Option<i64> = l.try_get_by_index(1)?;
-            let other = if from == x { to } else { Some(from) };
-            let Some(other) = other else { continue };
-            if let Some(o) = state_by_rid(c, other).await?
-                && con.contains(&o.key)
-                && o.rid != rid
-                && !out.iter().any(|(id, _, _)| *id == o.id)
-            {
-                out.push((o.id.clone(), o.num, o.key.clone()));
-            }
-        }
-        let parents: Vec<i64> = column(
-            c,
-            "SELECT to_rid FROM links WHERE kind='opened' AND rid=? AND to_rid IS NOT NULL",
-            vec![x.into()],
-        )
+    let rows = c
+        .query_all_raw(sql(
+            &format!(
+                "SELECT rid, id, key, num FROM items WHERE key IN ({}) ORDER BY key, num",
+                marks(con.len())
+            ),
+            con.iter().map(|k| k.clone().into()).collect(),
+        ))
         .await?;
-        todo.extend(parents);
+    let mut concepts: Vec<(i64, String)> = Vec::with_capacity(rows.len());
+    for r in rows {
+        concepts.push((r.try_get_by_index(0)?, r.try_get_by_index(1)?));
     }
-    out.sort_by(|a, b| (&a.2, a.1).cmp(&(&b.2, b.1)));
-    Ok(out.into_iter().map(|(id, _, _)| id).collect())
+    let rids: HashSet<i64> = concepts.iter().map(|(r, _)| *r).collect();
+    let found = Neighbours::new(&project_ties(c, &p.rules.slug).await?).concepts_of(&rids, rid);
+    let mut out: Vec<String> = Vec::new();
+    for (r, id) in concepts {
+        if found.contains(&r) && !out.contains(&id) {
+            out.push(id);
+        }
+    }
+    Ok(out)
 }
 
 // ---- the files a ticket touches ----
@@ -724,33 +754,33 @@ pub async fn decided_like<C: ConnectionTrait>(
 }
 
 /// The project's releases in the order they ship.
-pub async fn release_list<C: ConnectionTrait>(c: &C, slug: &str) -> Result<Vec<String>, Failure> {
-    let skills = crate::entities::project::Entity::find_by_id(slug)
-        .one(c)
-        .await?
-        .map(|p| p.skills)
-        .unwrap_or_default();
-    Ok(docket_core::fact::releases(skills["releases"].as_str()))
+pub async fn release_list<C: ConnectionTrait>(c: &C, slug: &str) -> Result<Listed, Failure> {
+    Ok(crate::verbs::releases::listed(c, slug).await?)
 }
 
-fn release_name(releases: &[String], theme: Option<&str>) -> String {
-    let at = docket_core::queue::release_rank(releases, theme);
-    releases.get(at).cloned().unwrap_or_default()
+fn release_name(listed: &Listed, release: Option<i64>) -> String {
+    listed
+        .name(release)
+        .map_or_else(|| "the backlog".to_string(), str::to_string)
 }
 
 /// Refuse a hold of `held` by `holder` when the holder ships in a later release, naming both repairs.
 pub fn refuse_later(
-    releases: &[String],
+    listed: &Listed,
     held: &Item,
     holder: &Item,
     force: bool,
 ) -> Result<(), Failure> {
     let (held_in, holder_in) = (
-        release_name(releases, held.theme.as_deref()),
-        release_name(releases, holder.theme.as_deref()),
+        release_name(listed, held.release_id),
+        release_name(listed, holder.release_id),
     );
     if force
-        || !docket_core::stall::runs_later(releases, held.theme.as_deref(), holder.theme.as_deref())
+        || !docket_core::stall::runs_later(
+            &listed.open,
+            listed.name(held.release_id),
+            listed.name(holder.release_id),
+        )
     {
         return Ok(());
     }
@@ -760,27 +790,23 @@ pub fn refuse_later(
     )))
 }
 
-/// Refuse giving `r` a new theme when that puts a hold it takes part in into a later release.
-pub async fn refuse_later_after_theme(
+/// Refuse moving `r` to another release when that puts a hold it takes part in into a later one.
+pub async fn refuse_later_after_release(
     tx: &Tx,
     slug: &str,
     r: &Item,
-    theme: Option<&str>,
+    release: Option<i64>,
 ) -> Result<(), Failure> {
     let releases = release_list(&tx.conn, slug).await?;
-    if releases.len() < 2 {
-        return Ok(());
-    }
     let rows = tx
         .conn
         .query_all_raw(sql(
             "SELECT d.rid, d.on_rid FROM dependencies d JOIN items i ON i.rid=d.rid \
                JOIN items o ON o.rid=d.on_rid WHERE i.project=? AND i.state='open' \
                AND o.state='open' AND (d.rid=? OR d.on_rid=?) \
-             UNION ALL SELECT c.rid, l.rid FROM items c JOIN links l ON l.to_rid=c.rid AND l.kind='opened' \
-               JOIN items m ON m.rid=l.rid AND m.state='open' \
+             UNION ALL SELECT c.rid, m.rid FROM items c JOIN items m ON m.parent_rid=c.rid AND m.state='open' \
                WHERE c.project=? AND c.state='open' AND c.wait_on='condition' AND c.wait_ref=? \
-                 AND (c.rid=? OR l.rid=?) ORDER BY 1, 2",
+                 AND (c.rid=? OR m.rid=?) ORDER BY 1, 2",
             vec![
                 slug.into(),
                 r.rid.into(),
@@ -794,7 +820,7 @@ pub async fn refuse_later_after_theme(
         .await?;
     let after = |mut it: Item| {
         if it.rid == r.rid {
-            it.theme = theme.map(str::to_string);
+            it.release_id = release;
         }
         it
     };

@@ -81,7 +81,12 @@ pub async fn read(
     State(db): State<DatabaseConnection>,
     Query(q): Query<InProject>,
 ) -> Result<Json<Facts>, Failure> {
-    let skills = fact::known(&stored(&db, &q.project).await?);
+    let mut skills = fact::known(&stored(&db, &q.project).await?);
+    let open = crate::verbs::releases::listed(&db, &q.project).await?.open;
+    skills.remove("releases");
+    if !open.is_empty() {
+        skills.insert("releases".to_string(), open.join(" "));
+    }
     Ok(Json(Facts {
         project: q.project,
         skills,

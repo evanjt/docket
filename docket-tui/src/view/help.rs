@@ -84,7 +84,7 @@ Writing
   R                      retry: a fresh start for what the loop parked or sent back
   !                      priority: then c critical, h high, n normal, l low
   c                      complexity: then h high, m medium, l low
-  L                      link: then related ID or opened ID
+  L                      link: then related ID, origin ID or parent PLAN
   :                      any verb of the command line, as close T3 abc1234 or priority high; an
                          id left out is the selected row's, ids left out are the marked rows
   Enter                  sends a typed line; Ctrl-E opens it in $EDITOR, and saving sends it;

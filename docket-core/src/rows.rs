@@ -36,6 +36,9 @@ pub struct ProjectRow {
     pub skills: BTreeMap<String, String>,
     #[serde(default)]
     pub updated_at: String,
+    /// The releases, filled from `/releases` by a reader that orders by them.
+    #[serde(default, skip_serializing)]
+    pub releases: crate::release::Listed,
 }
 
 impl ProjectRow {
@@ -90,6 +93,8 @@ pub struct ItemRow {
     #[serde(default)]
     pub wait_ref: Option<String>,
     #[serde(default)]
+    pub parent_rid: Option<i64>,
+    #[serde(default)]
     pub decision: Option<String>,
     #[serde(default)]
     pub resolution: Option<String>,
@@ -99,6 +104,8 @@ pub struct ItemRow {
     pub group_name: Option<String>,
     #[serde(default)]
     pub theme: Option<String>,
+    #[serde(default)]
+    pub release_id: Option<i64>,
     #[serde(default)]
     pub rank: Option<i64>,
     #[serde(default)]
@@ -160,6 +167,9 @@ pub struct Row {
     pub complexity: Option<String>,
     #[serde(default)]
     pub theme: Option<String>,
+    /// The release it is in; none is the backlog.
+    #[serde(default)]
+    pub release: Option<String>,
     #[serde(default)]
     pub rank: Option<i64>,
     #[serde(default)]
@@ -201,7 +211,11 @@ pub struct Shown {
     #[serde(default)]
     pub related: Vec<String>,
     #[serde(default)]
-    pub opened: Vec<String>,
+    pub parent: Option<String>,
+    #[serde(default)]
+    pub origin: Vec<String>,
+    #[serde(default)]
+    pub children: Vec<String>,
     #[serde(default)]
     pub cites: Vec<Cite>,
     #[serde(default)]

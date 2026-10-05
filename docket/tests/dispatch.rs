@@ -29,7 +29,7 @@ INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, compl
   (7, 'o/p', 'T', 6, 'Write six', 'open', 'agent', '[]', '', 'medium', '2026-01-01T00:00:00Z', 'u'),
   (8, 'o/p', 'A', 2, 'A finished plan', 'open', 'agent', '[]', '', NULL, '2026-01-01T00:00:00Z', 'u'),
   (9, 'o/p', 'T', 7, 'Written', 'open', 'agent', '[]', '', 'low', '2026-01-01T00:00:00Z', 'u');
-INSERT INTO links (rid, kind, to_rid) VALUES (8, 'opened', 9);
+UPDATE items SET parent_rid = 8 WHERE rid = 9;
 UPDATE items SET group_name = 'streams' WHERE rid IN (1, 2);
 "#;
 
@@ -326,7 +326,7 @@ fn test_a_dispatch_to_a_machine_without_the_runner_is_refused_before_any_claim()
 }
 
 #[test]
-fn test_a_plan_that_opened_nothing_is_dispatched_as_a_plan() {
+fn test_a_plan_with_nothing_under_it_is_dispatched_as_a_plan() {
     let w = World::new();
     let out = w.lead(&["dispatch", "A1", "--on", "beta"]);
     assert!(out.status.success(), "{}", text(&out));
@@ -334,7 +334,7 @@ fn test_a_plan_that_opened_nothing_is_dispatched_as_a_plan() {
 }
 
 #[test]
-fn test_a_plan_that_opened_work_is_dispatched_as_an_audit_on_the_audit_model() {
+fn test_a_plan_with_children_is_dispatched_as_an_audit_on_the_audit_model() {
     let w = World::new();
     let out = w.lead(&["dispatch", "A2", "--on", "beta"]);
     assert!(out.status.success(), "{}", text(&out));

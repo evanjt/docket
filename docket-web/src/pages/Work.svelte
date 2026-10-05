@@ -68,7 +68,7 @@
       return queueNodes(ctx.board, word)
         .filter((n) => !held || held.has(n.id))
         .sort((a, b) => byId(a.id, b.id))
-        .map((n) => ({ id: n.id, title: n.title, word: n.word, theme: n.theme }));
+        .map((n) => ({ id: n.id, title: n.title, word: n.word, theme: n.theme, release: n.release }));
     }
     return fetched.data ?? [];
   });
@@ -77,8 +77,7 @@
   const shown = $derived(
     sortRows(
       rows
-        .map((r) => ({ ...r, theme: r.theme ?? ctx.board?.nodes.get(r.id)?.theme }))
-        .map((r) => ({ ...r, release: releaseOf(r.theme, ctx.releases) }))
+        .map((r) => ({ ...r, release: releaseOf(r.release ?? ctx.board?.nodes.get(r.id)?.release, ctx.releases) }))
         .filter((r) => applies(r, filter, ctx.releases, ctx.priorities)),
       filter.sort,
       ctx.priorities,

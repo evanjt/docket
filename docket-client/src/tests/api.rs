@@ -17,7 +17,8 @@ INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, opene
   (1, 'o/p', 'T', 1, 'Fix the sync', 'open', 'agent', '["high"]', 'Body naming PK1', '2026-01-01T00:00:00Z', 'u1'),
   (2, 'o/p', 'PK', 1, 'Sync package', 'open', 'agent', '[]', '', '2026-01-01T00:00:00Z', 'u2'),
   (3, 'o/p', 'Q', 1, 'Which way', 'open', 'user', '[]', 'Two ways', '2026-01-01T00:00:00Z', 'u3');
-INSERT INTO links (rid, kind, to_rid) VALUES (1, 'opened', 2);
+UPDATE items SET parent_rid=2 WHERE rid=1;
+INSERT INTO links (rid, kind, to_rid) VALUES (1, 'origin', 3);
 INSERT INTO links (rid, kind, to_path, to_line) VALUES (1, 'cites_file', 'src/sync.rs', 4);
 INSERT INTO events (uid, project, rid, at, host, kind, note) VALUES
   ('e1', 'o/p', 1, '2026-01-01T00:00:00Z', 'devbox', 'opened', NULL),
@@ -107,7 +108,8 @@ fn test_typed_rows_read_every_route_the_tui_uses() {
 
     let shown = api.show("o/p", "T1").unwrap();
     assert_eq!(shown.row.word, "ready");
-    assert_eq!(shown.opened, ["PK1"]);
+    assert_eq!(shown.parent.as_deref(), Some("PK1"));
+    assert_eq!(shown.origin, ["Q1"]);
     assert_eq!(shown.cites[0].path.as_deref(), Some("src/sync.rs"));
     let package = api.show("o/p", "PK1").unwrap();
     assert_eq!(package.progress.map(|p| (p.done, p.total)), Some((0, 1)));
@@ -119,9 +121,10 @@ fn test_stored_lists_read_items_links_and_events() {
     let items = api.items("o/p").unwrap();
     assert_eq!(items.len(), 3);
     assert_eq!(items[0].tags, ["high"]);
-    let opened = api.links_from(&[1, 2, 3], "opened").unwrap();
-    assert_eq!((opened[0].rid, opened[0].to_rid), (1, Some(2)));
-    assert_eq!(api.links_to(&[2], "opened").unwrap().len(), 1);
+    assert_eq!(items[0].parent_rid, Some(2));
+    let origin = api.links_from(&[1, 2, 3], "origin").unwrap();
+    assert_eq!((origin[0].rid, origin[0].to_rid), (1, Some(3)));
+    assert_eq!(api.links_to(&[3], "origin").unwrap().len(), 1);
     let log = api.log(1).unwrap();
     assert_eq!(
         log.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(),

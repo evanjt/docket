@@ -11,8 +11,8 @@ can do. This skill names the facts and carries none of them, so one copy
 serves every project.
 
 A plan is the one grouping: an `A` item stating a goal, with every ticket that
-delivers it linked to it as opened by it. When its last ticket closes, its
-audit falls due on its own, once. This skill writes plans and tickets; it
+delivers it under it as its parent. When its last ticket closes, its audit
+falls due on its own, once. This skill writes plans and tickets; it
 never builds them.
 
 ## What to take
@@ -23,7 +23,7 @@ never builds them.
 The plan role takes three things, each claimed with `docket --branch
 plan/a3-$RANDOM start A3` before it is worked:
 
-- a plan that has opened nothing yet: write its tickets;
+- a plan with nothing under it yet: write its tickets;
 - an investigation (`I`): measure it, then turn the result into tickets;
 - a decided question the owner answered: turn the decision into tickets.
 
@@ -66,21 +66,22 @@ in this order. Its nature: a crash, a hang, data loss or wrong numbers,
 migration or upgrade safety, security or privacy, or release work is
 `--release current` at high priority. What it serves: a blocker or member of
 current-release work is `--release current`. Otherwise a feature or polish
-goes to a later release, and tests, CI and hooks to the theme the project
-keeps for them (`docket skills releases` lists the releases, the current
+goes to a later release, and tests, CI and hooks to the backlog (`--release ""`)
+under the theme the project keeps for them (`docket skills releases` lists the
+releases, the current
 first). The body's last line says which and why: `**Release.** current: it
 loses the draft on resume.`
 
 Then:
 
-    docket link T14 T15 T16 opened A3
+    docket parent T14 T15 T16 A3        # an item has one parent, and it is a plan
     docket priority T14 high            # critical, high, normal or low; normal is the default
     docket rate T14 medium              # complexity: high, medium or low
     docket edit T14 --set group=name    # tickets one session should take together
     docket wait T15 --on T14            # T15 builds on T14, the owner ticket first
 
-The queue reads release, then priority, then age. A theme the releases fact does not
-list ranks with the current release. Complexity is rated apart from
+The queue reads release, then priority, then age. An item with no release is in
+the backlog, which ranks after every release. Complexity is rated apart from
 effort: high is architecture (a new data model, a migration, many dependants).
 
 Unclaim the plan once its tickets are filed (`docket unclaim A3`): it then
@@ -90,18 +91,26 @@ waits on them, and comes back for its audit when they are all closed.
 
 Measure what the item asks, with what `docket skills measure` names as the
 source of a real number. Write the measured result into its body (`docket edit
-I7 --append "..."`), file the tickets it calls for, link them to the plan the
-investigation serves, and close it with what it opened:
+I7 --append "..."`), file the tickets it calls for, put them under the plan the
+investigation serves, record that it spawned them, and close it with what it
+opened:
 
+    docket parent T20 T21 A3
+    docket link T20 T21 origin I7
     docket close I7 "measured: <the number>; opened T20, T21"
+
+The close's words are a record for a person; they link nothing.
 
 A result that leaves a choice only the owner can make is a question, below.
 
 ## A decided question
 
 Read the decision and the question's options, file the tickets that carry it
-out, link each as opened by the question, and close it with them:
+out, put them under the plan they serve, record that the question spawned them,
+and close it with them:
 
+    docket parent T20 T21 A3
+    docket link T20 T21 origin Q5
     docket close Q5 "opened T20, T21"
 
 ## Questions

@@ -10,7 +10,7 @@ use serde_json::{Map, Value, json};
 
 use docket_core::board::{Board, GateProblem};
 use docket_core::clock::stamp;
-use docket_core::member::Tie;
+use docket_core::member::{Edge, Tie};
 use docket_core::pace::epoch;
 use docket_core::rows::{ItemRow, KeySpec, ProjectRow};
 use docket_core::rules::GATE;
@@ -308,22 +308,24 @@ async fn stalls<C: ConnectionTrait>(
         .into_iter()
         .map(|rid| problem("cycle", json!({ "id": by_rid[&rid].id })))
         .collect();
-    let model = project_model(db, slug).await?;
-    let releases = docket_core::fact::releases(model.skills["releases"].as_str());
-    if releases.len() > 1 {
-        let release_of = |rid: i64| {
-            let theme = by_rid[&rid].theme.as_deref();
-            docket_core::queue::release_rank(&releases, theme)
-        };
-        let rank = by_rid.keys().map(|&rid| (rid, release_of(rid))).collect();
+    let listed = crate::verbs::releases::listed(db, slug).await?;
+    if !listed.open.is_empty() {
+        let name = |rid: i64| listed.name(by_rid[&rid].release_id);
+        let rank = by_rid
+            .keys()
+            .map(|&rid| {
+                let at = docket_core::queue::release_rank(&listed.open, name(rid));
+                (rid, at.unwrap_or(usize::MAX))
+            })
+            .collect();
         for (held, by) in docket_core::stall::held_later(&edges, &rank) {
             out.push(problem(
                 "held_later",
                 json!({
                     "id": by_rid[&held].id,
                     "by": by_rid[&by].id,
-                    "release": releases[release_of(held)],
-                    "later": releases[release_of(by)],
+                    "release": name(held).unwrap_or("the backlog"),
+                    "later": name(by).unwrap_or("the backlog"),
                 }),
             ));
         }
@@ -359,7 +361,8 @@ struct LinkRow {
     to_path: Option<String>,
 }
 
-/// `docket graph`: every item with its rid, kind and word, and every link and cited file leaving one.
+/// `docket graph`: every item with its rid, kind and word, its parent, and every link and cited file
+/// leaving one.
 ///
 /// # Errors
 /// 404 for an unknown project.
@@ -372,12 +375,14 @@ pub async fn graph(
     let items = words(&db, &q.project, &kinds).await?;
     let board = core_board(&db, &model).await?;
     let ids: HashMap<i64, &str> = items.iter().map(|(r, _)| (r.rid, r.id.as_str())).collect();
+    let listed = crate::verbs::releases::listed(&db, &q.project).await?;
     let nodes: Vec<Value> = items
         .iter()
         .map(|(r, w)| {
             let kind = kinds.kind(&r.key);
             let mut node = json!({ "id": r.id, "rid": r.rid, "key": r.key, "kind": kind.as_str(), "state": r.state,
-                                   "word": w, "theme": r.theme, "title": r.title });
+                                   "word": w, "theme": r.theme, "release": listed.name(r.release_id),
+                                   "title": r.title });
             if let Some(row) = board.by_rid(r.rid).filter(|_| holds(kind)) {
                 node["progress"] = json!(board.progress(row));
                 if kind == Kind::Audit {
@@ -394,7 +399,13 @@ pub async fn graph(
     ))
     .all(&db)
     .await?;
-    let mut edges = Vec::new();
+    let mut edges: Vec<Value> = items
+        .iter()
+        .filter_map(|(r, _)| {
+            let plan = ids.get(&r.parent_rid?)?;
+            Some(json!({ "from": r.id, "to": plan, "kind": "parent" }))
+        })
+        .collect();
     for l in links {
         let Some(a) = ids.get(&l.rid) else { continue };
         match l.to_rid {
@@ -422,7 +433,7 @@ fn holds(kind: Kind) -> bool {
     )
 }
 
-/// A project as docket-core's board reads it: every item, the `opened` ties leaving them and the
+/// A project as docket-core's board reads it: every item with its parent, every `origin` tie, and the
 /// `related` ties reaching or leaving a standing item, as the TUI loads it.
 ///
 /// # Errors
@@ -458,17 +469,19 @@ pub async fn core_board<C: ConnectionTrait>(
         .collect();
     let ties = TieRow::find_by_statement(sql(
         "SELECT l.rid, l.kind, l.to_rid FROM links l JOIN items i ON i.rid=l.rid \
-         WHERE i.project=? AND l.to_rid IS NOT NULL AND l.kind IN ('opened', 'related') ORDER BY l.id",
+         WHERE i.project=? AND l.to_rid IS NOT NULL AND l.kind IN ('related', 'origin') ORDER BY l.id",
         vec![model.slug.clone().into()],
     ))
     .all(db)
     .await?
     .into_iter()
-    .filter(|t| t.kind == "opened" || standing.contains(&t.rid) || standing.contains(&t.to_rid))
-    .map(|t| Tie {
-        rid: t.rid,
-        opened: t.kind == "opened",
-        to: t.to_rid,
+    .filter(|t| t.kind == "origin" || standing.contains(&t.rid) || standing.contains(&t.to_rid))
+    .filter_map(|t| {
+        Some(Tie {
+            rid: t.rid,
+            edge: Edge::parse(&t.kind)?,
+            to: t.to_rid,
+        })
     })
     .collect();
     Ok(Board::new(project, items, ties))
@@ -501,11 +514,13 @@ fn item_row(m: crate::entities::item::Model) -> ItemRow {
         wait_on: m.wait_on,
         wait_item: m.wait_item,
         wait_ref: m.wait_ref,
+        parent_rid: m.parent_rid,
         decision: m.decision,
         resolution: m.resolution,
         scope: m.scope,
         group_name: m.group_name,
         theme: m.theme,
+        release_id: m.release_id,
         rank: m.rank,
         opened_at: m.opened_at,
         updated_at: m.updated_at,
@@ -721,7 +736,7 @@ struct NetRow {
     kind: String,
     at: String,
     key: String,
-    theme: Option<String>,
+    release: Option<String>,
     opened: i64,
 }
 
@@ -734,8 +749,8 @@ async fn net<C: ConnectionTrait>(
 ) -> Result<docket_core::pace::Net, Failure> {
     use docket_core::pace::{Class, Counted, net as net_of};
     let found = NetRow::find_by_statement(sql(
-        "SELECT e.kind, e.at, i.key, i.theme, \
-           (SELECT COUNT(*) FROM links l WHERE l.to_rid=i.rid AND l.kind='opened') AS opened \
+        "SELECT e.kind, e.at, i.key, (SELECT r.name FROM releases r WHERE r.id=i.release_id) AS release, \
+           (SELECT COUNT(*) FROM links l WHERE l.to_rid=i.rid AND l.kind='origin') AS opened \
          FROM events e JOIN items i ON i.rid = e.rid WHERE e.project=? AND e.at >= ? ORDER BY e.at, e.seq",
         vec![
             model.slug.clone().into(),
@@ -745,7 +760,7 @@ async fn net<C: ConnectionTrait>(
     .all(db)
     .await?;
     let kinds = Kinds::of(model);
-    let releases = docket_core::fact::releases(model.skills["releases"].as_str());
+    let releases = crate::verbs::releases::listed(db, &model.slug).await?.open;
     let counted: Vec<Counted> = found
         .iter()
         .map(|r| Counted {
@@ -753,7 +768,7 @@ async fn net<C: ConnectionTrait>(
             kind: &r.kind,
             class: match kinds.kind(&r.key) {
                 Kind::Work => Class::Code {
-                    current: docket_core::queue::release_rank(&releases, r.theme.as_deref()) == 0,
+                    current: docket_core::queue::in_current(&releases, r.release.as_deref()),
                 },
                 Kind::Decision | Kind::Research => Class::Research {
                     opened: r.opened > 0,

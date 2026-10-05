@@ -19,6 +19,7 @@ pub mod private;
 pub mod project;
 pub mod pyjson;
 pub mod queue;
+pub mod release;
 pub mod rows;
 pub mod rules;
 pub mod search;

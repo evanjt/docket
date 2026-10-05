@@ -10,8 +10,9 @@ use crate::auth::Keys;
 
 const SEED: &str = r#"
 INSERT INTO projects (slug, keys, skills, created_at, updated_at) VALUES
-  ('acme/widgets', '[{"key":"T","kind":"work"},{"key":"A","kind":"audit"}]', '{"owner":"Ada Lovelace","releases":"2.4 saffron"}', 'c', 'u'),
+  ('acme/widgets', '[{"key":"T","kind":"work"},{"key":"A","kind":"audit"}]', '{"owner":"Ada Lovelace"}', 'c', 'u'),
   ('acme/gizmo', '[{"key":"B","kind":"work"}]', '{}', 'c', 'u');
+INSERT INTO releases (id, project, name, position) VALUES (1, 'acme/widgets', '2.4', 0), (2, 'acme/widgets', '2.5', 1);
 INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, claim_branch, claim_host, claim_since, opened_at, updated_at, theme, group_name)
   VALUES (1, 'acme/widgets', 'T', 1, 'The proofing timer drifts after a restart', 'open', 'agent', '[]', '', 'b', 'delta', 's', 'o', 'u', 'Lanterns', 'harbour-lights');
 INSERT INTO events (uid, project, rid, at, host, kind) VALUES ('e1', 'acme/widgets', 1, 'a', 'gamma.example.org', 'opened');
@@ -54,7 +55,7 @@ async fn test_the_owner_reads_every_private_name() {
             "keys": ["A", "B", "T"],
             "themes": ["Lanterns"],
             "groups": ["harbour-lights"],
-            "releases": ["2.4", "saffron"],
+            "releases": ["2.4", "2.5"],
             "titles": ["The proofing timer drifts after a restart"],
         })
     );

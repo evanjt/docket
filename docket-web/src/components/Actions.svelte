@@ -81,7 +81,9 @@
         const req = editRequest(opened, text, extra, id, common());
         return req ? ['edit', req, 'Saved'] : null;
       }
-      case 'link': return ['link', { ...common(), a: [id], kind: choice, b: text.trim().toUpperCase() }, 'Linked'];
+      case 'link': return choice === 'parent'
+        ? ['parent', { ...common(), a: [id], plan: text.trim().toUpperCase() }, 'Put under the plan']
+        : ['link', { ...common(), a: [id], kind: choice, b: text.trim().toUpperCase() }, 'Linked'];
     }
   }
 
@@ -112,11 +114,11 @@
   }
 
   const ctx = project();
-  const release = $derived(releaseOf(item.theme, ctx.releases));
+  const release = $derived(releaseOf(item.release, ctx.releases));
 
   async function setRelease(name: string) {
     if (name === release) return;
-    await act('edit', { ...common(), id: item.id, set: [{ field: 'theme', value: name }] }, `Moved to ${name}`);
+    await act('edit', { ...common(), id: item.id, release: name }, `Moved to ${name}`);
   }
 
   async function setLevel(level: string) {
@@ -196,7 +198,8 @@
       {:else if form === 'link'}
         <div class="choice">
           <label><input type="radio" bind:group={choice} value="related" /> {item.id} is related to</label>
-          <label><input type="radio" bind:group={choice} value="opened" /> {item.id} was opened by</label>
+          <label><input type="radio" bind:group={choice} value="origin" /> {item.id} was spawned by</label>
+          <label><input type="radio" bind:group={choice} value="parent" /> {item.id} is under the plan</label>
         </div>
         <!-- svelte-ignore a11y_autofocus -->
         <input class="field" bind:value={text} autofocus placeholder={p.placeholder} />

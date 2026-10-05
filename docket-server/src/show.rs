@@ -19,18 +19,12 @@ pub struct InProject {
     project: String,
 }
 
-/// The items a package opened, the direct ones only.
-async fn members(db: &DatabaseConnection, rid: i64) -> Result<Vec<item::Model>, sea_orm::DbErr> {
-    let rids: Vec<i64> = link::Entity::find()
-        .filter(link::Column::ToRid.eq(rid))
-        .filter(link::Column::Kind.eq("opened"))
-        .all(db)
-        .await?
-        .into_iter()
-        .map(|l| l.rid)
-        .collect();
+/// An item's children, the direct ones only, by key and number.
+async fn children(db: &DatabaseConnection, rid: i64) -> Result<Vec<item::Model>, sea_orm::DbErr> {
     item::Entity::find()
-        .filter(item::Column::Rid.is_in(rids))
+        .filter(item::Column::ParentRid.eq(rid))
+        .order_by_asc(item::Column::Key)
+        .order_by_asc(item::Column::Num)
         .all(db)
         .await
 }
@@ -47,18 +41,15 @@ pub async fn show(
     let project = project_of(&db, &q.project).await?;
     let row = item_of(&db, &q.project, &id).await?;
     let kind = Kinds::of(&project).kind(&row.key);
-    let members = if kind == Kind::Package {
-        Some(members(&db, row.rid).await.map_err(|e| internal(&e))?)
-    } else {
-        None
-    };
+    let under = children(&db, row.rid).await.map_err(|e| internal(&e))?;
+    let members = (kind == Kind::Package).then_some(&under);
     let open_members = members
-        .iter()
+        .into_iter()
         .flatten()
         .filter(|m| m.state == "open")
         .count() as u64;
 
-    let (mut related, mut opened, mut cites) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut related, mut origin, mut cites) = (Vec::new(), Vec::new(), Vec::new());
     let links = link::Entity::find()
         .filter(link::Column::Rid.eq(row.rid))
         .order_by_asc(link::Column::Kind)
@@ -74,22 +65,31 @@ pub async fn show(
             ("related", Some(rid)) => {
                 related.extend(id_of(&db, rid).await.map_err(|e| internal(&e))?);
             }
-            ("opened", Some(rid)) => {
-                opened.extend(id_of(&db, rid).await.map_err(|e| internal(&e))?);
+            ("origin", Some(rid)) => {
+                origin.extend(id_of(&db, rid).await.map_err(|e| internal(&e))?);
             }
             _ => cites.push(json!({ "path": l.to_path, "line": l.to_line, "kind": l.kind })),
         }
     }
 
+    let parent = match row.parent_rid {
+        Some(rid) => id_of(&db, rid).await.map_err(|e| internal(&e))?,
+        None => None,
+    };
     let body = row.body.clone();
     let mut out = public(&db, kind, row, open_members, None)
         .await
         .map_err(|e| internal(&e))?;
     out.insert("body".into(), json!(body));
     out.insert("related".into(), json!(related));
-    out.insert("opened".into(), json!(opened));
+    out.insert("parent".into(), json!(parent));
+    out.insert("origin".into(), json!(origin));
+    out.insert(
+        "children".into(),
+        json!(under.iter().map(|c| c.id.clone()).collect::<Vec<_>>()),
+    );
     out.insert("cites".into(), json!(cites));
-    if let Some(members) = &members {
+    if let Some(members) = members {
         let live = members.iter().filter(|m| m.claim_branch.is_some()).count();
         let done = members.len() - members.iter().filter(|m| m.state == "open").count();
         out.insert(
@@ -115,7 +115,7 @@ pub async fn offers(
     let kind = Kinds::of(&project).kind(&row.key);
     let id = row.id.clone();
     let (pending, due) = if kind == Kind::Audit {
-        let pending = open_under(&db, row.rid)
+        let pending = open_under(&db, &q.project, row.rid)
             .await
             .map_err(|e| internal(&e))?
             .into_iter()

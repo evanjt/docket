@@ -1,17 +1,13 @@
 import type { GraphNode } from './types';
 
-/** The releases a project's `releases` fact lists, in the order they ship, the current first. */
+/** The releases not yet shipped, as the server's `releases` fact lists them in order, the current first. */
 export function releaseList(skills: Record<string, string> | undefined): string[] {
   return (skills?.releases ?? '').split(/\s+/).filter(Boolean);
 }
 
-/**
- * The release an item belongs to: its theme when the releases list it, and the current release for
- * no theme or a theme they leave out, as `docket next` orders them. Nothing when no releases are set.
- */
-export function releaseOf(theme: string | null | undefined, releases: string[]): string | null {
-  if (!releases.length) return null;
-  return theme && releases.includes(theme) ? theme : releases[0];
+/** The release an item is in when it is one not yet shipped; nothing for the backlog or a shipped release. */
+export function releaseOf(release: string | null | undefined, releases: string[]): string | null {
+  return release && releases.includes(release) ? release : null;
 }
 
 export interface ReleaseRow {
@@ -33,7 +29,7 @@ export function releaseRows(nodes: Iterable<GraphNode>, releases: string[]): Rel
   const at = new Map(rows.map((r) => [r.name, r]));
   for (const n of nodes) {
     if (n.kind !== 'work' || n.state === 'dropped') continue;
-    const r = at.get(releaseOf(n.theme, releases) ?? '');
+    const r = at.get(releaseOf(n.release, releases) ?? '');
     if (!r) continue;
     r.total++;
     if (n.state === 'done') {
@@ -47,8 +43,8 @@ export function releaseRows(nodes: Iterable<GraphNode>, releases: string[]): Rel
 }
 
 /** The Release row an item's detail shows, for every kind: its release and whether that is the current one. */
-export function releaseRow(theme: string | null | undefined, releases: string[]): { name: string; current: boolean } | null {
-  const name = releaseOf(theme, releases);
+export function releaseRow(release: string | null | undefined, releases: string[]): { name: string; current: boolean } | null {
+  const name = releaseOf(release, releases);
   return name === null ? null : { name, current: name === releases[0] };
 }
 

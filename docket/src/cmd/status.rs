@@ -370,12 +370,12 @@ fn problem_line(p: &Value) -> String {
             s("on")
         ),
         "held_gate" => format!(
-            "{} is held although everything it opened is closed: docket resume {}",
+            "{} is held although everything under it is closed: docket resume {}",
             s("id"),
             s("id")
         ),
         "open_audit" => format!(
-            "{} is open for audit while {n} items it opened are open",
+            "{} is open for audit while {n} items under it are open",
             s("id")
         ),
         "stale_wait" => format!(

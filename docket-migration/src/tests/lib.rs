@@ -2,7 +2,7 @@ use super::*;
 
 use crate::scratch::Scratch;
 
-const MIGRATIONS: [&str; 10] = [
+const MIGRATIONS: [&str; 12] = [
     "m20261001_000001_schema",
     "m20261002_000001_machines_and_leads",
     "m20261005_000001_owner_facts",
@@ -13,6 +13,8 @@ const MIGRATIONS: [&str; 10] = [
     "m20261006_000002_condition_waits",
     "m20261006_000003_ask_need",
     "m20261006_000004_job_reports",
+    "m20261006_000005_releases",
+    "m20261006_000006_parents",
 ];
 
 /// The migrations to apply to stand just before the one named.
@@ -146,7 +148,9 @@ async fn test_the_assignments_migration_rebuilds_each_items_attempts_from_its_ev
             "m20261006_000001_dependencies",
             "m20261006_000002_condition_waits",
             "m20261006_000003_ask_need",
-            "m20261006_000004_job_reports"
+            "m20261006_000004_job_reports",
+            "m20261006_000005_releases",
+            "m20261006_000006_parents"
         ]
     );
     let rows = s
@@ -350,4 +354,123 @@ INSERT INTO dependencies (rid, on_rid, created_at) VALUES (2, 1, 'w2');
     )
     .await;
     assert_eq!(asks, [("T3".to_string(), "ask".to_string())]);
+}
+
+#[tokio::test]
+async fn test_a_releases_fact_of_three_names_becomes_three_rows_in_order() {
+    let s = Scratch::bare(2).await;
+    Migrator::up(&s.db, Some(steps_before("m20261006_000005_releases")))
+        .await
+        .unwrap();
+    s.seed(
+        r#"
+INSERT INTO projects (slug, keys, skills, created_at, updated_at) VALUES ('test/proj',
+  '[{"key": "T", "kind": "work"}, {"key": "A", "kind": "audit"}]',
+  '{"releases": "0.3.0 0.2.0 1.0.0", "owner": "the potter"}', 'c', 'u');
+INSERT INTO items (rid, project, key, num, title, state, turn, theme, opened_at, updated_at) VALUES
+  (1, 'test/proj', 'T', 1, 'kiln', 'open', 'agent', '0.2.0', 'o', 'u'),
+  (2, 'test/proj', 'T', 2, 'glaze', 'open', 'agent', NULL, 'o', 'u'),
+  (3, 'test/proj', 'T', 3, 'shelf', 'open', 'agent', 'tooling', 'o', 'u'),
+  (4, 'test/proj', 'T', 4, 'wheel', 'open', 'agent', '2.0.0', 'o', 'u');
+"#,
+    )
+    .await;
+    migrate(&s.db).await.unwrap();
+    let rows = pairs(
+        &s,
+        "SELECT name, position::text FROM releases WHERE project='test/proj' ORDER BY position",
+    )
+    .await;
+    let want = [
+        ("0.3.0", "0"),
+        ("0.2.0", "1"),
+        ("1.0.0", "2"),
+        ("2.0.0", "3"),
+    ];
+    assert_eq!(rows, want.map(|(a, b)| (a.to_string(), b.to_string())));
+    let placed = pairs(
+        &s,
+        "SELECT i.id, COALESCE(r.name, '-') || ' ' || COALESCE(i.theme, '-') FROM items i \
+         LEFT JOIN releases r ON r.id=i.release_id ORDER BY i.id",
+    )
+    .await;
+    let want = [
+        ("T1", "0.2.0 0.2.0"),
+        ("T2", "0.3.0 -"),
+        ("T3", "- tooling"),
+        ("T4", "2.0.0 2.0.0"),
+    ];
+    assert_eq!(placed, want.map(|(a, b)| (a.to_string(), b.to_string())));
+    let facts = pairs(&s, "SELECT slug, skills::text FROM projects ORDER BY slug").await;
+    assert_eq!(
+        facts,
+        [(
+            "test/proj".to_string(),
+            r#"{"owner": "the potter"}"#.to_string()
+        )]
+    );
+}
+
+#[tokio::test]
+async fn test_an_opened_link_to_a_plan_becomes_the_parent_and_the_rest_origins() {
+    let s = Scratch::bare(2).await;
+    Migrator::up(&s.db, Some(steps_before("m20261006_000006_parents")))
+        .await
+        .unwrap();
+    s.seed(
+        r#"
+INSERT INTO projects (slug, keys, created_at, updated_at) VALUES ('test/proj',
+  '[{"key": "T", "kind": "work"}, {"key": "Q", "kind": "decision"}, {"key": "A", "kind": "audit"}]', 'c', 'u');
+INSERT INTO items (rid, project, key, num, title, state, turn, opened_at, updated_at) VALUES
+  (1, 'test/proj', 'A', 1, 'orchard', 'open', 'agent', 'o1', 'u'),
+  (2, 'test/proj', 'A', 2, 'hedge', 'open', 'agent', 'o2', 'u'),
+  (3, 'test/proj', 'Q', 1, 'which pears', 'open', 'user', 'o3', 'u'),
+  (4, 'test/proj', 'T', 1, 'graft', 'open', 'agent', 'o4', 'u'),
+  (5, 'test/proj', 'T', 2, 'prune', 'open', 'agent', 'o5', 'u'),
+  (6, 'test/proj', 'T', 3, 'mulch', 'open', 'agent', 'o6', 'u'),
+  (7, 'test/proj', 'T', 4, 'water', 'open', 'agent', 'o7', 'u');
+INSERT INTO links (rid, kind, to_rid) VALUES
+  (3, 'opened', 1), (4, 'opened', 3), (5, 'opened', 1), (5, 'opened', 2), (7, 'opened', 6);
+"#,
+    )
+    .await;
+    migrate(&s.db).await.unwrap();
+    let parents = pairs(
+        &s,
+        "SELECT a.id, b.id FROM items a JOIN items b ON b.rid=a.parent_rid ORDER BY a.id",
+    )
+    .await;
+    let want = [("Q1", "A1"), ("T1", "A1"), ("T2", "A1")];
+    assert_eq!(parents, want.map(|(a, b)| (a.to_string(), b.to_string())));
+    let links = pairs(
+        &s,
+        "SELECT a.id || ' ' || l.kind, b.id FROM links l JOIN items a ON a.rid=l.rid \
+         JOIN items b ON b.rid=l.to_rid ORDER BY 1, 2",
+    )
+    .await;
+    let want = [
+        ("A2 related", "T2"),
+        ("T1 origin", "Q1"),
+        ("T2 related", "A2"),
+        ("T4 origin", "T3"),
+    ];
+    assert_eq!(links, want.map(|(a, b)| (a.to_string(), b.to_string())));
+    let refused =
+        s.db.execute_raw(statement(
+            "INSERT INTO links (rid, kind, to_rid) VALUES (6, 'opened', 1)",
+            vec![],
+        ))
+        .await;
+    assert!(refused.is_err());
+    let pending: Vec<i64> =
+        s.db.query_all_raw(statement(
+            "SELECT rid FROM pending_dump ORDER BY rid",
+            vec![],
+        ))
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| r.try_get_by_index(0).unwrap())
+        .collect();
+    assert_eq!(pending, [2, 3, 4, 5, 7]);
 }

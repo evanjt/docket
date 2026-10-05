@@ -202,7 +202,7 @@ fn test_a_plan_closes_with_its_gaps_open_only_once_due() {
     assert!(close_plan(&plan, &gaps, true).is_ok());
     assert_eq!(
         refusal(close_plan(&plan, &gaps, false)),
-        "A1 opened work that is still open: B7. It closes only when nothing it opened is open; unclaim it and it comes back when they close."
+        "A1 has work under it that is still open: B7. It closes only when nothing under it is open; unclaim it and it comes back when they close."
     );
 }
 

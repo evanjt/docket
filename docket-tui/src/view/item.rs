@@ -154,17 +154,14 @@ fn cites(out: &mut Doc, shown: &Shown, width: usize) {
     }
 }
 
-/// What opened it, what it is related to and what it opened, each with its word and title.
+/// Its plan, what spawned it, what it is related to and its children, each with its word and title.
 fn ties(out: &mut Doc, board: Option<&Board>, shown: &Shown) {
-    let me = board.and_then(|b| b.get(&shown.row.id));
-    let children: Vec<String> = match (board, me) {
-        (Some(b), Some(me)) => b.children(me.rid).iter().map(|c| c.id.clone()).collect(),
-        _ => Vec::new(),
-    };
+    let parent: Vec<String> = shown.parent.iter().cloned().collect();
     for (label, ids) in [
-        ("Opened by", &shown.opened),
+        ("Plan", &parent),
+        ("Origin", &shown.origin),
         ("Related", &shown.related),
-        ("Opened", &children),
+        ("Children", &shown.children),
     ] {
         if ids.is_empty() {
             continue;

@@ -18,6 +18,7 @@ use sea_orm::DatabaseConnection;
 pub fn router() -> Router<DatabaseConnection> {
     Router::new()
         .route("/next", get(queue::next))
+        .route("/releases", get(crate::verbs::releases::list))
         .route("/status", get(queue::status))
         .route("/todo", get(lists::todo))
         .route("/todo/waiting", get(lists::todo_waiting))

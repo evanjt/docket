@@ -5,6 +5,7 @@ pub mod fields;
 pub mod graph;
 pub mod open;
 pub mod project;
+pub mod releases;
 pub mod retry;
 pub mod turn;
 pub mod view;
@@ -170,7 +171,9 @@ pub fn router() -> Router<DatabaseConnection> {
         .route("/priority", post(fields::priority))
         .route("/rate", post(fields::rate))
         .route("/edit", post(fields::edit))
+        .route("/releases", post(releases::releases))
         .route("/link", post(fields::link))
+        .route("/parent", post(fields::parent))
         .route("/project", post(project::project))
         .route("/reindex", post(project::reindex))
 }

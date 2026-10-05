@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::hash::BuildHasher;
 
-use crate::member::{Tie, opened_under};
+use crate::member::{Tie, descendants};
 use crate::queue::release_rank;
 
 /// Every item on a cycle of holds, a self-hold included. An item whose chain only runs into a cycle
@@ -162,7 +162,7 @@ pub fn gate_edges<S: BuildHasher>(
 ) -> Vec<(i64, i64)> {
     let mut out = Vec::new();
     for &plan in gated {
-        let mut members: Vec<i64> = opened_under(ties, plan)
+        let mut members: Vec<i64> = descendants(ties, plan)
             .into_iter()
             .filter(|m| open.contains(m))
             .collect();
@@ -188,11 +188,12 @@ pub fn held_later(edges: &BTreeMap<i64, Vec<i64>>, rank: &BTreeMap<i64, usize>) 
     out
 }
 
-/// Whether a hold of an item in `held` by one in `holder` runs into a later release. A theme the
-/// releases do not list ranks with the current release.
+/// Whether a hold of an item in `held` by one in `holder` runs into a later release. The backlog
+/// ships after every release.
 #[must_use]
 pub fn runs_later(releases: &[String], held: Option<&str>, holder: Option<&str>) -> bool {
-    release_rank(releases, holder) > release_rank(releases, held)
+    let rank = |r| release_rank(releases, r).unwrap_or(usize::MAX);
+    rank(holder) > rank(held)
 }
 
 /// The events that move an item forward. Edits, links, labels and release moves are bookkeeping and

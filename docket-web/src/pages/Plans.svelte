@@ -22,7 +22,7 @@
           rows: plans(ctx.board!, g.kind).filter(
             (p) =>
               (!text || `${p.node.id} ${p.node.title}`.toLowerCase().includes(text)) &&
-              (!release || releaseOf(p.node.theme, ctx.releases) === release),
+              (!release || releaseOf(p.node.release, ctx.releases) === release),
           ),
         })).filter((s) => s.rows.length)
       : [],
@@ -73,7 +73,7 @@
       {/each}
     </ul>
   {:else}
-    <p class="kids faint">Everything it opened is closed.</p>
+    <p class="kids faint">Everything under it is closed.</p>
   {/if}
 {/snippet}
 
@@ -110,12 +110,12 @@
                 </button>
                 <a class="id" href={ctx.item(p.node.id)}>{p.node.id}</a>
                 <a class="title" href={ctx.item(p.node.id)}>{p.node.title}</a>
-                {#if releaseOf(p.node.theme, ctx.releases)}<span class="release faint">{releaseOf(p.node.theme, ctx.releases)}</span>{/if}
+                {#if releaseOf(p.node.release, ctx.releases)}<span class="release faint">{releaseOf(p.node.release, ctx.releases)}</span>{/if}
                 <a class="remaining" href={remainingHref(ctx.slug, p.node.id)}>remaining work</a>
                 <span class="state">
                   {#if p.due}<span class="badge">Audit due</span>{:else}<Word word={p.node.word} plain />{/if}
                 </span>
-                <span class="bar">{#if p.tally.total}<Bar tally={p.tally} wide />{:else}<span class="faint">opened nothing yet</span>{/if}</span>
+                <span class="bar">{#if p.tally.total}<Bar tally={p.tally} wide />{:else}<span class="faint">nothing under it yet</span>{/if}</span>
               </div>
               {#if unfolded.has(p.node.id)}{@render tree(p.node.id, 1)}{/if}
             </li>

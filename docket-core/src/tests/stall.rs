@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use super::*;
+use crate::member::Edge;
 
 fn holds(pairs: &[(i64, i64)]) -> BTreeMap<i64, Vec<i64>> {
     let mut out: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
@@ -53,27 +54,27 @@ fn test_a_hold_runs_into_a_later_release_only_when_the_holder_ships_after_the_he
     assert!(runs_later(&releases, Some("0.4.1"), Some("0.4.2")));
     assert!(!runs_later(&releases, Some("0.4.2"), Some("0.4.2")));
     assert!(!runs_later(&releases, Some("0.4.2"), Some("0.4.1")));
-    assert!(runs_later(&releases, Some("upkeep"), Some("0.4.2")));
-    assert!(!runs_later(&[], Some("0.4.1"), Some("0.4.2")));
+    assert!(runs_later(&releases, Some("0.4.2"), None));
+    assert!(!runs_later(&releases, None, Some("0.4.2")));
 }
 
 #[test]
 fn test_a_gated_plan_is_held_by_an_open_item_below_a_closed_one() {
-    // Plan 1 opened closed question 2, which opened open item 3 in a later release.
+    // Plan 1 holds closed item 2, which holds open item 3 in a later release.
     let ties = [
         Tie {
             rid: 2,
-            opened: true,
+            edge: Edge::Parent,
             to: 1,
         },
         Tie {
             rid: 3,
-            opened: true,
+            edge: Edge::Parent,
             to: 2,
         },
         Tie {
             rid: 4,
-            opened: false,
+            edge: Edge::Related,
             to: 1,
         },
     ];

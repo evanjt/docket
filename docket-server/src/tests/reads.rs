@@ -14,7 +14,7 @@ INSERT INTO projects (slug, keys, themes, skills, created_at, updated_at) VALUES
   '[{"key":"T","kind":"work"},{"key":"Q","kind":"decision"},{"key":"A","kind":"audit"},
     {"key":"PK","kind":"package"},{"key":"CON","kind":"concept"}]',
   '[{"name":"sync"}]', '{}', 'c', 'u'),
-  ('o/r', '[{"key":"T","kind":"work"},{"key":"Q","kind":"decision"}]', '[]', '{"releases":"1.0 1.1 1.2"}', 'c', 'u'),
+  ('o/r', '[{"key":"T","kind":"work"},{"key":"Q","kind":"decision"}]', '[]', '{}', 'c', 'u'),
   ('o/s', '[{"key":"T","kind":"work"},{"key":"A","kind":"audit"},{"key":"CON","kind":"concept"}]', '[]', '{}', 'c', 'u');
 INSERT INTO items (rid, project, key, num, title, state, resolution, tags, body, opened_at, updated_at) VALUES
   (302, 'o/s', 'T', 1, 'Opened and done', 'done', 'ok', '[]', '', 'o02', 'u02'),
@@ -26,8 +26,8 @@ INSERT INTO items (rid, project, key, num, title, state, turn, wait_on, wait_ref
   (301, 'o/s', 'CON', 1, 'Concept', 'open', 'agent', NULL, NULL, NULL, '[]', '', 'o01', 'u01'),
   (306, 'o/s', 'T', 5, 'Opened and waiting', 'open', 'agent', 'condition', 'later', 'w06', '[]', '', 'o06', 'u06'),
   (307, 'o/s', 'T', 6, 'Related and waiting', 'open', 'agent', 'condition', 'later', 'w07', '[]', '', 'o07', 'u07');
+UPDATE items SET parent_rid=300 WHERE rid IN (302, 303, 306);
 INSERT INTO links (rid, kind, to_rid) VALUES
-  (302, 'opened', 300), (303, 'opened', 300), (306, 'opened', 300),
   (300, 'related', 301), (304, 'related', 301), (305, 'related', 301), (307, 'related', 301);
 INSERT INTO items (rid, project, key, num, title, state, turn, tags, theme, body, opened_at, updated_at) VALUES
   (130, 'o/r', 'T', 1, 'Two releases out', 'open', 'agent', '["high"]', '1.2', '', 'o30', 'u30'),
@@ -45,6 +45,10 @@ INSERT INTO items (rid, project, key, num, title, state, resolution, tags, theme
 INSERT INTO items (rid, project, key, num, title, state, resolution, decision, decided_at, tags, theme, opened_at, updated_at) VALUES
   (242, 'o/r', 'Q', 1, 'Decided in next', 'done', 'ok', 'Derived from X: yes', 'd42', '[]', '1.1', 'o42', 'u42'),
   (243, 'o/r', 'Q', 2, 'Decided in current', 'done', 'ok', 'Derived from X: no', 'd43', '[]', NULL, 'o43', 'u43');
+INSERT INTO releases (id, project, name, position) VALUES
+  (1, 'o/r', '1.0', 0), (2, 'o/r', '1.1', 1), (3, 'o/r', '1.2', 2);
+UPDATE items SET release_id = r.id FROM releases r
+  WHERE items.project = 'o/r' AND r.project = 'o/r' AND r.name = COALESCE(items.theme, '1.0');
 INSERT INTO items (rid, project, key, num, title, state, turn, tags, rank, complexity, scope, theme,
                    group_name, body, opened_at, updated_at) VALUES
   (1, 'o/p', 'T', 1, 'Plain fix', 'open', 'agent', '[]', NULL, NULL, NULL, NULL, NULL, '', 'o01', 'u01'),
@@ -68,8 +72,10 @@ INSERT INTO items (rid, project, key, num, title, state, turn, wait_on, wait_ite
   (16, 'o/p', 'A', 1, 'Plan', 'open', 'agent', 'condition', NULL, 'all closed', 'w16', '[]', 'o16', 'u16');
 INSERT INTO items (rid, project, key, num, title, state, turn, claim_branch, claim_host, claim_since, tags, opened_at, updated_at) VALUES
   (11, 'o/p', 'T', 7, 'Claimed', 'open', 'agent', 'b', 'h', 'c11', '[]', 'o11', 'u11');
-INSERT INTO links (rid, kind, to_rid) VALUES
-  (5, 'opened', 4), (7, 'opened', 6), (1, 'related', 15), (2, 'opened', 16), (3, 'opened', 2);
+UPDATE items SET parent_rid=4 WHERE rid=5;
+UPDATE items SET parent_rid=6 WHERE rid=7;
+UPDATE items SET parent_rid=16 WHERE rid IN (2, 3);
+INSERT INTO links (rid, kind, to_rid) VALUES (1, 'related', 15), (3, 'origin', 2);
 INSERT INTO links (rid, kind, to_path, to_line) VALUES (17, 'cites_file', 'src/sync.py', 3);
 INSERT INTO events (uid, project, rid, at, host, kind, note, data) VALUES
   ('e1', 'o/p', 1, 'e01', 'devbox', 'decided', 'chose X', '{"derived": "CID2"}');
@@ -138,7 +144,7 @@ async fn test_next_orders_by_priority_then_age_alone() {
 
 #[tokio::test]
 async fn test_next_orders_by_release_then_priority() {
-    assert_eq!(ids("/next?project=o/r").await, ["T4", "T3", "T2", "T1"]);
+    assert_eq!(ids("/next?project=o/r").await, ["T3", "T2", "T1", "T4"]);
 }
 
 #[tokio::test]
@@ -251,7 +257,7 @@ async fn test_done_and_dropped_filter_by_release_before_the_page_is_cut() {
     let done = |release: &str, n: u32| format!("/done?project=o/r&release={release}&n={n}");
     assert_eq!(ids(&done("1.2", 20)).await.len(), 5);
     assert_eq!(ids(&done("1.2", 3)).await.len(), 3);
-    assert_eq!(ids(&done("1.0", 40)).await, ["Q2", "T106", "T107"]);
+    assert_eq!(ids(&done("1.0", 40)).await, ["Q2", "T106"]);
     assert_eq!(ids("/done?project=o/r&n=20").await.len(), 20);
     assert_eq!(ids("/dropped?project=o/r&release=1.1").await, ["T140"]);
     assert_eq!(ids("/dropped?project=o/r&release=1.0").await, ["T141"]);

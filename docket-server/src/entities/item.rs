@@ -47,6 +47,8 @@ pub struct Model {
     pub resolution: Option<String>,
     pub superseded_by: Option<i64>,
     #[crudcrate(filterable)]
+    pub parent_rid: Option<i64>,
+    #[crudcrate(filterable)]
     pub scope: Option<String>,
     #[crudcrate(filterable)]
     pub complexity: Option<String>,
@@ -54,6 +56,8 @@ pub struct Model {
     pub group_name: Option<String>,
     #[crudcrate(filterable)]
     pub theme: Option<String>,
+    #[crudcrate(filterable)]
+    pub release_id: Option<i64>,
     #[crudcrate(sortable)]
     pub rank: Option<i64>,
     pub tags: serde_json::Value,

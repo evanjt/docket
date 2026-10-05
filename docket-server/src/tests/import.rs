@@ -116,7 +116,10 @@ async fn test_import_copies_every_row_with_its_keys() {
     let shown = call(&app, Method::GET, "/show/T1?project=o/p", None).await;
     assert_eq!(shown["wait_ref"], "T2");
     assert_eq!(shown["tags"], json!(["high"]));
-    assert_eq!(shown["opened"], json!(["PK1"]));
+    assert_eq!(
+        shown["parent"], "PK1",
+        "an opened link to a package becomes the parent"
+    );
     let cites = json!([
         {"path": "src/a.rs", "line": 4, "kind": "cites_file"},
         {"path": "tests/t.rs", "line": null, "kind": "cites_test"},

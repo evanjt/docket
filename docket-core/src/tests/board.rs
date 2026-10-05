@@ -1,5 +1,5 @@
 use super::{Board, GateProblem};
-use crate::member::Tie;
+use crate::member::{Edge, Tie};
 use crate::rows::{ItemRow, KeySpec, Progress, ProjectRow};
 use crate::rules::GATE;
 use crate::word::Kind;
@@ -35,31 +35,31 @@ fn item(rid: i64, id: &str, state: &str) -> ItemRow {
     }
 }
 
-fn opened(rid: i64, to: i64) -> Tie {
+fn parent(rid: i64, to: i64) -> Tie {
     Tie {
         rid,
-        opened: true,
+        edge: Edge::Parent,
         to,
     }
 }
 
-/// A1 opened T1 and T2, both closed; T2 opened T3, whose state is given.
+/// A1 is the parent of T1 and of plan A2, both closed; A2 is the parent of T3, whose state is given.
 fn plan_with_grandchild(t3: &str) -> Board {
     let items = vec![
         item(1, "A1", "open"),
         item(2, "T1", "done"),
-        item(3, "T2", "done"),
+        item(3, "A2", "done"),
         item(4, "T3", t3),
     ];
     Board::new(
         project(),
         items,
-        vec![opened(2, 1), opened(3, 1), opened(4, 3)],
+        vec![parent(2, 1), parent(3, 1), parent(4, 3)],
     )
 }
 
 #[test]
-fn test_a_plan_counts_what_it_opened_at_any_depth() {
+fn test_a_plan_counts_everything_under_it_at_any_depth() {
     let b = plan_with_grandchild("open");
     let a1 = b.get("A1").unwrap();
     assert_eq!(
@@ -77,7 +77,7 @@ fn test_a_plan_counts_what_it_opened_at_any_depth() {
 fn test_a_plan_is_due_once_everything_under_it_is_closed() {
     let b = plan_with_grandchild("done");
     assert!(b.due(b.get("A1").unwrap()));
-    assert!(!b.due(b.get("T2").unwrap()));
+    assert!(!b.due(b.get("A2").unwrap()));
 }
 
 #[test]
@@ -107,11 +107,11 @@ fn test_an_ungated_plan_with_open_members_at_depth_two_is_an_open_audit() {
     let items = vec![
         item(1, "A1", "open"),
         item(2, "T1", "done"),
-        item(3, "T2", "done"),
+        item(3, "A2", "done"),
         item(4, "T3", "open"),
         item(5, "T4", "open"),
     ];
-    let ties = vec![opened(2, 1), opened(3, 1), opened(4, 3), opened(5, 3)];
+    let ties = vec![parent(2, 1), parent(3, 1), parent(4, 3), parent(5, 3)];
     let b = Board::new(project(), items, ties);
     assert_eq!(
         b.gate_problems(),
@@ -140,7 +140,7 @@ fn test_a_plan_under_a_plan_is_reported_once_each() {
         item(2, "A2", "open"),
         item(3, "T1", "open"),
     ];
-    let ties = vec![opened(2, 1), opened(3, 2)];
+    let ties = vec![parent(2, 1), parent(3, 2)];
     let b = Board::new(project(), items, ties);
     assert_eq!(
         b.gate_problems(),

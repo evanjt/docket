@@ -39,7 +39,7 @@ fn test_progress_by_kind() {
     };
     // PK1 holds T1 (done) and T2 (claimed).
     assert_eq!(of("PK1"), (1, 2, 1));
-    // A1 opened PK1 and T3, and PK1 holds T1 and T2, at any depth.
+    // A1 holds PK1 and T3, and PK1 holds T1 and T2, at any depth.
     assert_eq!(of("A1"), (1, 4, 1));
     // CON1 is related to T3 alone.
     assert_eq!(of("CON1"), (0, 1, 0));
@@ -80,7 +80,15 @@ fn test_empty_board_has_nothing_under_way() {
 
 #[test]
 fn test_net_counts_the_tickets_against_their_opens_and_the_idle_research() {
-    let b = board();
+    let mut b = board();
+    let current = docket_core::release::Release {
+        name: "1.0".into(),
+        ..Default::default()
+    };
+    b.project.releases = docket_core::release::Listed::new(vec![(1, current)]);
+    for i in &mut b.items {
+        i.release_id = Some(1);
+    }
     let event = |seq: i64, rid: i64, at: &str, kind: &str| docket_core::rows::EventRow {
         seq,
         project: "o/p".into(),

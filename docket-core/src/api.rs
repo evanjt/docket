@@ -64,6 +64,9 @@ pub struct ItemView {
     pub scope: Option<String>,
     pub complexity: Option<String>,
     pub theme: Option<String>,
+    /// The release it is in by name; none is the backlog.
+    #[serde(default)]
+    pub release: Option<String>,
     pub rank: Option<i64>,
     pub tags: Vec<String>,
     pub body: String,
@@ -75,7 +78,15 @@ pub struct ItemView {
     pub priority: String,
     pub superseded_by: Option<String>,
     pub related: Vec<String>,
-    pub opened: Vec<String>,
+    /// The plan the item belongs to.
+    #[serde(default)]
+    pub parent: Option<String>,
+    /// What spawned the item.
+    #[serde(default)]
+    pub origin: Vec<String>,
+    /// The items whose parent this is.
+    #[serde(default)]
+    pub children: Vec<String>,
     pub cites: Vec<Cite>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress: Option<Progress>,
@@ -131,7 +142,7 @@ pub struct NewRequest {
     pub priority: Option<String>,
     #[serde(default)]
     pub theme: Option<String>,
-    /// The release it is filed for: `current`, a listed release, or a theme in use; sets the theme.
+    /// The release it is filed for: `current` or a release not shipped; none files it in the backlog.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub release: Option<String>,
     #[serde(default)]
@@ -358,6 +369,32 @@ pub struct EditRequest {
     /// The `updated_at` the caller last read; a whole-body replace against a newer row is refused.
     #[serde(default)]
     pub expect_updated_at: Option<String>,
+    /// The release it moves to, as `NewRequest::release`; empty moves it to the backlog.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<String>,
+}
+
+/// `docket releases add|move|ship`: one release added, its open items moved, or it shipped.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ReleasesRequest {
+    #[serde(flatten)]
+    pub common: Common,
+    pub action: String,
+    pub name: String,
+    /// Where `move` and `ship` take the open items: `current`, a release, or empty for the backlog.
+    #[serde(default)]
+    pub to: Option<String>,
+    #[serde(default)]
+    pub target_date: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+/// The releases after the write, and the items it moved.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ReleasesDone {
+    pub releases: Vec<crate::release::Release>,
+    pub moved: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -369,6 +406,16 @@ pub struct LinkRequest {
     pub b: String,
     #[serde(default)]
     pub remove: bool,
+}
+
+/// Each of `a` under the plan, or under no plan when `plan` is none.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ParentRequest {
+    #[serde(flatten)]
+    pub common: Common,
+    pub a: Vec<String>,
+    #[serde(default)]
+    pub plan: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -458,8 +505,6 @@ pub struct Started {
 pub struct Closed {
     pub item: ItemView,
     pub released: Vec<Brief>,
-    /// The ids a decision's resolution says it opened, now linked.
-    pub opened: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -487,6 +532,13 @@ pub struct Linked {
     pub kind: String,
     pub to: String,
     pub removed: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Parented {
+    pub items: Vec<String>,
+    /// The plan they are under now, none when they left one.
+    pub plan: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -50,18 +50,25 @@ async fn seeded() -> (Router, Scratch) {
     .await;
     let app = app(&db.db, Keys::parse("box owner k").unwrap());
     let steps = [
+        ("releases", json!({"action": "add", "name": "1.0"})),
+        ("releases", json!({"action": "add", "name": "1.1"})),
+        ("releases", json!({"action": "ship", "name": "1.0"})),
         (
             "new",
-            json!({"key": "B", "title": "Crust \u{e9}", "body": "- **Evidence.** `src/crust.ts:3` and `tests/crust_test.rs`.\n"}),
+            json!({"key": "B", "title": "Crust \u{e9}", "release": "1.1", "body": "- **Evidence.** `src/crust.ts:3` and `tests/crust_test.rs`.\n"}),
         ),
         ("new", json!({"key": "B", "title": "Old pace"})),
-        ("new", json!({"key": "Q", "title": "One cache or two"})),
+        (
+            "new",
+            json!({"key": "Q", "title": "One cache or two", "release": "current"}),
+        ),
         (
             "new",
             json!({"key": "A", "title": "Shelves", "body": "- **Principles.**\n  1. One owner.\n- **Evidence.** `src/crust.ts:1`\n"}),
         ),
         ("new", json!({"key": "A", "title": "Recording"})),
-        ("link", json!({"a": ["B1"], "kind": "opened", "b": "A1"})),
+        ("parent", json!({"a": ["B1"], "plan": "A1"})),
+        ("link", json!({"a": ["B2"], "kind": "origin", "b": "Q1"})),
         ("link", json!({"a": ["A1"], "kind": "related", "b": "A2"})),
         ("wait", json!({"id": "B1", "on": "Q1"})),
         ("drop", json!({"id": "B2", "superseded_by": "B1"})),
@@ -138,6 +145,8 @@ async fn test_restore_round_trips_a_full_dump() {
     );
     let after = full_page(&app(&db.db, Keys::parse("box owner k").unwrap())).await;
     assert_eq!(as_map(&before), as_map(&after));
+    assert!(as_map(&after)["o/p/items/B1.md"].contains("\nrelease: \"1.1\"\n"));
+    assert!(as_map(&after)["o/p/project.json"].contains("shipped_at"));
     let cites: i64 = scalar(
         &db.db,
         "SELECT COUNT(*) FROM links WHERE kind LIKE 'cites_%'",
@@ -153,6 +162,33 @@ async fn test_restore_round_trips_a_full_dump() {
         .await
         .unwrap();
     assert_eq!(depends, 3);
+}
+
+#[tokio::test]
+async fn test_an_older_dumps_opened_links_restore_as_a_parent_and_an_origin() {
+    let mut page = full_page(&seeded().await.0).await;
+    for i in &mut page.items {
+        let mut opened: Vec<String> = i.parent.take().into_iter().collect();
+        opened.extend(i.origin.take().unwrap_or_default());
+        if !opened.is_empty() {
+            i.opened = opened;
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    write_all(dir.path(), &page);
+    for i in page.items.iter().filter(|i| !i.opened.is_empty()) {
+        let line = format!("\nopened: {}\nopened_at: ", json!(i.opened));
+        let text = docket_core::dump::render_item(i).replacen("\nopened_at: ", &line, 1);
+        tree::write(dir.path(), &item_path(&i.project, &i.id), &text).unwrap();
+    }
+    let db = Scratch::bare(2).await;
+    restore(dir.path(), &db.url()).await.unwrap();
+    let after = app(&db.db, Keys::parse("box owner k").unwrap());
+    let b1 = call(&after, Method::GET, "/show/B1?project=o/p", None).await;
+    assert_eq!(b1["parent"], "A1");
+    let b2 = call(&after, Method::GET, "/show/B2?project=o/p", None).await;
+    assert_eq!(b2["origin"], json!(["Q1"]));
+    assert_eq!(b2["parent"], serde_json::Value::Null);
 }
 
 #[tokio::test]

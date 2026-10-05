@@ -27,10 +27,23 @@ const PROJECT: Style = Style {
 };
 
 /// Written only when set, so every file dumped before them stays byte-identical.
-pub const OPTIONAL: [&str; 5] = ["claim_runner", "claim_job", "claim_on", "scope", "depends"];
+pub const OPTIONAL: [&str; 8] = [
+    "claim_runner",
+    "claim_job",
+    "claim_on",
+    "scope",
+    "release",
+    "parent",
+    "origin",
+    "depends",
+];
+
+/// Fields an older item file carries that are read and never written: `opened`, which a restore
+/// splits into a parent and origins.
+pub const LEGACY: [&str; 1] = ["opened"];
 
 /// The frontmatter of an item file, in order.
-pub const FIELDS: [&str; 30] = [
+pub const FIELDS: [&str; 32] = [
     "id",
     "title",
     "state",
@@ -54,10 +67,12 @@ pub const FIELDS: [&str; 30] = [
     "complexity",
     "group",
     "theme",
+    "release",
     "rank",
     "tags",
     "related",
-    "opened",
+    "parent",
+    "origin",
     "depends",
     "opened_at",
     "updated_at",
@@ -91,9 +106,18 @@ pub struct ItemDump {
     pub complexity: Option<String>,
     pub group: Option<String>,
     pub theme: Option<String>,
+    /// The release it is in by name; none is the backlog.
+    pub release: Option<String>,
     pub rank: Option<i64>,
     pub tags: Vec<String>,
     pub related: Vec<String>,
+    /// The plan the item belongs to.
+    pub parent: Option<String>,
+    /// What spawned the item; none when nothing is recorded.
+    pub origin: Option<Vec<String>>,
+    /// The `opened` links an item file carried before parents and origins, read so an older dump
+    /// restores; never written.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub opened: Vec<String>,
     /// What the item depends on; none when it depends on nothing.
     pub depends: Option<Vec<String>>,
@@ -132,6 +156,9 @@ pub struct ProjectDump {
     pub skills: Value,
     pub created_at: String,
     pub updated_at: String,
+    /// Every release, shipped or not, in position order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub releases: Vec<crate::release::Release>,
 }
 
 /// What changed after a cursor: every project, the items to rewrite and the events to add. A full
@@ -172,7 +199,7 @@ pub fn render_item(item: &ItemDump) -> String {
         if OPTIONAL.contains(&k) && v.is_null() {
             continue;
         }
-        if let (Value::Array(ids), "related" | "opened" | "depends") = (&mut v, k) {
+        if let (Value::Array(ids), "related" | "origin" | "depends") = (&mut v, k) {
             ids.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
         }
         let _ = writeln!(text, "{k}: {}", dumps_styled(&v, LINE));
@@ -313,7 +340,7 @@ fn follows(first: &EventDump, e: &EventDump) -> bool {
     if let Some(into) = fold_into(first) {
         return fold_into(e) == Some(into);
     }
-    let repeats = ["priority ", "link ", "unlink ", "to the "];
+    let repeats = ["priority ", "link ", "unlink ", "parent ", "to the "];
     match (first.note.as_deref(), e.note.as_deref()) {
         (Some(lead), Some(note)) if first.kind == "edited" && e.kind == "edited" => {
             note == lead && repeats.iter().any(|p| lead.starts_with(p))
@@ -369,7 +396,7 @@ fn fold_message(write: &[EventDump]) -> Option<String> {
     })
 }
 
-/// An `edited` write, told apart by its note: priority, rate, link, a move, or an edit.
+/// An `edited` write, told apart by its note: priority, rate, link, parent, a move, or an edit.
 fn edit_message(write: &[EventDump], id: &str) -> String {
     let note = write[0].note.as_deref().unwrap_or("");
     let alike = |prefixes: &[&str]| {
@@ -394,6 +421,12 @@ fn edit_message(write: &[EventDump], id: &str) -> String {
         return match alike(&["link ", "unlink "]) {
             n if n > 1 => format!("Link {n} items to {to}"),
             _ => format!("Link {id}"),
+        };
+    }
+    if let Some(plan) = note.strip_prefix("parent ") {
+        return match alike(&["parent "]) {
+            n if n > 1 => format!("Put {n} items under {plan}"),
+            _ => format!("Put {id} under {plan}"),
         };
     }
     if let Some(rest) = note.strip_prefix("to the ") {
@@ -448,7 +481,7 @@ pub fn parse_item(text: &str) -> Result<(Map<String, Value>, String), String> {
     let mut fields = Map::new();
     for line in rest[..end].split('\n').filter(|l| !l.trim().is_empty()) {
         let (k, v) = line.split_once(": ").unwrap_or((line, ""));
-        if !FIELDS.contains(&k) {
+        if !FIELDS.contains(&k) && !LEGACY.contains(&k) {
             return Err(format!("unknown field {k:?} in item file"));
         }
         let value = serde_json::from_str(v).map_err(|e| format!("{k}: {e}"))?;

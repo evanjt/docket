@@ -87,6 +87,7 @@ async fn owner_task(call: &mut Call, r: &Item, condition: &str) -> Result<Item, 
             ),
             complexity: None,
             theme: r.theme.clone(),
+            release_id: r.release_id,
             group_name: None,
             scope: None,
             tags: Vec::new(),
@@ -256,7 +257,7 @@ async fn undepend(call: &mut Call, r: &Item, on: &[Item]) -> Result<Item, Failur
 }
 
 /// Clear a wait by hand, and every dependency still holding the item. A plan's gate stays while
-/// anything it opened is open, unless forced.
+/// anything under it is open, unless forced.
 ///
 /// # Errors
 /// 409 when the item is not waiting, or is a gated plan with open members and no force.
@@ -268,7 +269,7 @@ pub async fn resume(
     let mut call = Call::begin(&db, &caller, &req.common).await?;
     let r = call.item(&req.id).await?;
     let members: Vec<String> = if r.wait_ref.as_deref() == Some(rules::GATE) {
-        open_under(&call.tx.conn, r.rid)
+        open_under(&call.tx.conn, &call.slug, r.rid)
             .await?
             .into_iter()
             .map(|m| m.id)
@@ -484,7 +485,7 @@ pub async fn answer(
             )
             .await?;
         for c in &carriers {
-            call.tx.set_link(c.rid, "opened", r.rid, false).await?;
+            call.tx.set_link(c.rid, "origin", r.rid, false).await?;
         }
         released.extend(release_waiters(&mut call.tx, &call.project, &row, "closed").await?);
         released.extend(settle_audits(&mut call.tx, &call.project, &[r.rid]).await?);

@@ -4,7 +4,7 @@
   import { go } from '../lib/router.svelte';
   import { act } from '../lib/session.svelte';
 
-  let { open = $bindable(false), from }: { open?: boolean; from?: { id: string; theme?: string | null } } = $props();
+  let { open = $bindable(false), from }: { open?: boolean; from?: { id: string; release?: string | null; kind?: string } } = $props();
 
   const ctx = project();
   const keys = $derived((ctx.row?.keys ?? []).filter((k) => k.kind !== 'concept' && k.kind !== 'idea'));
@@ -15,7 +15,8 @@
   let priority = $state('normal');
   let complexity = $state('');
   let release = $state('');
-  let openedBy = $state('');
+  let plan = $state('');
+  let origin = $state('');
   let group = $state('');
   let busy = $state(false);
 
@@ -27,16 +28,16 @@
     if (!open) return;
     const d = newItemDefaults(from, ctx.releases);
     release = d.release;
-    openedBy = d.openedBy;
+    plan = d.plan;
+    origin = d.origin;
   });
 
   async function submit(e: SubmitEvent) {
     e.preventDefault();
     busy = true;
-    const req = newItemRequests(ctx.slug, { key, title, body, priority, complexity, release, openedBy, group });
+    const req = newItemRequests(ctx.slug, { key, title, body, priority, complexity, release, plan, origin, group });
     const done = await act<{ item: { id: string } }>('new', req.request, 'Opened');
-    const link = done && req.link(done.item.id);
-    if (link) await act('link', link, 'Linked');
+    for (const [verb, sent, said] of done ? req.after(done.item.id) : []) await act(verb, sent, said);
     busy = false;
     if (!done) return;
     open = false;
@@ -83,9 +84,14 @@
         <input class="field" bind:value={group} placeholder="none" />
       </label>
     </div>
-    <label>Opened by
-      <input class="field" bind:value={openedBy} placeholder="an item id, or none" />
-    </label>
+    <div class="pair">
+      <label>Plan
+        <input class="field" bind:value={plan} placeholder="a plan's id, or none" />
+      </label>
+      <label>Origin
+        <input class="field" bind:value={origin} placeholder="what spawned it, or none" />
+      </label>
+    </div>
     <div class="foot">
       <button class="btn primary" disabled={!title.trim() || !key || busy}>Open {key}</button>
       <button type="button" class="btn" onclick={() => (open = false)}>Cancel</button>

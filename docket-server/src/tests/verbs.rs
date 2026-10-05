@@ -227,12 +227,12 @@ async fn test_question_pathway() {
     s.refused("start", json!({ "id": "Q1", "branch": "audit/other-2" }))
         .await;
     s.open("B", "Split the cache").await;
-    let out = s
-        .ok("close", json!({ "id": "Q1", "resolution": "opened B2" }))
+    s.ok("link", json!({ "a": ["B2"], "kind": "origin", "b": "Q1" }))
         .await;
-    assert_eq!(out["opened"], json!(["B2"]));
+    s.ok("close", json!({ "id": "Q1", "resolution": "opened B2" }))
+        .await;
     assert_eq!(s.word("Q1").await, "done");
-    assert_eq!(s.item("B2").await["opened"], json!(["Q1"]));
+    assert_eq!(s.item("B2").await["origin"], json!(["Q1"]));
     s.refused("start", json!({ "id": "Q1" })).await;
 }
 
@@ -300,7 +300,7 @@ async fn test_a_derived_answer_with_its_carrier_closes_and_never_lists_for_plann
     assert_eq!(out["item"]["state"], "done");
     let q1 = s.item("Q1").await;
     assert_eq!(q1["resolution"], "carried by T1");
-    assert_eq!(s.item("T1").await["opened"], json!(["Q1"]));
+    assert_eq!(s.item("T1").await["origin"], json!(["Q1"]));
     let (_, research) = s
         .send(
             Method::GET,
@@ -322,12 +322,8 @@ async fn test_a_derived_answer_with_its_carrier_closes_and_never_lists_for_plann
 }
 
 #[tokio::test]
-async fn test_a_release_sets_the_theme_an_item_is_filed_under() {
-    let s = Scratch::new().await;
-    s.db.seed(&format!(
-        "UPDATE projects SET skills = '{{\"releases\": \"1.0 1.1\"}}' WHERE slug = '{SLUG}'"
-    ))
-    .await;
+async fn test_a_release_files_an_item_in_a_release_that_exists_and_none_files_it_in_the_backlog() {
+    let s = two_releases().await;
     s.ok(
         "new",
         json!({ "key": "B", "title": "Crash on resume", "release": "current" }),
@@ -335,38 +331,103 @@ async fn test_a_release_sets_the_theme_an_item_is_filed_under() {
     .await;
     s.ok(
         "new",
-        json!({ "key": "T", "title": "Wider settings page", "release": "1.1" }),
+        json!({ "key": "T", "title": "Wider settings page", "release": "1.1", "theme": "upkeep" }),
     )
     .await;
-    s.ok(
-        "new",
-        json!({ "key": "T", "title": "Lint the hooks", "theme": "upkeep" }),
-    )
-    .await;
-    s.ok(
-        "add",
-        json!({ "title": "Hook runs twice", "release": "upkeep" }),
-    )
-    .await;
-    assert_eq!(s.item("B1").await["theme"], "1.0");
-    assert_eq!(s.item("T1").await["theme"], "1.1");
-    assert_eq!(s.item("B2").await["theme"], "upkeep");
+    s.ok("add", json!({ "title": "Hook runs twice" })).await;
+    assert_eq!(s.item("B1").await["release"], "1.0");
+    assert_eq!(s.item("T1").await["release"], "1.1");
+    assert_eq!(s.item("T1").await["theme"], "upkeep");
+    assert_eq!(s.item("B2").await["release"], Value::Null);
     assert_eq!(
         s.refused(
-            "new",
-            json!({ "key": "T", "title": "Later", "release": "2.0" })
+            "add",
+            json!({ "title": "Lint the hooks", "release": "upkeep" })
         )
         .await,
-        "2.0 is neither a release nor a theme in use here: give current, one of 1.0 1.1, or a theme items already carry"
+        "upkeep is not a release here: give current or one of 1.0 1.1"
     );
+}
+
+#[tokio::test]
+async fn test_edit_to_a_release_the_project_does_not_have_is_refused() {
+    let s = two_releases().await;
+    filed(&s, "T", "1.0").await;
     assert_eq!(
-        s.refused(
-            "new",
-            json!({ "key": "T", "title": "Both", "release": "1.0", "theme": "1.1" })
-        )
-        .await,
-        "give the release or the theme, not both: a release sets the theme."
+        s.refused("edit", json!({ "id": "T1", "release": "0.42" }))
+            .await,
+        "0.42 is not a release here: give current or one of 1.0 1.1"
     );
+    s.ok("edit", json!({ "id": "T1", "release": "1.1" })).await;
+    assert_eq!(s.item("T1").await["release"], "1.1");
+    s.ok("edit", json!({ "id": "T1", "release": "" })).await;
+    assert_eq!(s.item("T1").await["release"], Value::Null);
+}
+
+#[tokio::test]
+async fn test_a_release_ships_only_once_its_open_items_are_closed_or_moved_on() {
+    let s = two_releases().await;
+    filed(&s, "T", "1.0").await;
+    filed(&s, "T", "1.0").await;
+    s.ok("close", json!({ "id": "T2", "resolution": "fixed" }))
+        .await;
+    assert_eq!(
+        s.refused("releases", json!({ "action": "ship", "name": "1.0" }))
+            .await,
+        "1.0 still holds 1 open: T1. Close them, or pass --move-open-to a later release."
+    );
+    let out = s
+        .ok(
+            "releases",
+            json!({ "action": "ship", "name": "1.0", "to": "1.1" }),
+        )
+        .await;
+    assert_eq!(out["moved"], json!(["T1"]));
+    assert_eq!(s.item("T1").await["release"], "1.1");
+    assert!(out["releases"][0]["shipped_at"].is_string());
+    assert_eq!(
+        s.refused("edit", json!({ "id": "T1", "release": "1.0" }))
+            .await,
+        "1.0 has shipped: give current or one of 1.1"
+    );
+    filed(&s, "T", "current").await;
+    assert_eq!(s.item("T3").await["release"], "1.1");
+}
+
+#[tokio::test]
+async fn test_releases_are_added_in_version_order_and_kept_by_the_owner() {
+    let s = two_releases().await;
+    let out = s
+        .ok("releases", json!({ "action": "add", "name": "1.0.5" }))
+        .await;
+    let names: Vec<&str> = out["releases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["1.0", "1.0.5", "1.1"]);
+    assert_eq!(
+        s.refused("releases", json!({ "action": "add", "name": "1.1" }))
+            .await,
+        "1.1 is already a release"
+    );
+    let (status, _) = s
+        .post_as(
+            "agentkey",
+            "releases",
+            json!({ "action": "add", "name": "2.0" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    filed(&s, "T", "1.0").await;
+    let out = s
+        .ok(
+            "releases",
+            json!({ "action": "move", "name": "1.0", "to": "1.1" }),
+        )
+        .await;
+    assert_eq!(out["moved"], json!(["T1"]));
 }
 
 #[tokio::test]
@@ -408,26 +469,6 @@ async fn test_setting_tags_keeps_the_priority_unless_the_list_names_one() {
     let b1 = s.item("B1").await;
     assert_eq!(b1["priority"], "high");
     assert_eq!(b1["tags"], json!(["high", "single"]));
-}
-
-#[tokio::test]
-async fn test_a_decision_close_links_only_the_ids_it_says_it_opened() {
-    let s = Scratch::new().await;
-    s.open("Q", "One cache or two").await;
-    s.open("B", "Split the cache").await;
-    s.open("B", "An older fix").await;
-    s.ok("answer", json!({ "id": "Q1", "decision": "Two" }))
-        .await;
-    s.ok("start", json!({ "id": "Q1" })).await;
-    let out = s
-        .ok(
-            "close",
-            json!({ "id": "Q1", "resolution": "opened B1, covered by B2" }),
-        )
-        .await;
-    assert_eq!(out["opened"], json!(["B1"]));
-    assert_eq!(s.item("B1").await["opened"], json!(["Q1"]));
-    assert_eq!(s.item("B2").await["opened"], json!([]));
 }
 
 #[tokio::test]
@@ -717,8 +758,7 @@ async fn test_resuming_a_gated_plan_is_refused_while_a_member_is_open() {
     let s = Scratch::new().await;
     plan(&s).await;
     s.open("B", "Port the proofer").await;
-    s.ok("link", json!({ "a": ["B1"], "kind": "opened", "b": "A1" }))
-        .await;
+    s.ok("parent", json!({ "a": ["B1"], "plan": "A1" })).await;
     assert_eq!(
         s.refused("resume", json!({ "id": "A1" })).await,
         format!("A1 waits until {GATE}, and B1 is open. Close it first, or pass --force.")
@@ -758,7 +798,7 @@ async fn test_edit_fields_and_body() {
             json!({ "id": "B1", "set": [{ "field": "state", "value": "done" }] })
         )
         .await,
-        "state is not editable; fields are title, complexity, theme, group, tags, turn_note. State and turn move with their own verbs. Also priority: docket priority, release: --set theme=<release>."
+        "state is not editable; fields are title, complexity, theme, group, tags, turn_note. State and turn move with their own verbs. Also priority: docket priority, release: --release NAME."
     );
     let refused = s
         .refused(
@@ -767,10 +807,7 @@ async fn test_edit_fields_and_body() {
         )
         .await;
     assert!(refused.contains("priority: docket priority"), "{refused}");
-    assert!(
-        refused.contains("release: --set theme=<release>"),
-        "{refused}"
-    );
+    assert!(refused.contains("release: --release NAME"), "{refused}");
     s.ok("edit", json!({ "id": "B1", "append": "a dated note" }))
         .await;
     assert!(
@@ -781,7 +818,7 @@ async fn test_edit_fields_and_body() {
     );
     assert_eq!(
         s.refused("edit", json!({ "id": "B1" })).await,
-        "edit needs --set field=value, --append \"text\" or --body FILE|-."
+        "edit needs --set field=value, --release NAME, --append \"text\" or --body FILE|-."
     );
     assert_eq!(
         s.refused(
@@ -978,16 +1015,13 @@ async fn plan(s: &Scratch) {
 }
 
 #[tokio::test]
-async fn test_audit_waits_until_everything_it_opened_is_closed() {
+async fn test_audit_waits_until_everything_under_it_is_closed() {
     let s = Scratch::new().await;
     plan(&s).await;
     s.open("B", "Port the proofer").await;
     s.open("Q", "Which scale does the mixer read").await;
-    s.ok(
-        "link",
-        json!({ "a": ["B1", "Q1"], "kind": "opened", "b": "A1" }),
-    )
-    .await;
+    s.ok("parent", json!({ "a": ["B1", "Q1"], "plan": "A1" }))
+        .await;
     assert_eq!(s.word("A1").await, "blocked");
     assert_eq!(s.item("A1").await["wait_ref"], GATE);
     s.refused("start", json!({ "id": "A1" })).await;
@@ -997,6 +1031,9 @@ async fn test_audit_waits_until_everything_it_opened_is_closed() {
     )
     .await;
     s.open("B", "The mixer reads the bench scale").await;
+    s.ok("parent", json!({ "a": ["B2"], "plan": "A1" })).await;
+    s.ok("link", json!({ "a": ["B2"], "kind": "origin", "b": "Q1" }))
+        .await;
     s.ok("close", json!({ "id": "Q1", "resolution": "opened B2" }))
         .await;
     s.ok("close", json!({ "id": "B1", "resolution": "abc1234" }))
@@ -1022,8 +1059,7 @@ async fn test_a_reopened_item_holds_its_audit_again() {
     let s = Scratch::new().await;
     plan(&s).await;
     s.open("B", "Port the proofer").await;
-    s.ok("link", json!({ "a": ["B1"], "kind": "opened", "b": "A1" }))
-        .await;
+    s.ok("parent", json!({ "a": ["B1"], "plan": "A1" })).await;
     s.ok("close", json!({ "id": "B1", "resolution": "abc1234" }))
         .await;
     assert_eq!(s.word("A1").await, "ready");
@@ -1041,11 +1077,8 @@ async fn test_a_plans_ticket_is_claimed_and_closed_on_its_own_branch() {
     plan(&s).await;
     s.open("B", "oven runs hot twice").await;
     s.open("B", "bread oven runs hot twice").await;
-    s.ok(
-        "link",
-        json!({ "a": ["B1", "B2"], "kind": "opened", "b": "A1" }),
-    )
-    .await;
+    s.ok("parent", json!({ "a": ["B1", "B2"], "plan": "A1" }))
+        .await;
     s.ok("start", json!({ "id": "B1", "branch": "audit/b1-1" }))
         .await;
     s.ok("start", json!({ "id": "B2", "branch": "audit/b2-1" }))
@@ -1076,13 +1109,12 @@ async fn test_an_audit_that_finds_work_goes_back_to_waiting() {
     plan(&s).await;
     s.ok("start", json!({ "id": "A1" })).await;
     s.open("B", "The rye ratio is in no table").await;
-    s.ok("link", json!({ "a": ["B1"], "kind": "opened", "b": "A1" }))
-        .await;
+    s.ok("parent", json!({ "a": ["B1"], "plan": "A1" })).await;
     assert_eq!(s.word("A1").await, "building");
     assert_eq!(
         s.refused("close", json!({ "id": "A1", "resolution": "clean" }))
             .await,
-        "A1 opened work that is still open: B1. It closes only when nothing it opened is open; unclaim it and it comes back when they close."
+        "A1 has work under it that is still open: B1. It closes only when nothing under it is open; unclaim it and it comes back when they close."
     );
     s.ok("release", json!({ "id": "A1" })).await;
     assert_eq!(s.word("A1").await, "blocked");
@@ -1116,11 +1148,8 @@ async fn test_a_plans_audit_comes_due_once_and_closes_in_one_round() {
     plan(&s).await;
     s.open("B", "Port the proofer").await;
     s.open("T", "Port the mixer").await;
-    s.ok(
-        "link",
-        json!({ "a": ["B1", "T1"], "kind": "opened", "b": "A1" }),
-    )
-    .await;
+    s.ok("parent", json!({ "a": ["B1", "T1"], "plan": "A1" }))
+        .await;
     assert!(next(&s, "audit").await.is_empty());
     s.ok("close", json!({ "id": "B1", "resolution": "abc1234" }))
         .await;
@@ -1132,8 +1161,7 @@ async fn test_a_plans_audit_comes_due_once_and_closes_in_one_round() {
     assert!(!next(&s, "plan").await.contains(&"A1".to_string()));
     s.ok("start", json!({ "id": "A1" })).await;
     s.open("B", "The proofer reads the wrong constant").await;
-    s.ok("link", json!({ "a": ["B2"], "kind": "opened", "b": "A1" }))
-        .await;
+    s.ok("parent", json!({ "a": ["B2"], "plan": "A1" })).await;
     s.ok(
         "close",
         json!({ "id": "A1", "resolution": "one round: gap B2" }),
@@ -1155,8 +1183,7 @@ async fn test_a_new_plan_is_the_plan_roles_until_it_opens_work() {
     assert_eq!(next(&s, "plan").await, vec!["A1", "I1"]);
     assert!(next(&s, "audit").await.is_empty());
     s.open("B", "Port the proofer").await;
-    s.ok("link", json!({ "a": ["B1"], "kind": "opened", "b": "A1" }))
-        .await;
+    s.ok("parent", json!({ "a": ["B1"], "plan": "A1" })).await;
     assert_eq!(next(&s, "plan").await, vec!["I1"]);
     assert_eq!(next(&s, "work").await, vec!["B1"]);
 }
@@ -1188,36 +1215,29 @@ async fn test_an_empty_plan_is_ready_and_unlinking_the_last_open_item_releases_t
     plan(&s).await;
     assert_eq!(s.word("A1").await, "ready");
     s.open("B", "Unrelated after all").await;
-    s.ok("link", json!({ "a": ["B1"], "kind": "opened", "b": "A1" }))
-        .await;
+    s.ok("parent", json!({ "a": ["B1"], "plan": "A1" })).await;
     assert_eq!(s.word("A1").await, "blocked");
-    s.ok(
-        "link",
-        json!({ "a": ["B1"], "kind": "opened", "b": "A1", "remove": true }),
-    )
-    .await;
+    s.ok("parent", json!({ "a": ["B1"] })).await;
     assert_eq!(s.word("A1").await, "ready");
 }
 
 #[tokio::test]
-async fn test_link_takes_several_items_at_once() {
+async fn test_parent_takes_several_items_at_once() {
     let s = Scratch::new().await;
     plan(&s).await;
     for t in ["One", "Two", "Three"] {
         s.open("B", t).await;
     }
     let out = s
-        .ok(
-            "link",
-            json!({ "a": ["B1", "B2", "B3"], "kind": "opened", "b": "A1" }),
-        )
+        .ok("parent", json!({ "a": ["B1", "B2", "B3"], "plan": "A1" }))
         .await;
     assert_eq!(out["items"], json!(["B1", "B2", "B3"]));
-    assert_eq!(s.item("B3").await["opened"], json!(["A1"]));
+    assert_eq!(s.item("B3").await["parent"], "A1");
+    assert_eq!(s.item("A1").await["children"], json!(["B1", "B2", "B3"]));
     assert_eq!(
-        s.refused("link", json!({ "a": ["A1"], "kind": "opened", "b": "A1" }))
+        s.refused("parent", json!({ "a": ["A1"], "plan": "A1" }))
             .await,
-        "A1 cannot be linked to itself."
+        "A1 cannot be its own parent."
     );
 }
 
@@ -1265,7 +1285,7 @@ async fn test_key_adds_a_key_and_keeps_its_kind_once_it_holds_items() {
 // ---- keys, and the kinds kept to read ----
 
 #[tokio::test]
-async fn test_three_capital_keys_allocate_and_are_read_from_a_resolution() {
+async fn test_three_capital_keys_allocate_and_link() {
     let s = Scratch::new().await;
     s.ok(
         "key",
@@ -1277,11 +1297,12 @@ async fn test_three_capital_keys_allocate_and_are_read_from_a_resolution() {
         .await;
     let out = s.open("FIX", "A baker corrects a step once").await;
     assert_eq!(out["item"]["num"], 1);
-    let out = s
-        .ok("close", json!({ "id": "Q1", "resolution": "opened FIX1" }))
-        .await;
-    assert_eq!(out["opened"], json!(["FIX1"]));
-    assert_eq!(s.item("FIX1").await["opened"], json!(["Q1"]));
+    s.ok(
+        "link",
+        json!({ "a": ["FIX1"], "kind": "origin", "b": "Q1" }),
+    )
+    .await;
+    assert_eq!(s.item("FIX1").await["origin"], json!(["Q1"]));
     s.refused(
         "key",
         json!({ "key": "ABCD", "kind": "work", "meaning": "too long" }),
@@ -1294,11 +1315,7 @@ async fn test_a_story_no_longer_waits_on_its_work() {
     let s = Scratch::new().await;
     s.kept("STY", 1, "A baker corrects a step once").await;
     s.open("B", "The shared step has no editor").await;
-    s.ok(
-        "link",
-        json!({ "a": ["B1"], "kind": "opened", "b": "STY1" }),
-    )
-    .await;
+    s.ok("parent", json!({ "a": ["B1"], "plan": "STY1" })).await;
     assert_eq!(s.word("STY1").await, "ready");
     let out = s
         .ok("close", json!({ "id": "B1", "resolution": "abc1234" }))
@@ -1478,10 +1495,10 @@ async fn test_decide_appends_the_choice_and_its_basis() {
 
 async fn two_releases() -> Scratch {
     let s = Scratch::new().await;
-    s.db.seed(&format!(
-        "UPDATE projects SET skills = '{{\"releases\": \"1.0 1.1\"}}' WHERE slug = '{SLUG}'"
-    ))
-    .await;
+    for name in ["1.0", "1.1"] {
+        s.ok("releases", json!({ "action": "add", "name": name }))
+            .await;
+    }
     s
 }
 
@@ -1517,55 +1534,130 @@ async fn test_a_plan_is_not_linked_to_a_member_in_a_later_release_unless_forced(
     filed(&s, "A", "1.0").await;
     filed(&s, "T", "1.1").await;
     assert_eq!(
-        s.refused("link", json!({ "a": ["T1"], "kind": "opened", "b": "A1" }))
+        s.refused("parent", json!({ "a": ["T1"], "plan": "A1" }))
             .await,
         "A1 (1.0) would be held by T1 (1.1), which ships later. Move T1 to 1.0, or move A1 to 1.1, or pass --force."
     );
     s.ok(
-        "link",
-        json!({ "a": ["T1"], "kind": "opened", "b": "A1", "force": true }),
+        "parent",
+        json!({ "a": ["T1"], "plan": "A1", "force": true }),
     )
     .await;
 }
 
 #[tokio::test]
-async fn test_a_theme_edit_that_puts_a_hold_into_a_later_release_is_refused() {
+async fn test_a_release_edit_that_puts_a_hold_into_a_later_release_is_refused() {
     let s = two_releases().await;
     filed(&s, "T", "1.0").await;
     filed(&s, "T", "1.0").await;
     s.ok("wait", json!({ "id": "T1", "on": "T2" })).await;
     assert_eq!(
-        s.refused(
-            "edit",
-            json!({ "id": "T2", "set": [{ "field": "theme", "value": "1.1" }] })
-        )
-        .await,
+        s.refused("edit", json!({ "id": "T2", "release": "1.1" }))
+            .await,
         "T1 (1.0) would be held by T2 (1.1), which ships later. Move T2 to 1.0, or move T1 to 1.1, or pass --force."
     );
-    s.ok(
-        "edit",
-        json!({ "id": "T1", "set": [{ "field": "theme", "value": "1.1" }] }),
-    )
-    .await;
-    s.ok(
-        "edit",
-        json!({ "id": "T2", "set": [{ "field": "theme", "value": "1.1" }] }),
-    )
-    .await;
+    assert_eq!(
+        s.refused("edit", json!({ "id": "T2", "release": "" }))
+            .await,
+        "T1 (1.0) would be held by T2 (the backlog), which ships later. Move T2 to 1.0, or move T1 to the backlog, or pass --force."
+    );
+    s.ok("edit", json!({ "id": "T1", "release": "1.1" })).await;
+    s.ok("edit", json!({ "id": "T2", "release": "1.1" })).await;
 }
 
 #[tokio::test]
-async fn test_linking_a_waiter_under_the_plan_it_waits_on_is_refused() {
+async fn test_putting_a_waiter_under_the_plan_it_waits_on_is_refused_with_the_path() {
     let s = Scratch::new().await;
     s.open("B", "Till freezes at opening").await;
     s.open("A", "Shelf plan").await;
     s.ok("start", json!({ "id": "B1" })).await;
     s.ok("wait", json!({ "id": "B1", "on": "A1" })).await;
     let said = s
-        .refused("link", json!({ "a": ["B1"], "b": "A1", "kind": "opened" }))
+        .refused("parent", json!({ "a": ["B1"], "plan": "A1" }))
         .await;
-    assert!(said.contains("would wait forever"), "{said}");
-    assert_eq!(s.item("B1").await["opened"], json!([]));
+    assert!(said.contains("the cycle A1 -> B1 -> A1"), "{said}");
+    assert_eq!(s.item("B1").await["parent"], Value::Null);
+}
+
+#[tokio::test]
+async fn test_a_task_is_refused_as_a_parent() {
+    let s = Scratch::new().await;
+    s.open("T", "Stack the crates").await;
+    s.open("B", "A crate splits").await;
+    assert_eq!(
+        s.refused("parent", json!({ "a": ["B1"], "plan": "T1" }))
+            .await,
+        "T1 is a work, and only a plan holds children. Record what spawned an item with docket link ID origin T1."
+    );
+    assert_eq!(s.item("B1").await["parent"], Value::Null);
+}
+
+#[tokio::test]
+async fn test_a_plan_under_its_own_child_is_refused_with_the_path() {
+    let s = Scratch::new().await;
+    plan(&s).await;
+    s.open("A", "The cellar plan").await;
+    s.open("A", "The rack plan").await;
+    s.ok("parent", json!({ "a": ["A2"], "plan": "A1" })).await;
+    s.ok("parent", json!({ "a": ["A3"], "plan": "A2" })).await;
+    assert_eq!(
+        s.refused("parent", json!({ "a": ["A1"], "plan": "A3" }))
+            .await,
+        "A3 cannot be the parent of A1: that closes the cycle A3 -> A1 -> A2 -> A3, and a plan finishes only after its children. Move A3 out from under A1 first."
+    );
+    assert_eq!(s.item("A1").await["parent"], Value::Null);
+}
+
+#[tokio::test]
+async fn test_an_open_item_is_refused_under_a_closed_plan() {
+    let s = Scratch::new().await;
+    plan(&s).await;
+    s.ok("start", json!({ "id": "A1" })).await;
+    s.ok("close", json!({ "id": "A1", "resolution": "audited" }))
+        .await;
+    s.open("B", "A gap the audit found").await;
+    let said = s
+        .refused("parent", json!({ "a": ["B1"], "plan": "A1" }))
+        .await;
+    assert!(
+        said.contains("a closed plan holds no open children"),
+        "{said}"
+    );
+    s.ok("link", json!({ "a": ["B1"], "kind": "origin", "b": "A1" }))
+        .await;
+    assert_eq!(s.item("B1").await["origin"], json!(["A1"]));
+}
+
+#[tokio::test]
+async fn test_closing_a_decided_question_that_says_it_opened_an_item_adds_no_link() {
+    let s = Scratch::new().await;
+    s.open("Q", "Which flour for the rye").await;
+    s.open("T", "Order the dark rye flour").await;
+    s.ok("answer", json!({ "id": "Q1", "decision": "dark rye" }))
+        .await;
+    s.ok("close", json!({ "id": "Q1", "resolution": "opened T1" }))
+        .await;
+    let (_, links) = s.send(Method::GET, "/links", "ownerkey", None).await;
+    assert_eq!(links, json!([]));
+    assert_eq!(s.item("T1").await["parent"], Value::Null);
+}
+
+#[tokio::test]
+async fn test_link_takes_origin_and_refuses_opened_naming_parent() {
+    let s = Scratch::new().await;
+    plan(&s).await;
+    s.open("B", "The proofer drifts").await;
+    let said = s
+        .refused("link", json!({ "a": ["B1"], "kind": "opened", "b": "A1" }))
+        .await;
+    assert_eq!(
+        said,
+        "link kinds are related and origin; waits are set with docket wait. A plan's children are set with docket parent ID A1."
+    );
+    s.ok("link", json!({ "a": ["B1"], "kind": "origin", "b": "A1" }))
+        .await;
+    assert_eq!(s.item("B1").await["origin"], json!(["A1"]));
+    assert_eq!(s.word("A1").await, "ready");
 }
 
 #[tokio::test]

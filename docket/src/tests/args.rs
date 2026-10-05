@@ -12,7 +12,30 @@ fn test_unclaim_and_its_hidden_alias_parse_alike() {
 fn test_only_unclaim_shows_in_the_help() {
     let help = command().render_help().to_string();
     assert!(help.contains("unclaim"));
-    assert!(!help.contains("  release"));
+    assert!(!help.contains("\n  release "));
+}
+
+#[test]
+fn test_releases_ship_takes_where_the_open_items_go() {
+    let cli = Cli::try_parse_from([
+        "docket",
+        "releases",
+        "ship",
+        "1.0.0",
+        "--move-open-to",
+        "1.1.0",
+    ])
+    .unwrap();
+    let shown = format!("{:?}", cli.cmd);
+    assert!(shown.contains("\"ship\""), "{shown}");
+    assert!(shown.contains("move_open_to: Some(\"1.1.0\")"), "{shown}");
+    assert!(Cli::try_parse_from(["docket", "releases", "rename", "1.0.0"]).is_err());
+    assert!(
+        command()
+            .render_help()
+            .to_string()
+            .contains("\n  releases ")
+    );
 }
 
 #[test]

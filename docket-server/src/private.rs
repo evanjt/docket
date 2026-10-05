@@ -22,8 +22,7 @@ const THEMES: &str = "SELECT t->>'name' FROM projects, jsonb_array_elements(them
                       UNION SELECT theme FROM items WHERE theme IS NOT NULL ORDER BY 1";
 const GROUPS: &str = "SELECT DISTINCT group_name FROM items \
                       WHERE group_name IS NOT NULL AND group_name <> '' ORDER BY 1";
-const RELEASES: &str = "SELECT DISTINCT regexp_split_to_table(skills->>'releases', '\\s+') \
-                        FROM projects WHERE skills->>'releases' IS NOT NULL ORDER BY 1";
+const RELEASES: &str = "SELECT DISTINCT name FROM releases ORDER BY 1";
 const KEYS: &str =
     "SELECT DISTINCT k->>'key' FROM projects, jsonb_array_elements(keys) k ORDER BY 1";
 

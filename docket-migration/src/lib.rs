@@ -12,6 +12,9 @@ mod m20261006_000001_dependencies;
 mod m20261006_000002_condition_waits;
 mod m20261006_000003_ask_need;
 mod m20261006_000004_job_reports;
+mod m20261006_000005_releases;
+mod m20261006_000006_parents;
+pub mod parents;
 #[cfg(any(test, feature = "scratch"))]
 pub mod scratch;
 
@@ -21,7 +24,12 @@ use sea_orm::{
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
 /// The identity columns, by table. Rows written with their own keys leave each to be moved past them.
-pub const IDENTITIES: [(&str, &str); 3] = [("items", "rid"), ("events", "seq"), ("links", "id")];
+pub const IDENTITIES: [(&str, &str); 4] = [
+    ("items", "rid"),
+    ("events", "seq"),
+    ("links", "id"),
+    ("releases", "id"),
+];
 
 /// The advisory lock held while migrating, so two servers starting together migrate one at a time.
 const MIGRATING: i64 = 0x646f_636b_6574;
@@ -41,6 +49,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20261006_000002_condition_waits::Migration),
             Box::new(m20261006_000003_ask_need::Migration),
             Box::new(m20261006_000004_job_reports::Migration),
+            Box::new(m20261006_000005_releases::Migration),
+            Box::new(m20261006_000006_parents::Migration),
         ]
     }
 }
@@ -64,11 +74,24 @@ pub async fn migrate(db: &DatabaseConnection) -> Result<Vec<String>, DbErr> {
 }
 
 /// Moves each identity past the highest key its table holds, so the next row written gets a new one.
+/// A table a partial migration has not made yet is left alone.
 ///
 /// # Errors
 /// The database refuses.
 pub async fn reset_identities<C: ConnectionTrait>(c: &C) -> Result<(), DbErr> {
     for (table, column) in IDENTITIES {
+        let made = c
+            .query_one_raw(statement(
+                "SELECT to_regclass(?) IS NOT NULL",
+                vec![table.into()],
+            ))
+            .await?
+            .map(|r| r.try_get_by_index::<bool>(0))
+            .transpose()?
+            .unwrap_or(false);
+        if !made {
+            continue;
+        }
         c.execute_unprepared(&format!(
             "SELECT setval(pg_get_serial_sequence('{table}', '{column}'), \
              COALESCE((SELECT MAX({column}) FROM {table}), 0) + 1, false)"

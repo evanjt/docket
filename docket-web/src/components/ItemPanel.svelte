@@ -28,6 +28,8 @@
   const body = $derived(item ? render(item.body, links) : '');
   const parents = $derived(ctx.board?.parents.get(id) ?? []);
   const children = $derived(ctx.board?.children.get(id) ?? []);
+  const origins = $derived(ctx.board?.origins.get(id) ?? []);
+  const spawned = $derived(ctx.board?.spawned.get(id) ?? []);
   const related = $derived(ctx.board?.related.get(id) ?? item?.related ?? []);
   const cites = $derived((item?.cites ?? []).filter((c) => c.path));
   const t = $derived(ctx.board ? tally(ctx.board, id) : null);
@@ -36,7 +38,7 @@
   const groupMates = $derived(dep?.group ?? []);
   const mentions = $derived(dep?.mentions ?? []);
   const sameFiles = $derived(dep?.same_files ?? []);
-  const rel = $derived(item ? releaseRow(item.theme, ctx.releases) : null);
+  const rel = $derived(item ? releaseRow(item.release, ctx.releases) : null);
   const concepts = $derived(context.data?.concepts ?? []);
   const host = (h: string | null | undefined) => (h ?? '').split('.')[0];
 </script>
@@ -97,13 +99,15 @@
       <p class="faint">No body.</p>
     {/if}
 
-    {#if parents.length || related.length || children.length}
+    {#if parents.length || origins.length || related.length || children.length || spawned.length}
       <section>
         <h3>Ties</h3>
         <ul class="ties">
-          {#each parents as p (p)}{@render tie(p, 'opened it')}{/each}
+          {#each parents as p (p)}{@render tie(p, 'its plan')}{/each}
+          {#each origins as o (o)}{@render tie(o, 'spawned it')}{/each}
           {#each related as r (r)}{@render tie(r, 'related')}{/each}
-          {#each children as c (c)}{@render tie(c, 'it opened')}{/each}
+          {#each children as c (c)}{@render tie(c, 'under it')}{/each}
+          {#each spawned as c (c)}{@render tie(c, 'it spawned')}{/each}
         </ul>
       </section>
     {/if}

@@ -87,10 +87,10 @@ fn main() -> ExitCode {
     if let Some(Cmd::Link { words, .. }) = &cli.cmd
         && let Some(kind) = words.get(words.len().saturating_sub(2))
         && kind != "related"
-        && kind != "opened"
+        && kind != "origin"
     {
         eprintln!(
-            "docket link: error: argument kind: invalid choice: '{kind}' (choose from 'related', 'opened')"
+            "docket link: error: argument kind: invalid choice: '{kind}' (choose from 'related', 'origin'); a plan's children are set with docket parent"
         );
         return ExitCode::from(2);
     }

@@ -47,14 +47,15 @@ pub fn show(ctx: &mut Ctx, item: &str) -> Result<i32> {
     let item = id(item)?;
     let v = ctx.read(&format!("/show/{item}"), &[])?;
     if ctx.json {
-        let mut tail = vec!["related", "opened", "cites"];
+        let mut tail = vec!["related", "parent", "origin", "children", "cites"];
         if v.get("progress").is_some() {
             tail.push("progress");
         }
         let mut out = item_json(&v, &[], &[]);
         if let Py::Dict(fields) = &mut out {
-            fields.push(("related".into(), Py::from_value(&v["related"])));
-            fields.push(("opened".into(), Py::from_value(&v["opened"])));
+            for k in ["related", "parent", "origin", "children"] {
+                fields.push((k.into(), Py::from_value(&v[k])));
+            }
             let cites = v["cites"].as_array().into_iter().flatten();
             let cites = cites
                 .map(|c| Py::pick(c, &["path", "line", "kind"]))
@@ -96,6 +97,9 @@ pub fn show(ctx: &mut Ctx, item: &str) -> Result<i32> {
 
 fn facts(r: &Row, about: &Value) -> Vec<String> {
     let mut facts = Vec::new();
+    if let Some(release) = r.release.as_deref() {
+        facts.push(format!("release: {release}"));
+    }
     if let Some(t) = r.theme.as_deref().filter(|t| !t.is_empty()) {
         facts.push(format!("theme: {t}"));
     }
@@ -113,7 +117,8 @@ fn facts(r: &Row, about: &Value) -> Vec<String> {
     facts
 }
 
-/// The lines under the facts: members or related, opened, package, members, touches, holds, concepts.
+/// The lines under the facts: members or related, plan, origin, package, members, touches, holds,
+/// concepts.
 fn ties(r: &Row, v: &Value, about: &Value) -> Vec<String> {
     let mut out = Vec::new();
     let related = strs(&v["related"]);
@@ -122,9 +127,12 @@ fn ties(r: &Row, v: &Value, about: &Value) -> Vec<String> {
     } else if !related.is_empty() {
         out.push(format!("related: {}", related.join(", ")));
     }
-    let opened = strs(&v["opened"]);
-    if !opened.is_empty() {
-        out.push(format!("opened: {}", opened.join(", ")));
+    if let Some(parent) = v["parent"].as_str() {
+        out.push(format!("plan: {parent}"));
+    }
+    let origin = strs(&v["origin"]);
+    if !origin.is_empty() {
+        out.push(format!("origin: {}", origin.join(", ")));
     }
     let pkg = &about["package"];
     if pkg.is_object() {
@@ -278,13 +286,15 @@ pub fn log_line(event: &Value) -> String {
 }
 
 /// What `docket deps` prints, by tie, in its order.
-const TIES: [(&str, &str); 10] = [
+const TIES: [(&str, &str); 12] = [
     ("waits_on", "Waits on"),
     ("holds", "Holds"),
     ("group", "Group"),
+    ("parent", "Plan"),
+    ("children", "Children"),
     ("related", "Related"),
-    ("opened_by", "Opened by"),
-    ("opened", "Opened"),
+    ("origin", "Origin"),
+    ("spawned", "Spawned"),
     ("superseded_by", "Superseded by"),
     ("supersedes", "Supersedes"),
     ("same_files", "Cites the same files"),
@@ -430,7 +440,7 @@ pub fn graph(ctx: &mut Ctx, dot: bool, no_files: bool) -> Result<i32> {
         }
         for e in &edges {
             let style = match e["kind"].as_str() {
-                Some("opened") => "solid",
+                Some("parent") => "solid",
                 Some("related") => "dashed",
                 _ => "dotted",
             };
@@ -443,7 +453,9 @@ pub fn graph(ctx: &mut Ctx, dot: bool, no_files: bool) -> Result<i32> {
         println!("}}");
         return Ok(0);
     }
-    let node_keys = ["id", "key", "kind", "state", "word", "theme", "title"];
+    let node_keys = [
+        "id", "key", "kind", "state", "word", "theme", "release", "title",
+    ];
     let out = Py::Dict(vec![
         ("project".into(), Py::from_value(&g["project"])),
         (

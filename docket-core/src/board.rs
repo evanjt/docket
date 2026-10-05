@@ -3,15 +3,15 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::member::{Tie, members_of, opened_under};
+use crate::member::{Edge, Tie, descendants, members_of};
 use crate::rows::{ItemRow, Progress, ProjectRow};
 use crate::rules::GATE;
 use crate::word::{Facts, Kind, word};
 
-/// A plan whose gate disagrees with what it opened.
+/// A plan whose gate disagrees with what is under it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GateProblem {
-    /// Gated, yet everything it opened is closed.
+    /// Gated, yet everything under it is closed.
     HeldGate { id: String },
     /// Open members under it, yet nothing holds it.
     OpenAudit { id: String, n: usize },
@@ -28,8 +28,22 @@ pub struct Board {
 }
 
 impl Board {
+    /// The board of the items and the plain ties given. Each item's parent edge is read from the
+    /// item itself.
     #[must_use]
-    pub fn new(project: ProjectRow, items: Vec<ItemRow>, ties: Vec<Tie>) -> Self {
+    pub fn new(project: ProjectRow, items: Vec<ItemRow>, mut ties: Vec<Tie>) -> Self {
+        for i in &items {
+            if let Some(p) = i.parent_rid {
+                let t = Tie {
+                    rid: i.rid,
+                    edge: Edge::Parent,
+                    to: p,
+                };
+                if !ties.contains(&t) {
+                    ties.push(t);
+                }
+            }
+        }
         let ids = items
             .iter()
             .enumerate()
@@ -37,7 +51,7 @@ impl Board {
             .collect();
         let rids = items.iter().enumerate().map(|(i, r)| (r.rid, i)).collect();
         let mut children: HashMap<i64, Vec<i64>> = HashMap::new();
-        for t in ties.iter().filter(|t| t.opened) {
+        for t in ties.iter().filter(|t| t.is_parent()) {
             children.entry(t.to).or_default().push(t.rid);
         }
         Self {
@@ -65,7 +79,7 @@ impl Board {
         self.project.kind(&item.key)
     }
 
-    /// The items an item opened, directly, in key and number order.
+    /// The items whose parent an item is, in key and number order.
     #[must_use]
     pub fn children(&self, rid: i64) -> Vec<&ItemRow> {
         let mut out: Vec<&ItemRow> = self
@@ -76,6 +90,20 @@ impl Board {
             .filter_map(|r| self.by_rid(*r))
             .collect();
         out.sort_by(|a, b| (&a.key, a.num).cmp(&(&b.key, b.num)));
+        out
+    }
+
+    /// The items whose origin is an item, in key and number order.
+    #[must_use]
+    pub fn spawned(&self, rid: i64) -> Vec<&ItemRow> {
+        let mut out: Vec<&ItemRow> = self
+            .ties
+            .iter()
+            .filter(|t| t.edge == Edge::Origin && t.to == rid)
+            .filter_map(|t| self.by_rid(t.rid))
+            .collect();
+        out.sort_by(|a, b| (&a.key, a.num).cmp(&(&b.key, b.num)));
+        out.dedup_by_key(|i| i.rid);
         out
     }
 
@@ -123,13 +151,13 @@ impl Board {
         out
     }
 
-    /// What an item holds: a package's direct members, everything a plan or story opened at any depth,
-    /// what belongs to a concept or idea. Empty for a ticket.
+    /// What an item holds: a package's children, everything under a plan or story at any depth, what
+    /// belongs to a concept or idea. Empty for a ticket.
     #[must_use]
     pub fn holds(&self, item: &ItemRow) -> HashSet<i64> {
         match self.kind(item) {
             Kind::Package => self.children(item.rid).iter().map(|c| c.rid).collect(),
-            Kind::Audit | Kind::Story => opened_under(&self.ties, item.rid),
+            Kind::Audit | Kind::Story => descendants(&self.ties, item.rid),
             Kind::Concept | Kind::Idea => {
                 let standing: HashSet<i64> = self
                     .items
@@ -179,8 +207,8 @@ impl Board {
         out
     }
 
-    /// Whether an open plan is due for its audit: it opened something, everything it opened, at any
-    /// depth, is closed, and nobody holds it yet.
+    /// Whether an open plan is due for its audit: it has children, everything under it, at any depth,
+    /// is closed, and nobody holds it yet.
     #[must_use]
     pub fn due(&self, item: &ItemRow) -> bool {
         if item.state != "open" || self.kind(item) != Kind::Audit {
@@ -267,6 +295,7 @@ impl Board {
         let mut out: Vec<&ItemRow> = self
             .ties
             .iter()
+            .filter(|t| !t.is_parent())
             .filter_map(|t| match (t.rid == rid, t.to == rid) {
                 (true, _) => Some(t.to),
                 (_, true) => Some(t.rid),

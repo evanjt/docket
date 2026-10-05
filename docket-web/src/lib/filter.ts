@@ -71,7 +71,7 @@ export interface Filterable {
   priority?: string;
   complexity?: string | null;
   state?: string;
-  theme?: string | null;
+  release?: string | null;
 }
 
 /** Whether a row passes every field of the filter, for the routes that do not take them all. */
@@ -80,7 +80,7 @@ export function applies(r: Filterable, f: Filter, releases: string[], priorities
   if (f.priority && r.priority !== undefined && priorities.indexOf(r.priority) > priorities.indexOf(f.priority)) return false;
   if (f.complexity && r.complexity !== f.complexity) return false;
   if (f.state && r.state !== undefined && r.state !== f.state) return false;
-  if (f.release && releaseOf(r.theme, releases) !== f.release) return false;
+  if (f.release && releaseOf(r.release, releases) !== f.release) return false;
   return true;
 }
 

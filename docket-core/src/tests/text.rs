@@ -86,31 +86,6 @@ fn test_a_quoted_original_is_not_read_for_citations() {
 }
 
 #[test]
-fn test_opened_ids_reads_only_what_a_close_says_it_opened() {
-    assert_eq!(
-        opened_ids(Some("opened B380, B381 and T2"), &["B", "T"]),
-        vec!["B380", "B381", "T2"]
-    );
-    assert_eq!(
-        opened_ids(Some("opened B4; covered by PK121"), &["B", "PK"]),
-        vec!["B4"]
-    );
-    assert_eq!(
-        opened_ids(Some("covered by PK121, nothing new"), &["PK"]),
-        Vec::<String>::new()
-    );
-    assert_eq!(
-        opened_ids(Some("opened nothing new: B4 carries it"), &["B"]),
-        Vec::<String>::new()
-    );
-    assert_eq!(opened_ids(None, &["B"]), Vec::<String>::new());
-    assert_eq!(
-        opened_ids(Some("opened STY1, B2"), &["B", "STY", "S"]),
-        vec!["STY1", "B2"]
-    );
-}
-
-#[test]
 fn test_mentioned_ids_are_the_backticked_ones_sorted() {
     assert_eq!(
         mentioned_ids("see `B2` and `PK1`, then `B2` again, not B3", &["B", "PK"]),

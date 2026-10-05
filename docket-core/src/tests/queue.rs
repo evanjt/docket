@@ -12,15 +12,16 @@ fn item(rid: i64, key: &'static str, kind: Kind) -> Candidate<'static> {
         conflict: false,
         complexity: None,
         theme: None,
+        release: None,
         tier: 2,
         opened_at: "2026-01-01",
     }
 }
 
-fn opened(rid: i64, to: i64) -> Vec<Tie> {
+fn parent(rid: i64, to: i64) -> Vec<Tie> {
     vec![Tie {
         rid,
-        opened: true,
+        edge: crate::member::Edge::Parent,
         to,
     }]
 }
@@ -119,7 +120,7 @@ fn test_a_ticket_keeps_its_own_tier_inside_an_urgent_plan() {
         },
         item(3, "B", Kind::Work),
     ];
-    let rows = next(&items, &opened(3, 2), &Filter::default(), 10);
+    let rows = next(&items, &parent(3, 2), &Filter::default(), 10);
     assert_eq!(rows, vec![(1, 2), (3, 2)]);
 }
 
@@ -142,9 +143,9 @@ fn test_next_by_role() {
         },
         item(9, "B", Kind::Work),
     ];
-    let mut ties = opened(3, 2);
-    ties.extend(opened(8, 7));
-    ties.extend(opened(9, 8));
+    let mut ties = parent(3, 2);
+    ties.extend(parent(8, 7));
+    ties.extend(parent(9, 8));
     let by = |role| {
         let f = Filter {
             roles: &[role],
@@ -195,30 +196,65 @@ fn releases(names: &[&str]) -> Vec<String> {
 }
 
 #[test]
-fn test_release_rank_is_the_themes_place_and_the_current_release_otherwise() {
+fn test_release_rank_is_the_position_with_the_backlog_last_and_an_unlisted_release_none() {
     let r = releases(&["1.0", "1.1", "1.2"]);
-    assert_eq!(release_rank(&r, Some("1.2")), 2);
-    assert_eq!(release_rank(&r, Some("1.0")), 0);
-    assert_eq!(release_rank(&r, None), 0);
-    assert_eq!(release_rank(&r, Some("docs")), 0);
-    assert_eq!(release_rank(&[], Some("1.1")), 0);
+    assert_eq!(release_rank(&r, Some("1.2")), Some(2));
+    assert_eq!(release_rank(&r, Some("1.0")), Some(0));
+    assert_eq!(release_rank(&r, None), Some(3));
+    assert_eq!(release_rank(&r, Some("docs")), None);
+    assert_eq!(release_rank(&[], Some("1.1")), None);
+    assert_eq!(release_rank(&[], None), Some(0));
+}
+
+#[test]
+fn test_an_item_in_an_unlisted_release_is_refused_not_ranked_as_current_and_the_backlog_ranks_last()
+{
+    let items = vec![
+        item(1, "B", Kind::Work),
+        Candidate {
+            release: Some("0.9"),
+            tier: 0,
+            ..item(2, "B", Kind::Work)
+        },
+        Candidate {
+            release: Some("1.1"),
+            tier: 3,
+            ..item(3, "B", Kind::Work)
+        },
+        Candidate {
+            release: Some("1.0"),
+            ..item(4, "B", Kind::Work)
+        },
+    ];
+    let r = releases(&["1.0", "1.1"]);
+    let f = Filter {
+        releases: &r,
+        ..Filter::default()
+    };
+    assert_eq!(ids(next(&items, &[], &f, 10)), vec![4, 3, 1]);
+    let current = Filter {
+        current_release_only: true,
+        ..f
+    };
+    assert_eq!(ids(next(&items, &[], &current, 10)), vec![4]);
 }
 
 #[test]
 fn test_next_orders_by_release_before_priority() {
     let items = vec![
         Candidate {
-            theme: Some("1.2"),
+            release: Some("1.2"),
             tier: 0,
             ..item(1, "B", Kind::Work)
         },
         Candidate {
-            theme: Some("1.1"),
+            release: Some("1.1"),
             tier: 3,
             ..item(2, "B", Kind::Work)
         },
         Candidate {
             theme: Some("docs"),
+            release: None,
             tier: 2,
             ..item(3, "B", Kind::Work)
         },
@@ -232,21 +268,20 @@ fn test_next_orders_by_release_before_priority() {
         releases: &r,
         ..Filter::default()
     };
-    assert_eq!(ids(next(&items, &[], &f, 10)), vec![4, 3, 2, 1]);
-    assert_eq!(
-        ids(next(&items, &[], &Filter::default(), 10)),
-        vec![1, 4, 3, 2]
-    );
+    assert_eq!(ids(next(&items, &[], &f, 10)), vec![2, 1, 4, 3]);
+    assert_eq!(ids(next(&items, &[], &Filter::default(), 10)), vec![4, 3]);
 }
 
 #[test]
 fn test_next_over_several_roles_orders_by_release_then_role() {
     let items = vec![
         Candidate {
+            release: Some("1.0"),
             tier: 3,
             ..item(1, "B", Kind::Work)
         },
         Candidate {
+            release: Some("1.0"),
             tier: 3,
             ..item(2, "A", Kind::Audit)
         },
@@ -255,23 +290,23 @@ fn test_next_over_several_roles_orders_by_release_then_role() {
             ..item(3, "B", Kind::Work)
         },
         Candidate {
-            theme: Some("1.1"),
+            release: Some("1.1"),
             tier: 0,
             ..item(4, "A", Kind::Audit)
         },
         Candidate {
-            theme: Some("1.1"),
+            release: Some("1.1"),
             tier: 0,
             ..item(5, "B", Kind::Work)
         },
         Candidate {
-            theme: Some("1.1"),
+            release: Some("1.1"),
             tier: 0,
             ..item(6, "A", Kind::Audit)
         },
     ];
-    let mut ties = opened(3, 2);
-    ties.extend(opened(5, 6));
+    let mut ties = parent(3, 2);
+    ties.extend(parent(5, 6));
     let r = releases(&["1.0", "1.1"]);
     let roles = [Role::Audit, Role::Plan, Role::Work];
     let f = Filter {
@@ -286,16 +321,17 @@ fn test_next_over_several_roles_orders_by_release_then_role() {
 fn test_next_current_release_only_drops_later_releases() {
     let items = vec![
         Candidate {
-            theme: Some("1.1"),
+            release: Some("1.1"),
             tier: 0,
             ..item(1, "A", Kind::Audit)
         },
         Candidate {
             theme: Some("docs"),
+            release: None,
             ..item(2, "B", Kind::Work)
         },
         Candidate {
-            theme: Some("1.0"),
+            release: Some("1.0"),
             ..item(3, "B", Kind::Work)
         },
         item(4, "B", Kind::Work),
@@ -306,7 +342,7 @@ fn test_next_current_release_only_drops_later_releases() {
         current_release_only: true,
         ..Filter::default()
     };
-    assert_eq!(ids(next(&items, &[], &f, 10)), vec![2, 3, 4]);
+    assert_eq!(ids(next(&items, &[], &f, 10)), vec![3]);
 }
 
 #[test]
@@ -316,7 +352,7 @@ fn test_bare_next_leaves_out_a_plan_with_an_open_member() {
         item(2, "B", Kind::Work),
         item(3, "A", Kind::Audit),
     ];
-    let ties = opened(2, 1);
+    let ties = parent(2, 1);
     assert_eq!(ids(next(&items, &ties, &Filter::default(), 10)), vec![2, 3]);
 }
 
@@ -329,6 +365,7 @@ fn owed<'a>(rid: i64, key: &'static str, kind: Kind) -> OwnerRow<'a> {
         derived: false,
         need: None,
         theme: None,
+        release: None,
         tier: 2,
         asked_at: "2026-01-01",
     }
@@ -347,26 +384,26 @@ fn test_owner_queue_groups_by_need_then_release_priority_and_age() {
         },
         OwnerRow {
             need: Some("hold"),
-            theme: Some("0.4.1"),
+            release: Some("0.4.1"),
             ..owed(2, "B", Kind::Work)
         },
         OwnerRow {
             need: Some("hold"),
-            theme: Some("0.4.0"),
+            release: Some("0.4.0"),
             tier: 2,
             asked_at: "2026-01-03",
             ..owed(3, "B", Kind::Work)
         },
         OwnerRow {
             need: Some("hold"),
-            theme: Some("0.4.0"),
+            release: Some("0.4.0"),
             tier: 2,
             asked_at: "2026-01-02",
             ..owed(4, "B", Kind::Work)
         },
         OwnerRow {
             need: Some("hold"),
-            theme: Some("0.4.0"),
+            release: Some("0.4.0"),
             tier: 0,
             asked_at: "2026-01-09",
             ..owed(5, "B", Kind::Work)
@@ -410,12 +447,12 @@ fn test_owner_queue_lists_derived_answers_first() {
 fn test_owner_queue_puts_the_question_then_the_critical_current_item_first_and_drops_waiting() {
     let rows = vec![
         OwnerRow {
-            theme: Some("0.4.1"),
+            release: Some("0.4.1"),
             ..owed(1, "B", Kind::Work)
         },
         OwnerRow {
             tier: 0,
-            theme: Some("0.4.0"),
+            release: Some("0.4.0"),
             ..owed(2, "B", Kind::Work)
         },
         OwnerRow {
@@ -429,7 +466,7 @@ fn test_owner_queue_puts_the_question_then_the_critical_current_item_first_and_d
         owed(5, "Q", Kind::Decision),
     ];
     let q = owner_queue(&rows, &OwnerFilter::of(&releases(&["0.4.0", "0.4.1"])));
-    assert_eq!(owner_ids(&q), vec![5, 2, 4, 1]);
+    assert_eq!(owner_ids(&q), vec![5, 2, 1, 4]);
     assert_eq!(q.waiting, 1);
 }
 

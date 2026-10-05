@@ -7,7 +7,7 @@ use docket_core::item::Item;
 use docket_core::rules::kind_of;
 use docket_core::word::{Facts, Kind, priority, word};
 
-use crate::store::{ProjectRow, id_of, sql};
+use crate::store::{ProjectRow, column, id_of, sql};
 use crate::verbs::graph::{open_member_count, package_progress};
 
 /// The kind of a row's key, work when the project does not name it.
@@ -47,7 +47,23 @@ pub async fn item_view<C: ConnectionTrait>(
         Some(rid) => id_of(c, rid).await?,
         None => None,
     };
-    let (related, opened, cites) = links(c, row.rid).await?;
+    let (related, origin, cites) = links(c, row.rid).await?;
+    let parent = match row.parent_rid {
+        Some(rid) => id_of(c, rid).await?,
+        None => None,
+    };
+    let children = column(
+        c,
+        "SELECT id FROM items WHERE parent_rid=? ORDER BY key, num",
+        vec![row.rid.into()],
+    )
+    .await?;
+    let release = match row.release_id {
+        Some(id) => {
+            crate::store::scalar(c, "SELECT name FROM releases WHERE id=?", vec![id.into()]).await?
+        }
+        None => None,
+    };
     Ok(ItemView {
         project: row.project.clone(),
         key: row.key.clone(),
@@ -73,6 +89,7 @@ pub async fn item_view<C: ConnectionTrait>(
         scope: row.scope.clone(),
         complexity: row.complexity.clone(),
         theme: row.theme.clone(),
+        release,
         rank: row.rank,
         tags: row.tags.clone(),
         body: row.body.clone(),
@@ -84,7 +101,9 @@ pub async fn item_view<C: ConnectionTrait>(
         priority: priority(&row.tags).to_string(),
         superseded_by,
         related,
-        opened,
+        parent,
+        origin,
+        children,
         cites,
         progress,
     })
@@ -106,7 +125,7 @@ pub async fn item_views<C: ConnectionTrait>(
 type Links = (Vec<String>, Vec<String>, Vec<Cite>);
 
 async fn links<C: ConnectionTrait>(c: &C, rid: i64) -> Result<Links, DbErr> {
-    let (mut related, mut opened, mut cites) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut related, mut origin, mut cites) = (Vec::new(), Vec::new(), Vec::new());
     let rows = c
         .query_all_raw(sql(
             "SELECT kind, to_rid, to_path, to_line FROM links WHERE rid=? \
@@ -119,7 +138,7 @@ async fn links<C: ConnectionTrait>(c: &C, rid: i64) -> Result<Links, DbErr> {
         let to_rid: Option<i64> = l.try_get_by_index(1)?;
         match (kind.as_str(), to_rid) {
             ("related", Some(to)) => related.extend(id_of(c, to).await?),
-            ("opened", Some(to)) => opened.extend(id_of(c, to).await?),
+            ("origin", Some(to)) => origin.extend(id_of(c, to).await?),
             _ => cites.push(Cite {
                 path: l.try_get_by_index::<Option<String>>(2)?.unwrap_or_default(),
                 line: l.try_get_by_index(3)?,
@@ -127,5 +146,5 @@ async fn links<C: ConnectionTrait>(c: &C, rid: i64) -> Result<Links, DbErr> {
             }),
         }
     }
-    Ok((related, opened, cites))
+    Ok((related, origin, cites))
 }

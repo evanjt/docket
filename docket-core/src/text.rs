@@ -190,28 +190,6 @@ fn key_alternation(keys: &[&str]) -> String {
         .join("|")
 }
 
-/// The ids a close names after "opened", as "opened B380, B381 and T2". An id named for another
-/// reason is not something it opened.
-#[must_use]
-pub fn opened_ids(resolution: Option<&str>, keys: &[&str]) -> Vec<String> {
-    let one = format!(r"(?:{})\d+\b", key_alternation(keys));
-    let Ok(list) = Regex::new(&format!(r"\bopened\s+({one}(?:\s*(?:,|and)\s*{one})*)")) else {
-        return Vec::new();
-    };
-    let Ok(each) = Regex::new(&one) else {
-        return Vec::new();
-    };
-    let mut out: Vec<String> = Vec::new();
-    for m in list.captures_iter(resolution.unwrap_or("")) {
-        for id in each.find_iter(&m[1]) {
-            if !out.iter().any(|x| x == id.as_str()) {
-                out.push(id.as_str().to_string());
-            }
-        }
-    }
-    out
-}
-
 /// Every backticked id of one of the project's keys, sorted.
 #[must_use]
 pub fn mentioned_ids(text: &str, keys: &[&str]) -> Vec<String> {

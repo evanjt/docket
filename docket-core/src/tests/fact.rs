@@ -305,37 +305,12 @@ fn test_with_sets_and_unsets() {
 }
 
 #[test]
-fn test_releases_reads_the_names_in_order_and_refuses_one_twice() {
-    assert_eq!(releases(Some(" 1.0  1.1 2.0 ")), ["1.0", "1.1", "2.0"]);
-    assert!(releases(None).is_empty());
-    assert_eq!(check("releases", "1.0 1.1"), Ok(()));
+fn test_releases_are_rows_never_set_as_a_fact() {
     assert_eq!(
-        refusal(check("releases", "1.0 1.1 1.0")),
-        "releases names 1.0 twice"
+        refusal(check("releases", "1.0 1.1")),
+        "releases are rows: docket releases add, move and ship change them"
     );
-}
-
-#[test]
-fn test_a_release_names_the_theme_an_item_is_filed_under() {
-    let listed = vec!["1.0".to_string(), "1.1".to_string()];
-    assert_eq!(
-        release_theme("current", &listed, false),
-        Ok(Some("1.0".into()))
-    );
-    assert_eq!(release_theme("1.1", &listed, false), Ok(Some("1.1".into())));
-    assert_eq!(
-        release_theme("upkeep", &listed, true),
-        Ok(Some("upkeep".into()))
-    );
-    assert_eq!(release_theme("current", &[], false), Ok(None));
-    assert_eq!(
-        refusal(release_theme("1.2", &listed, false)),
-        "1.2 is neither a release nor a theme in use here: give current, one of 1.0 1.1, or a theme items already carry"
-    );
-    assert_eq!(
-        refusal(release_theme("", &listed, false)),
-        "a release is current, one of 1.0 1.1, or a theme items already carry"
-    );
+    assert_eq!(check("releases", ""), Ok(()));
 }
 
 #[test]

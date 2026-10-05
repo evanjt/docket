@@ -7,8 +7,8 @@ use serde_json::Value;
 use docket_core::api::{
     AddRequest, AnswerRequest, Answered, AskRequest, Asked, Brief, CloseRequest, Closed, Common,
     DropRequest, Dropped, EditRequest, ItemView, KeyRequest, KeySet, LinkRequest, Linked, Moved,
-    MovedMany, NewRequest, Opened, PriorityRequest, Reindexed, ReleaseRequest, SetField,
-    StartRequest, Started,
+    MovedMany, NewRequest, Opened, ParentRequest, Parented, PriorityRequest, Reindexed,
+    ReleaseRequest, SetField, StartRequest, Started,
 };
 
 use crate::cmd::lists::shares_text;
@@ -152,7 +152,7 @@ fn opened(ctx: &Ctx, out: &Opened, body: Option<&str>) {
             "package" => {
                 println!("{PACKAGE_TEMPLATE}");
                 println!(
-                    "\nThen give it its members: docket link B1 B2 opened {}",
+                    "\nThen give it its members: docket parent B1 B2 {}",
                     out.item.id
                 );
             }
@@ -205,14 +205,14 @@ pub fn start(ctx: &mut Ctx, req: &StartRequest) -> Result<i32> {
     let i = &out.item.id;
     match out.kind.as_str() {
         "decision" => println!(
-            "\nThis is a decided question: turn its decision into items, then docket close {i} \"opened B1, B2\"."
+            "\nThis is a decided question: turn its decision into items, link each with docket link B1 origin {i}, then docket close {i} \"opened B1, B2\"."
         ),
         "audit" => println!(
-            "\nThis is a plan. With nothing opened under it yet, file its tickets, link each with docket link T1 \
-             opened {i}, and unclaim it; it comes back for its audit when they are all closed. With every ticket \
+            "\nThis is a plan. With nothing under it yet, file its tickets, put each under it with docket parent \
+             T1 {i}, and unclaim it; it comes back for its audit when they are all closed. With every ticket \
              closed, this is its audit: check the plan in its body against the working tree and against every \
-             item it opened (docket deps {i}), file each gap as a ticket linked the same way, and close it. One \
-             round: the gaps are worked as tickets."
+             item under it (docket deps {i}), file each gap as a ticket in the plan's release with docket link \
+             T1 origin {i} and no parent, and close it. One round: the gaps are worked as tickets."
         ),
         _ => {}
     }
@@ -326,9 +326,6 @@ pub fn close(ctx: &mut Ctx, c: &Close) -> Result<i32> {
     print_item(ctx, &out.item);
     if !ctx.json {
         print_released(ctx, &out.released);
-        if !out.opened.is_empty() {
-            println!("opened by {}: {}", out.item.id, out.opened.join(", "));
-        }
     }
     Ok(0)
 }
@@ -406,15 +403,16 @@ pub fn edit(
     ctx: &mut Ctx,
     item: &str,
     set: &[String],
+    release: Option<&String>,
     append: Option<&String>,
     body: Option<&String>,
 ) -> Result<i32> {
     let common = ctx.common(false)?;
     let append = append.filter(|a| !a.is_empty()).cloned();
     let body = body.filter(|b| !b.is_empty());
-    if set.is_empty() && append.is_none() && body.is_none() {
+    if set.is_empty() && append.is_none() && body.is_none() && release.is_none() {
         return Err(Fail::refused(
-            "edit needs --set field=value, --append \"text\" or --body FILE|-.",
+            "edit needs --set field=value, --release NAME, --append \"text\" or --body FILE|-.",
         ));
     }
     let set = set
@@ -434,6 +432,7 @@ pub fn edit(
         append,
         body: read_body(body)?,
         expect_updated_at: None,
+        release: release.cloned(),
     };
     moved(ctx, "edit", &req)
 }
@@ -458,6 +457,33 @@ pub fn link(ctx: &mut Ctx, words: &[String], remove: bool) -> Result<i32> {
             out.to,
             if out.removed { " removed" } else { "" }
         );
+    }
+    Ok(0)
+}
+
+/// # Errors
+/// The server refuses, or a plan is named with --none or missing without it.
+pub fn parent(ctx: &mut Ctx, words: &[String], none: bool) -> Result<i32> {
+    let (a, plan) = match (none, words.split_last()) {
+        (true, _) => (words.to_vec(), None),
+        (false, Some((plan, a))) if !a.is_empty() => (a.to_vec(), Some(plan.clone())),
+        _ => {
+            return Err(Fail::refused(
+                "docket parent takes the items then the plan, as docket parent T1 T2 A3, or the items alone with --none.",
+            ));
+        }
+    };
+    let req = ParentRequest {
+        common: ctx.common(false)?,
+        a,
+        plan,
+    };
+    let out: Parented = ctx.api.post("parent", &req)?;
+    for a in &out.items {
+        match &out.plan {
+            Some(p) => println!("{a} under {p}"),
+            None => println!("{a} under no plan"),
+        }
     }
     Ok(0)
 }

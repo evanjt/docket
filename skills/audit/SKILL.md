@@ -1,6 +1,6 @@
 ---
 name: audit
-description: Audit a finished plan in the docket of the project you are in, once, when every ticket it opened is closed. Checks each of the plan's principles and each ticket's failing case against the working tree with file:line, files every gap as a ticket under the plan, and closes the plan in one round. Never builds and never fixes. Use when asked to audit, check finished plans, or work the audits due.
+description: Audit a finished plan in the docket of the project you are in, once, when every ticket under it is closed. Checks each of the plan's principles and each ticket's failing case against the working tree with file:line, files every gap as a ticket spawned by the plan, and closes the plan in one round. Never builds and never fixes. Use when asked to audit, check finished plans, or work the audits due.
 ---
 
 # audit
@@ -10,9 +10,9 @@ belongs to: the owner, where a real number comes from, and what only the owner
 can do. This skill names the facts and carries none of them, so one copy
 serves every project.
 
-A plan's audit falls due on its own, once, when everything it opened is
-closed. One round: what the audit finds missing becomes tickets under the
-plan, and the plan closes. The tickets are worked like any other, and the plan
+A plan's audit falls due on its own, once, when everything under it is closed.
+One round: what the audit finds missing becomes tickets the plan spawned, and
+the plan closes, so a closed plan never has open children. The tickets are worked like any other, and the plan
 is not audited again. The audit reads and files; it never builds and never
 fixes, not even a one-line gap.
 
@@ -27,10 +27,10 @@ A refusal means another session holds it: take the next.
 ## 2. Read all of it
 
     docket show A3
-    docket deps A3          # everything it opened, done and dropped alike
+    docket deps A3          # everything under it, done and dropped alike
     docket audit A3         # its principles and the items that serve each
 
-Read the plan's principles and every ticket it opened, in full. Then read the
+Read the plan's principles and every ticket under it, in full. Then read the
 tree as it stands on the branch the work landed on, not as the tickets
 describe it.
 
@@ -46,21 +46,24 @@ describe it.
 
 Never quote a document as evidence. Re-read the working tree.
 
-## 4. File each critical or high gap under the plan
+## 4. File each critical or high gap from the plan
 
 Only a gap that is critical or high is filed: one that breaks what the plan
 promised, or that the order below puts in the current release at high
 priority.
 
     docket new T "the gap, in one line" --body - --release <its release>
-    docket link T30 opened A3
+    docket link T30 origin A3
+
+A gap takes the plan as its origin and the plan's release, and no parent: the
+plan closes after this round, and a closed plan holds no open children.
 
 The body holds the **Evidence** (`file:line`, or the failing test and its
 output), the **Fix**, and the **Failing case**, as the plan skill writes them.
 A defect is a `B`. A normal or low gap is an observation in the close note,
 never a ticket. A finding outside the plan's principles and area is an
 observation too, unless it is critical or high: then it is filed the same way
-but linked as related, not opened (`docket link T31 related A3`), and left for
+but linked as related, not as an origin (`docket link T31 related A3`), and left for
 planning. Stop at what matters: a second audit of the same plan files nothing
 the first passed over.
 
@@ -69,8 +72,9 @@ in this order. Its nature: a crash, a hang, data loss or wrong numbers,
 migration or upgrade safety, security or privacy, or release work is
 `--release current` at high priority. What it serves: a blocker or member of
 current-release work is `--release current`. Otherwise a feature or polish
-goes to a later release, and tests, CI and hooks to the theme the project
-keeps for them (`docket skills releases` lists the releases, the current
+goes to a later release, and tests, CI and hooks to the backlog (`--release ""`)
+under the theme the project keeps for them (`docket skills releases` lists the
+releases, the current
 first). The body's last line says which and why: `**Release.** current: it
 loses the draft on resume.`
 

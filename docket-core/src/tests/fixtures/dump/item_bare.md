@@ -21,7 +21,6 @@ theme: "ui"
 rank: null
 tags: []
 related: []
-opened: []
 opened_at: "2026-02-01T00:00:00Z"
 updated_at: "2026-02-02T00:00:00Z"
 ---

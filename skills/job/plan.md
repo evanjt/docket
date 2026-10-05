@@ -10,7 +10,7 @@ Start with:
 
 What {id} is decides the work:
 
-- a plan that has opened nothing yet: write its tickets;
+- a plan with nothing under it yet: write its tickets;
 - an investigation: measure it with what `docket skills measure` names, write the measured result
   into its body with `docket edit {id} --append "..."`, then file the tickets it calls for;
 - a question the owner answered: file the tickets that carry the decision out.
@@ -18,7 +18,8 @@ What {id} is decides the work:
 Each ticket is one change that lands on its own:
 
     docket new T "the change, in one line" --body - --release <its release>
-    docket link T<n> opened {id}
+    docket parent T<n> <plan>               # the plan it delivers: {id} itself when {id} is a plan
+    docket link T<n> origin {id}            # when {id} is an investigation or a question
     docket priority T<n> high
     docket rate T<n> medium
     docket wait T<later> --on T<earlier>    # for each ticket that builds on another
@@ -36,8 +37,9 @@ Every item you file names its release with `--release`, chosen by what the item 
 1. Its nature: a crash, a hang, data loss or wrong numbers, migration or upgrade safety, security
    or privacy, or release work is `--release current`, at high priority.
 2. What it serves: a blocker of current-release work, or a member of it, is `--release current`.
-3. Otherwise a feature or polish goes to a later release, and tests, CI and hooks to the theme the
-   project keeps for them. `docket skills releases` lists the releases, the current first.
+3. Otherwise a feature or polish goes to a later release, and tests, CI and hooks to the backlog
+   (`--release ""`) under the theme the project keeps for them. `docket skills releases` lists the
+   releases, the current first.
 
 The body's last line says which and why: `**Release.** current: it loses the draft on resume.`
 `docket` refuses `new` and `add` here without `--release`.

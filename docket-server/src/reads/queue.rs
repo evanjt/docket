@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use docket_core::flow::tally;
-use docket_core::member::{Tie, members_of, opened_under};
+use docket_core::member::{Edge, Tie, descendants, members_of};
 use docket_core::queue::{Candidate, Filter, Role, next as queue};
 use docket_core::word::{Facts, Kind, PRIORITIES, priority, word};
 
@@ -29,6 +29,7 @@ struct Slim {
     conflict: i64,
     complexity: Option<String>,
     theme: Option<String>,
+    release: Option<String>,
     tags: Value,
     opened_at: String,
 }
@@ -48,8 +49,9 @@ struct TieRow {
 /// Every item of a project and every item-to-item link leaving one.
 async fn board(db: &DatabaseConnection, slug: &str) -> Result<Board, Failure> {
     let items = Slim::find_by_statement(sql(
-        "SELECT rid, key, state, turn, claim_branch, wait_on, conflict, complexity, theme, tags, \
-         opened_at FROM items WHERE project=? ORDER BY rid",
+        "SELECT rid, key, state, turn, claim_branch, wait_on, conflict, complexity, theme, \
+         (SELECT r.name FROM releases r WHERE r.id=items.release_id) AS release, tags, opened_at \
+         FROM items WHERE project=? ORDER BY rid",
         vec![slug.into()],
     ))
     .all(db)
@@ -57,18 +59,21 @@ async fn board(db: &DatabaseConnection, slug: &str) -> Result<Board, Failure> {
     .map_err(|e| internal(&e))?;
     let ties = TieRow::find_by_statement(sql(
         "SELECT l.rid, l.kind, l.to_rid FROM links l JOIN items i ON i.rid=l.rid \
-         WHERE i.project=? AND l.kind IN ('related', 'opened') AND l.to_rid IS NOT NULL \
-         ORDER BY i.state, i.rid, l.kind, l.to_rid",
-        vec![slug.into()],
+         WHERE i.project=? AND l.kind IN ('related', 'origin') AND l.to_rid IS NOT NULL \
+         UNION ALL SELECT rid, 'parent', parent_rid FROM items WHERE project=? AND parent_rid IS NOT NULL \
+         ORDER BY 1, 2, 3",
+        vec![slug.into(), slug.into()],
     ))
     .all(db)
     .await
     .map_err(|e| internal(&e))?
     .into_iter()
-    .map(|t| Tie {
-        rid: t.rid,
-        opened: t.kind == "opened",
-        to: t.to_rid,
+    .filter_map(|t| {
+        Some(Tie {
+            rid: t.rid,
+            edge: Edge::parse(&t.kind)?,
+            to: t.to_rid,
+        })
     })
     .collect();
     Ok(Board { items, ties })
@@ -88,6 +93,7 @@ fn candidate<'a>(row: &'a Slim, kinds: &Kinds) -> Candidate<'a> {
         conflict: row.conflict != 0,
         complexity: row.complexity.as_deref(),
         theme: row.theme.as_deref(),
+        release: row.release.as_deref(),
         tier: PRIORITIES.iter().position(|p| *p == own).unwrap_or(2),
         opened_at: &row.opened_at,
     }
@@ -112,7 +118,7 @@ fn ten() -> usize {
     10
 }
 
-/// The rids a plan or story opened at any depth, or a concept's or central idea's members.
+/// The rids under a plan or story at any depth, or a concept's or central idea's members.
 async fn rids_under(
     db: &DatabaseConnection,
     board: &Board,
@@ -122,7 +128,7 @@ async fn rids_under(
 ) -> Result<HashSet<i64>, Failure> {
     let target = item_of(db, slug, id).await?;
     if !kinds.kind(&target.key).is_standing() {
-        return Ok(opened_under(&board.ties, target.rid));
+        return Ok(descendants(&board.ties, target.rid));
     }
     let standing: HashSet<i64> = board
         .items
@@ -192,7 +198,10 @@ pub async fn next(
         None => None,
     };
     let key = q.key.as_deref().map(str::to_uppercase);
-    let releases = docket_core::fact::releases(project.skills["releases"].as_str());
+    let releases = crate::verbs::releases::listed(&db, &q.project)
+        .await
+        .map_err(|e| internal(&e))?
+        .open;
     let filter = Filter {
         roles: &roles,
         priority: q

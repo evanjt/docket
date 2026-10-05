@@ -350,15 +350,17 @@ fn test_no_text_orders_the_queue_by_priority_alone() {
             "plan does not state the queue order"
         );
         assert!(
-            flat.contains("a theme the releases fact does not list ranks with the current release"),
-            "plan does not say an unlisted theme is current"
+            flat.contains(
+                "an item with no release is in the backlog, which ranks after every release"
+            ),
+            "plan does not say where an item with no release ranks"
         );
     }
 }
 
 /// Where the word names a release of the project (the theme an item ships in), not the act of
 /// giving a claim back or freeing a waiter.
-const RELEASE_NOUN: [&str; 29] = [
+const RELEASE_NOUN: [&str; 33] = [
     "--release",
     "skills releases",
     "the releases",
@@ -388,6 +390,10 @@ const RELEASE_NOUN: [&str; 29] = [
     "release and",
     "release order",
     "**release.**",
+    "releases, the current",
+    "no release",
+    "every release",
+    "release is in",
 ];
 
 fn release_verbs(text: &str) -> Vec<String> {

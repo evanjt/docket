@@ -31,8 +31,8 @@ pub struct Since {
 /// The rids changed after one seq and up to another: those with an event, and their neighbours.
 const CHANGED: &str = "SELECT rid FROM events WHERE seq > ? AND seq <= ? AND rid IS NOT NULL \
      UNION SELECT l.rid FROM links l JOIN events e ON l.to_rid = e.rid \
-       WHERE e.seq > ? AND e.seq <= ? AND l.kind IN ('related', 'opened') \
-     UNION SELECT i.rid FROM items i JOIN events e ON i.wait_item = e.rid \
+       WHERE e.seq > ? AND e.seq <= ? AND l.kind IN ('related', 'origin') \
+     UNION SELECT i.rid FROM items i JOIN events e ON i.wait_item = e.rid OR i.parent_rid = e.rid \
        WHERE e.seq > ? AND e.seq <= ?";
 
 #[derive(FromQueryResult)]
@@ -118,9 +118,10 @@ async fn projects(tx: &DatabaseTransaction) -> Result<Vec<ProjectDump>, DbErr> {
         .order_by_asc(project::Column::Slug)
         .all(tx)
         .await?;
-    Ok(rows
-        .into_iter()
-        .map(|p| ProjectDump {
+    let mut out = Vec::with_capacity(rows.len());
+    for p in rows {
+        let releases = crate::verbs::releases::listed(tx, &p.slug).await?.all();
+        out.push(ProjectDump {
             slug: p.slug,
             keys: p.keys,
             remotes: p.remotes,
@@ -134,14 +135,18 @@ async fn projects(tx: &DatabaseTransaction) -> Result<Vec<ProjectDump>, DbErr> {
             skills: p.skills,
             created_at: p.created_at,
             updated_at: p.updated_at,
-        })
-        .collect())
+            releases,
+        });
+    }
+    Ok(out)
 }
 
 async fn items(tx: &DatabaseTransaction, scope: &Scope) -> Result<Vec<ItemDump>, DbErr> {
     let (rids, values) = scope.rids();
     let text = format!(
-        "SELECT i.*, s.id AS superseded_id FROM items i LEFT JOIN items s ON s.rid = i.superseded_by \
+        "SELECT i.*, s.id AS superseded_id, r.name AS release_name, p.id AS parent_id FROM items i \
+         LEFT JOIN items s ON s.rid = i.superseded_by LEFT JOIN releases r ON r.id = i.release_id \
+         LEFT JOIN items p ON p.rid = i.parent_rid \
          WHERE i.rid IN ({rids}) ORDER BY i.project, i.key, i.num"
     );
     let rows = tx.query_all_raw(sql(&text, values.clone())).await?;
@@ -150,18 +155,23 @@ async fn items(tx: &DatabaseTransaction, scope: &Scope) -> Result<Vec<ItemDump>,
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
         let superseded: Option<String> = row.try_get("", "superseded_id")?;
+        let release: Option<String> = row.try_get("", "release_name")?;
+        let parent: Option<String> = row.try_get("", "parent_id")?;
         let stored = to_item(item::Model::from_query_result(&row, "")?);
-        let (related, opened) = links.remove(&stored.rid).unwrap_or_default();
+        let (related, origin) = links.remove(&stored.rid).unwrap_or_default();
         let on = depends.remove(&stored.rid);
         out.push(ItemDump {
             depends: on,
-            ..item_dump(stored, superseded, related, opened)
+            release,
+            parent,
+            origin: (!origin.is_empty()).then_some(origin),
+            ..item_dump(stored, superseded, related)
         });
     }
     Ok(out)
 }
 
-/// `{rid: (related ids, opened ids)}` for the items of a scope.
+/// `{rid: (related ids, origin ids)}` for the items of a scope.
 async fn links(
     tx: &DatabaseTransaction,
     rids: &str,
@@ -169,7 +179,7 @@ async fn links(
 ) -> Result<HashMap<i64, (Vec<String>, Vec<String>)>, DbErr> {
     let text = format!(
         "SELECT l.rid, l.kind, t.id FROM links l JOIN items t ON t.rid = l.to_rid \
-         WHERE l.kind IN ('related', 'opened') AND l.rid IN ({rids}) ORDER BY l.rid, l.kind, l.to_rid"
+         WHERE l.kind IN ('related', 'origin') AND l.rid IN ({rids}) ORDER BY l.rid, l.kind, l.to_rid"
     );
     let rows = LinkRow::find_by_statement(sql(&text, values))
         .all(tx)
@@ -209,7 +219,6 @@ fn item_dump(
     r: docket_core::item::Item,
     superseded_by: Option<String>,
     related: Vec<String>,
-    opened: Vec<String>,
 ) -> ItemDump {
     ItemDump {
         project: r.project,
@@ -236,10 +245,13 @@ fn item_dump(
         complexity: r.complexity,
         group: r.group_name,
         theme: r.theme,
+        release: None,
         rank: r.rank,
         tags: r.tags,
         related,
-        opened,
+        parent: None,
+        origin: None,
+        opened: Vec::new(),
         depends: None,
         opened_at: r.opened_at,
         updated_at: r.updated_at,

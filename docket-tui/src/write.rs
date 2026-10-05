@@ -6,8 +6,8 @@ use serde::Serialize;
 use serde_json::Value;
 
 use docket_core::api::{
-    AnswerRequest, Common, FactRequest, LinkRequest, PriorityRequest, RateRequest, ReplyRequest,
-    RetryRequest,
+    AnswerRequest, Common, FactRequest, LinkRequest, ParentRequest, PriorityRequest, RateRequest,
+    ReplyRequest, RetryRequest,
 };
 use docket_core::flow::DERIVED;
 
@@ -265,7 +265,7 @@ impl<S: Source> App<S> {
         let label = match make(Vec::new()) {
             Ask::Priority(_) => format!("priority of {shown}: "),
             Ask::Rate(_) => format!("complexity of {shown}: "),
-            _ => format!("link {shown} (related ID or opened ID): "),
+            _ => format!("link {shown} (related ID, origin ID or parent PLAN): "),
         };
         self.start_prompt(&label, make(ids), String::new());
     }
@@ -421,9 +421,21 @@ impl<S: Source> App<S> {
     fn link(&mut self, common: Common, ids: &[String], text: &str) {
         let words: Vec<&str> = text.split_whitespace().collect();
         let [kind, to] = words[..] else {
-            self.flash = Some("link takes a kind and an id: related CON2, or opened PK3".into());
+            self.flash =
+                Some("link takes a kind and an id: related CON2, origin Q3, or parent A3".into());
             return;
         };
+        if kind == "parent" {
+            let req = ParentRequest {
+                common,
+                a: ids.to_vec(),
+                plan: Some(to.to_string()),
+            };
+            if self.send("parent", &body(&req)) {
+                self.landed(format!("{} under {to}", ids.join(", ")));
+            }
+            return;
+        }
         let req = LinkRequest {
             common,
             a: ids.to_vec(),

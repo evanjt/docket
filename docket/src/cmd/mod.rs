@@ -9,6 +9,7 @@ pub mod lead;
 pub mod lists;
 pub mod machines;
 pub mod private;
+pub mod releases;
 pub mod show;
 pub mod skills;
 pub mod status;
@@ -412,10 +413,39 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
         Cmd::Edit {
             id,
             set,
+            release,
             append,
             body,
-        } => write::edit(ctx, id, set, append.as_ref(), body.as_ref()),
+        } => write::edit(
+            ctx,
+            id,
+            set,
+            release.as_ref(),
+            append.as_ref(),
+            body.as_ref(),
+        ),
+        Cmd::Releases {
+            action,
+            name,
+            to,
+            move_open_to,
+            target,
+            note,
+            all,
+        } => releases::releases(
+            ctx,
+            &releases::Releases {
+                action: action.as_deref(),
+                name: name.as_deref(),
+                to: to.as_deref(),
+                move_open_to: move_open_to.as_deref(),
+                target: target.as_deref(),
+                note: note.as_deref(),
+                all: *all,
+            },
+        ),
         Cmd::Link { words, remove } => write::link(ctx, words, *remove),
+        Cmd::Parent { words, none } => write::parent(ctx, words, *none),
         Cmd::Key {
             key,
             kind,

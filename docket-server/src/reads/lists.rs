@@ -12,7 +12,6 @@ use docket_core::queue::{OwnerFilter, OwnerRow, owner_queue};
 use docket_core::word::Kind;
 use docket_core::word::{PRIORITIES, priority};
 
-use crate::entities::project;
 use crate::reads::public::{
     Failure, Kinds, failure, internal, items_where, marks, one_of, open_members, project_of,
     public, public_rows, sql,
@@ -106,6 +105,9 @@ async fn owner_rows(
         .iter()
         .map(|r| serde_json::from_value(r.tags.clone()).unwrap_or_default())
         .collect();
+    let listed = crate::verbs::releases::listed(db, &q.project)
+        .await
+        .map_err(|e| internal(&e))?;
     let rows: Vec<OwnerRow> = items
         .iter()
         .zip(&tags)
@@ -120,6 +122,7 @@ async fn owner_rows(
                 .is_some_and(|d| d.starts_with(DERIVED)),
             need: needs.get(&r.rid).map(String::as_str),
             theme: r.theme.as_deref(),
+            release: listed.name(r.release_id),
             tier: PRIORITIES
                 .iter()
                 .position(|p| *p == priority(tags))
@@ -128,7 +131,7 @@ async fn owner_rows(
         })
         .collect();
     let key = q.key.as_deref().map(str::to_uppercase);
-    let releases = docket_core::fact::releases(project.skills["releases"].as_str());
+    let releases = listed.open.clone();
     let filter = OwnerFilter {
         priority: q
             .priority
@@ -398,43 +401,34 @@ fn twenty() -> i64 {
     20
 }
 
-/// The condition and values selecting the items of one release, on the theme column `column`.
-/// An item belongs to the release its theme names; a theme the project's releases do not list, or
-/// none, belongs to the current (first) release, as the queue orders them.
+/// The condition and values selecting the items of one release, shipped or not.
 ///
 /// # Errors
-/// 400 when the project lists releases and `release` is not one of them, or lists none.
-fn in_release(
-    project: &project::Model,
+/// 400 when `release` is not one of the project's releases.
+async fn in_release(
+    db: &DatabaseConnection,
+    slug: &str,
     release: &str,
     column: &str,
 ) -> Result<(String, Vec<sea_orm::Value>), Failure> {
-    let listed = docket_core::fact::releases(project.skills["releases"].as_str());
-    if !listed.iter().any(|r| r == release) {
+    let listed = crate::verbs::releases::listed(db, slug)
+        .await
+        .map_err(|e| internal(&e))?;
+    let Some(id) = listed.id(release) else {
+        let names: Vec<&str> = listed.rows.iter().map(|(_, r)| r.name.as_str()).collect();
         return Err(failure(
             StatusCode::BAD_REQUEST,
-            &format!("release: choose from {}", listed.join(", ")),
+            &format!("release: choose from {}", names.join(", ")),
         ));
-    }
-    if listed[0] != release {
-        return Ok((format!(" AND {column}=?"), vec![release.into()]));
-    }
-    let mut values: Vec<sea_orm::Value> = vec![release.into()];
-    values.extend(listed.iter().map(|r| sea_orm::Value::from(r.as_str())));
-    Ok((
-        format!(
-            " AND ({column} IS NULL OR {column}=? OR {column} NOT IN ({}))",
-            marks(listed.len())
-        ),
-        values,
-    ))
+    };
+    Ok((format!(" AND {column}=?"), vec![id.into()]))
 }
 
 async fn in_state(db: &DatabaseConnection, q: Recent, state: &str) -> Result<Json<Value>, Failure> {
-    let project = project_of(db, &q.project).await?;
+    project_of(db, &q.project).await?;
     let (mut tail, mut values) = ("AND state=?".to_string(), vec![state.into()]);
     if let Some(release) = &q.release {
-        let (cond, vals) = in_release(&project, release, "theme")?;
+        let (cond, vals) = in_release(db, &q.project, release, "release_id").await?;
         tail.push_str(&cond);
         values.extend(vals);
     }
@@ -538,11 +532,11 @@ pub async fn derived(
     let project = project_of(&db, &q.project).await?;
     let qkeys = Kinds::of(&project).keys(Kind::Decision);
     let (own, own_values) = match &q.release {
-        Some(r) => in_release(&project, r, "theme")?,
+        Some(r) => in_release(&db, &q.project, r, "release_id").await?,
         None => (String::new(), vec![]),
     };
     let (joined, joined_values) = match &q.release {
-        Some(r) => in_release(&project, r, "i.theme")?,
+        Some(r) => in_release(&db, &q.project, r, "i.release_id").await?,
         None => (String::new(), vec![]),
     };
     let (own_under, own_under_values) =

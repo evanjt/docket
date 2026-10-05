@@ -71,7 +71,7 @@ pub async fn log(
 
 /// The queries `docket deps` reads, by the tie each names, in the order it prints them. Each list
 /// comes in a fixed order: by rid, by link, or by the link's target.
-const TIES: [(&str, &str); 7] = [
+const TIES: [(&str, &str); 9] = [
     (
         "holds",
         "SELECT i.* FROM dependencies d JOIN items i ON i.rid=d.rid WHERE d.on_rid=? AND i.state='open' \
@@ -84,13 +84,21 @@ const TIES: [(&str, &str); 7] = [
          ORDER BY rid",
     ),
     (
-        "opened_by",
-        "SELECT i.* FROM links l JOIN items i ON i.rid=l.to_rid WHERE l.rid=? AND l.kind='opened' \
+        "parent",
+        "SELECT p.* FROM items i JOIN items p ON p.rid=i.parent_rid WHERE i.rid=?",
+    ),
+    (
+        "children",
+        "SELECT * FROM items WHERE parent_rid=? ORDER BY key, num",
+    ),
+    (
+        "origin",
+        "SELECT i.* FROM links l JOIN items i ON i.rid=l.to_rid WHERE l.rid=? AND l.kind='origin' \
          ORDER BY l.to_rid",
     ),
     (
-        "opened",
-        "SELECT i.* FROM links l JOIN items i ON i.rid=l.rid WHERE l.to_rid=? AND l.kind='opened' \
+        "spawned",
+        "SELECT i.* FROM links l JOIN items i ON i.rid=l.rid WHERE l.to_rid=? AND l.kind='origin' \
          ORDER BY l.id",
     ),
     (

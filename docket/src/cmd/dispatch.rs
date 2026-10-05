@@ -874,8 +874,7 @@ pub fn line(r: &Value) -> String {
     )
 }
 
-/// The kind a key holds in a project's matrix.
-/// The role the lead named, or the one the item's kind and what it opened give.
+/// The role the lead named, or the one the item's kind and its children give.
 fn default_role(
     ctx: &mut Ctx,
     slug: &str,
@@ -886,8 +885,8 @@ fn default_role(
     if let Some(r) = named {
         return Ok(r.to_string());
     }
-    let opened = item["opened"].as_array().is_some_and(|o| !o.is_empty());
-    Ok(role_of(&kind_of(&ctx.project_row(slug)?, key), opened).to_string())
+    let children = item["children"].as_array().is_some_and(|o| !o.is_empty());
+    Ok(role_of(&kind_of(&ctx.project_row(slug)?, key), children).to_string())
 }
 
 fn kind_of(project: &Value, key: &str) -> String {

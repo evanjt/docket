@@ -52,6 +52,8 @@ export interface Row {
   scope?: string | null;
   complexity?: string | null;
   theme?: string | null;
+  /** The release it is in; none is the backlog. */
+  release?: string | null;
   rank?: number | null;
   tags: string[];
   body: string;
@@ -74,7 +76,9 @@ export interface Progress {
 
 export interface Shown extends Row {
   related: string[];
-  opened: string[];
+  parent?: string | null;
+  origin: string[];
+  children: string[];
   cites: Cite[];
   progress?: Progress | null;
 }
@@ -168,6 +172,7 @@ export interface GraphNode {
   kind: Kind;
   state: string;
   theme: string | null;
+  release?: string | null;
   title: string;
   word: string;
   /** What a plan, story, package, concept or idea holds, as the server counts it. */

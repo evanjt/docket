@@ -25,7 +25,8 @@ theme: null
 rank: 3
 tags: ["high", "single"]
 related: ["CON1", "T10", "T9"]
-opened: ["A1", "PK2"]
+parent: "A1"
+origin: ["I2", "Q4"]
 depends: ["B3", "Q2"]
 opened_at: "2026-01-01T00:00:00Z"
 updated_at: "2026-01-03T00:00:00Z"

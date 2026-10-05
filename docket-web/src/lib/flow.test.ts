@@ -17,9 +17,10 @@ const GRAPH: Graph = {
     { ...node('CON1', 'concept', 'standing', 6), progress: { done: 0, total: 1, live: 0 } },
   ],
   edges: [
-    { from: 'T1', kind: 'opened', to: 'A1' },
-    { from: 'T2', kind: 'opened', to: 'A1' },
-    { from: 'T3', kind: 'opened', to: 'A2' },
+    { from: 'T1', kind: 'parent', to: 'A1' },
+    { from: 'T2', kind: 'parent', to: 'A1' },
+    { from: 'T3', kind: 'parent', to: 'A2' },
+    { from: 'T3', kind: 'origin', to: 'T1' },
     { from: 'A1', kind: 'related', to: 'CON1' },
     { from: 'T1', kind: 'cites', to: 'src/a.rs' },
   ],
@@ -28,9 +29,15 @@ const GRAPH: Graph = {
 describe('board', () => {
   const b = board(GRAPH);
 
-  it('reads opened edges from the parent', () => {
+  it('reads parent edges from the plan', () => {
     expect(b.children.get('A1')).toEqual(['T1', 'T2']);
     expect(b.parents.get('T3')).toEqual(['A2']);
+  });
+
+  it('reads origin edges both ways and leaves them out of the children', () => {
+    expect(b.origins.get('T3')).toEqual(['T1']);
+    expect(b.spawned.get('T1')).toEqual(['T3']);
+    expect(b.children.get('T1')).toBeUndefined();
   });
 
   it('reads related both ways', () => {
@@ -58,19 +65,19 @@ describe('board', () => {
 });
 
 describe('plans', () => {
-  // A1 opened T1 and T2, both done; T2 opened T3, still open. The server counts all three.
+  // A1 holds T1 and plan A2, both done; A2 holds T3, still open. The server counts all three.
   const deep: Graph = {
     project: 'o/p',
     nodes: [
       { ...node('A1', 'audit', 'blocked', 1), progress: { done: 2, total: 3, live: 0 }, due: false },
       node('T1', 'work', 'done', 2),
-      node('T2', 'work', 'done', 3),
+      node('A2', 'audit', 'done', 3),
       node('T3', 'work', 'ready', 4),
     ],
     edges: [
-      { from: 'T1', kind: 'opened', to: 'A1' },
-      { from: 'T2', kind: 'opened', to: 'A1' },
-      { from: 'T3', kind: 'opened', to: 'T2' },
+      { from: 'T1', kind: 'parent', to: 'A1' },
+      { from: 'A2', kind: 'parent', to: 'A1' },
+      { from: 'T3', kind: 'parent', to: 'A2' },
     ],
   };
 

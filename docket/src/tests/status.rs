@@ -34,7 +34,7 @@ fn test_problem_lines_word_each_kind() {
         problem_lines(&problems),
         [
             "1 item is filed under X, which the project does not define",
-            "A1 is open for audit while 2 items it opened are open",
+            "A1 is open for audit while 2 items under it are open",
             "T3 has waited since 2026-01-01T00:00:00Z until: rain",
         ]
     );

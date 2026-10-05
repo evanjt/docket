@@ -7,22 +7,29 @@ export interface NewItemForm {
   priority: string;
   complexity: string;
   release: string;
-  openedBy: string;
+  plan: string;
+  origin: string;
   group: string;
 }
 
-/** The release and opener a new item starts with: those of the item open in the panel. */
+/** The kinds that hold children. */
+const PLANS = ['audit', 'story', 'package'];
+
+/** The release, plan and origin a new item starts with, from the item open in the panel: a plan holds
+ * the new item, and anything else is what spawned it. */
 export function newItemDefaults(
-  from: { id: string; theme?: string | null } | undefined,
+  from: { id: string; release?: string | null; kind?: string } | undefined,
   releases: string[],
-): Pick<NewItemForm, 'release' | 'openedBy'> {
-  if (!from) return { release: '', openedBy: '' };
-  return { release: releaseOf(from.theme, releases) ?? '', openedBy: from.id };
+): Pick<NewItemForm, 'release' | 'plan' | 'origin'> {
+  if (!from) return { release: '', plan: '', origin: '' };
+  const release = releaseOf(from.release, releases) ?? '';
+  return PLANS.includes(from.kind ?? '') ? { release, plan: from.id, origin: '' } : { release, plan: '', origin: from.id };
 }
 
-/** The `new` request, and the `link opened` request to send once the new item has an id. */
+/** The `new` request, and the `parent` and `link origin` requests to send once the new item has an id. */
 export function newItemRequests(slug: string, f: NewItemForm) {
-  const opener = f.openedBy.trim().toUpperCase();
+  const plan = f.plan.trim().toUpperCase();
+  const origin = f.origin.trim().toUpperCase();
   return {
     request: {
       project: slug,
@@ -34,6 +41,9 @@ export function newItemRequests(slug: string, f: NewItemForm) {
       release: f.release || null,
       group: f.group.trim() || null,
     },
-    link: (id: string) => (opener ? { project: slug, a: [id], kind: 'opened', b: opener } : null),
+    after: (id: string): [string, Record<string, unknown>, string][] => [
+      ...(plan ? [['parent', { project: slug, a: [id], plan }, 'Put under the plan'] as [string, Record<string, unknown>, string]] : []),
+      ...(origin ? [['link', { project: slug, a: [id], kind: 'origin', b: origin }, 'Linked'] as [string, Record<string, unknown>, string]] : []),
+    ],
   };
 }

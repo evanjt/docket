@@ -48,9 +48,12 @@ INSERT INTO items (rid, project, key, num, title, state, turn, claim_branch, cla
 INSERT INTO items (rid, project, key, num, title, state, resolution, tags, body, opened_at, updated_at) VALUES
   (19, 'o/p', 'T', 11, 'Reviewed work', 'done', 'aaa1111', '[]', '', 'o', 'u');
 UPDATE items SET wait_on='condition', wait_ref='everything it opened is closed', wait_since='w' WHERE rid IN (6, 8);
-INSERT INTO links (rid, kind, to_rid) VALUES
-  (2, 'opened', 1), (4, 'opened', 3), (19, 'opened', 5), (18, 'opened', 6), (17, 'opened', 6),
-  (9, 'opened', 8), (2, 'opened', 15), (2, 'related', 16);
+UPDATE items SET parent_rid=1 WHERE rid=2;
+UPDATE items SET parent_rid=3 WHERE rid=4;
+UPDATE items SET parent_rid=5 WHERE rid=19;
+UPDATE items SET parent_rid=6 WHERE rid IN (17, 18);
+UPDATE items SET parent_rid=8 WHERE rid=9;
+INSERT INTO links (rid, kind, to_rid) VALUES (2, 'related', 15), (15, 'related', 2), (2, 'related', 16);
 INSERT INTO events (uid, project, rid, at, host, kind, note, data) VALUES
   ('e1', 'o/p', 6, 'a1', 'devbox', 'released', 'audit: gaps: B1', '{"audit": "gaps", "gaps": ["B1"]}'),
   ('e2', 'o/p', 1, 'a2', 'devbox', 'released', 'audit: gaps: T1', '{"audit": "gaps", "gaps": ["T1"]}');

@@ -406,6 +406,18 @@ impl Api {
         self.get("/derived", &of(slug))
     }
 
+    /// A project's releases in the order they ship, the shipped ones too with `all`.
+    ///
+    /// # Errors
+    /// As `get`.
+    pub fn releases(&self, slug: &str, all: bool) -> Result<Vec<docket_core::release::Row>> {
+        let mut query = of(slug);
+        if all {
+            query.push(("all", "true".to_string()));
+        }
+        self.get("/releases", &query)
+    }
+
     /// Every stored item of a project, bodies left out.
     ///
     /// # Errors

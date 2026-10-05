@@ -4,7 +4,8 @@ use std::collections::HashSet;
 
 use docket_client::{Api, Error};
 use docket_core::api::{LeadState, Machines};
-use docket_core::member::Tie;
+use docket_core::member::{Edge, Tie};
+use docket_core::release::Listed;
 use docket_core::rows::{Derived, EventRow, ProjectRow, Row, Shown, Status};
 use serde_json::Value;
 
@@ -157,14 +158,17 @@ impl Source for Http {
     }
 }
 
-/// A project's board from the stored lists: its row, its items, every `opened` tie leaving them, and
-/// the `related` ties reaching or leaving a standing item, which make a concept's members.
+/// A project's board from the stored lists: its row, its items with their parents, every `origin`
+/// tie leaving them, and the `related` ties reaching or leaving a standing item, which make a
+/// concept's members.
 fn board(api: &Api, slug: &str) -> docket_client::api::Result<Board> {
-    let project = api
+    let mut project = api
         .projects()?
         .into_iter()
         .find(|p| p.slug == slug)
         .ok_or_else(|| docket_client::Error::Refused(404, format!("no project {slug}")))?;
+    let rows = api.releases(slug, true)?;
+    project.releases = Listed::new(rows.into_iter().map(|r| (r.id, r.release)).collect());
     let items = api.items(slug)?;
     let rids: Vec<i64> = items.iter().map(|i| i.rid).collect();
     let standing: Vec<i64> = items
@@ -172,7 +176,7 @@ fn board(api: &Api, slug: &str) -> docket_client::api::Result<Board> {
         .filter(|i| project.kind(&i.key).is_standing())
         .map(|i| i.rid)
         .collect();
-    let mut links = api.links_from(&rids, "opened")?;
+    let mut links = api.links_from(&rids, "origin")?;
     links.extend(api.links_from(&standing, "related")?);
     links.extend(api.links_to(&standing, "related")?);
     let mut seen = HashSet::new();
@@ -181,11 +185,11 @@ fn board(api: &Api, slug: &str) -> docket_client::api::Result<Board> {
         .filter_map(|l| {
             Some(Tie {
                 rid: l.rid,
-                opened: l.kind == "opened",
+                edge: Edge::parse(&l.kind)?,
                 to: l.to_rid?,
             })
         })
-        .filter(|t| seen.insert((t.rid, t.opened, t.to)))
+        .filter(|t| seen.insert((t.rid, t.to, t.edge == Edge::Origin)))
         .collect();
     Ok(Board::new(project, items, ties))
 }

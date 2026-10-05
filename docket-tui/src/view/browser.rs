@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::app::App;
-use crate::mouse::Pane;
+use crate::mouse::{Pane, Zone};
 use crate::page::{Entry, Page};
 use crate::source::Source;
 use crate::style;
@@ -25,14 +25,37 @@ pub fn follow(top: usize, sel: usize, height: usize) -> usize {
     }
 }
 
+/// How many rows from `top` fit whole in `lines` lines, each as tall as it draws, at least one.
+#[must_use]
+pub fn rows_fitting(entries: &[Entry], top: usize, lines: usize) -> usize {
+    let mut used = 0;
+    let mut fit = 0;
+    for e in entries.iter().skip(top) {
+        used += if e.note.is_empty() { 1 } else { 2 };
+        if used > lines {
+            break;
+        }
+        fit += 1;
+    }
+    fit.max(1)
+}
+
 /// One row: a star when marked, id in its word's colour, the word, the title, and under it why it
 /// stands there.
-fn entry_lines(e: &Entry, selected: bool, marked: bool, width: usize) -> Vec<Line<'static>> {
-    let mark = if selected {
-        Modifier::REVERSED
-    } else {
-        Modifier::empty()
-    };
+fn entry_lines(
+    e: &Entry,
+    selected: bool,
+    hovered: bool,
+    marked: bool,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let mut mark = Modifier::empty();
+    if selected {
+        mark |= Modifier::REVERSED;
+    }
+    if hovered {
+        mark |= style::HOVER;
+    }
     let tone = style::word(&e.word).add_modifier(mark);
     let title: String = e.title.chars().take(width.saturating_sub(18)).collect();
     let star = if marked { "*" } else { " " };
@@ -73,8 +96,16 @@ pub fn draw<S: Source>(app: &mut App<S>, f: &mut Frame, area: Rect) {
         return;
     };
     let width = usize::from(left.width.saturating_sub(1));
-    let height = (usize::from(left.height.saturating_sub(1)) / 2).max(1);
-    b.list_top = follow(b.list_top, b.sel, height);
+    let lines = usize::from(left.height.saturating_sub(1));
+    b.list_top = follow(
+        b.list_top,
+        b.sel,
+        rows_fitting(&b.entries, b.list_top, lines),
+    );
+    if b.sel >= b.list_top + rows_fitting(&b.entries, b.list_top, lines) {
+        b.list_top = b.sel;
+    }
+    let height = rows_fitting(&b.entries, b.list_top, lines);
     let head = format!(" {} {}", b.listing.title(), b.entries.len());
     let block = Block::default()
         .borders(Borders::RIGHT)
@@ -82,10 +113,20 @@ pub fn draw<S: Source>(app: &mut App<S>, f: &mut Frame, area: Rect) {
     let inner = block.inner(left);
     app.map.panes.push((left, Pane::List));
     app.map.list_rows = height;
+    let hover = match app.hover {
+        Some(Zone::Row(i)) => Some(i),
+        _ => None,
+    };
     let mut lines = Vec::new();
     let rows = usize::from(left.height);
     for (i, e) in b.entries.iter().enumerate().skip(b.list_top).take(rows) {
-        let drawn = entry_lines(e, i == b.sel, b.marks.contains(&e.id), width);
+        let drawn = entry_lines(
+            e,
+            i == b.sel,
+            hover == Some(i),
+            b.marks.contains(&e.id),
+            width,
+        );
         app.map.row(inner, i, lines.len(), drawn.len());
         lines.extend(drawn);
     }

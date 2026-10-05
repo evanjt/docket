@@ -9,6 +9,7 @@ pub mod project;
 pub mod settings;
 
 use std::collections::BTreeSet;
+use std::rc::Rc;
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -18,7 +19,7 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::App;
 use crate::doc::{Doc, Target};
-use crate::mouse::Map;
+use crate::mouse::{Map, Zone};
 use crate::page::Page;
 use crate::source::Source;
 use crate::style;
@@ -30,8 +31,27 @@ pub fn list_width(total: u16) -> u16 {
     (total * 2 / 5).clamp(24, 60)
 }
 
-/// The page's document, the one Tab walks: the detail where a list stands beside it.
-pub fn doc<S: Source>(app: &App<S>) -> Doc {
+/// The page's document, the one Tab walks: the detail where a list stands beside it. The Project
+/// page's is the costly one to build, so it is kept until the board is read again or the page is
+/// changed in a way that alters it.
+pub fn doc<S: Source>(app: &App<S>) -> Rc<Doc> {
+    let Page::Project(p) = &app.page else {
+        return Rc::new(build(app));
+    };
+    let key = (app.generation, p.slug.clone(), app.size.0, p.all_moves);
+    if let Some((k, d)) = &*app.doc_cache.borrow()
+        && *k == key
+    {
+        return Rc::clone(d);
+    }
+    let built = Rc::new(build(app));
+    if p.data.is_some() {
+        *app.doc_cache.borrow_mut() = Some((key, Rc::clone(&built)));
+    }
+    built
+}
+
+fn build<S: Source>(app: &App<S>) -> Doc {
     let (w, _) = app.size;
     let full = usize::from(w);
     let side = usize::from(w.saturating_sub(list_width(w) + 1));
@@ -89,7 +109,11 @@ pub fn draw_doc<S: Source>(app: &mut App<S>, f: &mut Frame, area: Rect) {
     cursor.settle(&spots);
     cursor.follow(&spots, usize::from(area.height));
     let (index, top) = (cursor.index, cursor.top);
-    let text = doc.render(index);
+    let hovered = match app.hover {
+        Some(Zone::Spot(i, _)) => Some(i),
+        _ => None,
+    };
+    let text = doc.render(index, hovered);
     f.render_widget(
         Paragraph::new(text).scroll((u16::try_from(top).unwrap_or(0), 0)),
         area,

@@ -29,6 +29,7 @@ pub fn now() -> i64 {
 impl<S: Source> App<S> {
     /// Reads the open page again, keeping where its pointers stand.
     pub fn load(&mut self) {
+        self.generation += 1;
         match &self.page {
             Page::Home(_) => self.load_home(),
             Page::Project(_) => self.load_project(),

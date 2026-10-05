@@ -70,7 +70,7 @@ Mouse
   click a row            select it in a list; a click on the selected row opens it
   wheel                  scroll the pane under the pointer, 3 lines a notch
   right click            back
-  move over an id        select it, where the terminal reports the pointer's moves
+  move over an id or row mark it, where the terminal reports the pointer's moves; the cursor stays
   Marking rows stays on the keyboard (x). While the screen has the mouse, most terminals select
   text with Shift held.
 

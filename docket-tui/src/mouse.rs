@@ -112,9 +112,7 @@ impl<S: Source> App<S> {
                 self.go_back();
             }
             MouseEventKind::Moved => {
-                if let Some(Zone::Spot(i, t)) = self.map.zone(x, y).cloned() {
-                    self.point(i, t);
-                }
+                self.hover = self.map.zone(x, y).cloned();
             }
             _ => {}
         }
@@ -126,6 +124,7 @@ impl<S: Source> App<S> {
             return;
         };
         self.flash = None;
+        self.hover = None;
         match zone {
             Zone::Spot(i, t) => {
                 self.point(i, t);

@@ -1,6 +1,8 @@
 //! Lines of text in which ids, counts and lists are hot spots: Tab moves between them, Enter opens one.
 
 use ratatui::style::{Modifier, Style};
+
+use crate::style;
 use ratatui::text::{Line, Span};
 
 /// A list route the browser can show, each taking the project alone.
@@ -156,9 +158,10 @@ impl Doc {
         out
     }
 
-    /// The lines to draw, the selected spot reversed. An item spot is underlined, as a link reads.
+    /// The lines to draw, the selected spot reversed and the hovered one in the hover style. An item
+    /// spot is underlined, as a link reads.
     #[must_use]
-    pub fn render(&self, selected: Option<usize>) -> Vec<Line<'static>> {
+    pub fn render(&self, selected: Option<usize>, hovered: Option<usize>) -> Vec<Line<'static>> {
         let mut n = 0;
         let mut out = Vec::with_capacity(self.lines.len());
         for line in &self.lines {
@@ -173,6 +176,9 @@ impl Doc {
                         style = style.add_modifier(Modifier::REVERSED);
                     } else if matches!(target, Target::Item(_)) {
                         style = style.add_modifier(Modifier::UNDERLINED);
+                    }
+                    if hovered == Some(n) {
+                        style = style.add_modifier(style::HOVER);
                     }
                     n += 1;
                     Span::styled(s.text.clone(), style)

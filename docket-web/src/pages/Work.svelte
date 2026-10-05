@@ -3,6 +3,7 @@
   import { project } from '../lib/context';
   import { ASIDE, FLOW, PRIORITIES, byId } from '../lib/flow';
   import { resource } from '../lib/live.svelte';
+  import { caption, countOf, pageSize } from '../lib/lists';
   import { releaseOf } from '../lib/releases';
   import { at, go, withParams } from '../lib/router.svelte';
   import { act } from '../lib/session.svelte';
@@ -36,18 +37,21 @@
   let typed = $state(at.params.get('q') ?? '');
   let searchBox: HTMLInputElement | undefined = $state();
   let marks = $state(new Set<string>());
+  let more = $state(0);
+
+  const status = resource(() => api.status(ctx.slug));
 
   const fetched = resource<Shape[]>(() => {
     if (q) return api.search(ctx.slug, q);
     if (word) return null;
     // With a release chosen, the whole queue is read: next lists the earlier releases first.
-    if (list === 'next') return api.next(ctx.slug, release ? 5000 : 200);
+    if (list === 'next') return api.next(ctx.slug, release ? 5000 : Math.max(200, pageSize(more, false)));
     if (list === 'derived') {
-      return api.derived(ctx.slug).then((ds) =>
+      return api.derived(ctx.slug, pageSize(more, !!release)).then((ds) =>
         ds.map((d) => ({ id: d.id, title: d.title, word: d.state, turn_note: `${d.chose ?? ''} (from ${d.basis})` })),
       );
     }
-    return api.list(list ?? 'next', ctx.slug).then((rows) =>
+    return api.list(list ?? 'next', ctx.slug, pageSize(more, !!release)).then((rows) =>
       list === 'groups' ? rows.map((r) => ({ ...r, aside: r.group ?? '' })) : rows,
     );
   });
@@ -71,6 +75,9 @@
       .filter((r) => !release || r.release === release),
   );
 
+  const total = $derived(release || q || word || !list ? null : countOf(list, status.data));
+  const cut = $derived(!release && !q && !word && list !== 'next' && list !== 'groups' && list !== 'derived' && total !== null && total > shown.length);
+
   const loading = $derived(word ? !ctx.board : fetched.loading && !fetched.data);
   const heading = $derived(q ? `Search: ${q}` : word ? `Every item ${word}` : LISTS.find((l) => l.name === list)?.label);
 
@@ -81,6 +88,14 @@
       go(withParams({ q: text.trim() || undefined, word: undefined, list: text.trim() ? undefined : 'next' }), true);
     }, 220);
   }
+
+  $effect(() => {
+    list;
+    q;
+    word;
+    release;
+    more = 0;
+  });
 
   function choose(id: string) {
     go(withParams({ i: id }), true);
@@ -181,7 +196,7 @@
 
     <div class="caption">
       <h2>{heading}</h2>
-      <span class="faint">{loading ? 'Reading' : `${shown.length}`}</span>
+      <span class="faint">{loading ? 'Reading' : caption(shown.length, total)}</span>
     </div>
 
     {#if marks.size}
@@ -209,6 +224,9 @@
           release={!release && r.release && r.release !== ctx.releases[0] ? r.release : undefined} />
       {/each}
     </ul>
+    {#if cut}
+      <button class="btn small" onclick={() => (more += 1)}>Show more</button>
+    {/if}
   </div>
 
   <div class="right">

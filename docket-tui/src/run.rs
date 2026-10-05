@@ -6,14 +6,16 @@ use std::process::{Command, ExitCode};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
-use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, MouseEvent, MouseEventKind,
+};
 use ratatui::DefaultTerminal;
 
 use docket_client::{Api, Config};
 
 use crate::app::App;
 use crate::doc::Target;
-use crate::source::Http;
+use crate::source::{Http, Source};
 use crate::view;
 
 /// What the change stream tells the screen.
@@ -114,26 +116,81 @@ fn edit(terminal: &mut DefaultTerminal, seed: &str) -> Option<String> {
     text
 }
 
+/// Where the screen's input comes from, so one step of the loop can be run on a script of events.
+trait Events {
+    fn poll(&mut self, wait: Duration) -> std::io::Result<bool>;
+    fn read(&mut self) -> std::io::Result<Event>;
+}
+
+struct Terminal;
+
+impl Events for Terminal {
+    fn poll(&mut self, wait: Duration) -> std::io::Result<bool> {
+        event::poll(wait)
+    }
+
+    fn read(&mut self) -> std::io::Result<Event> {
+        event::read()
+    }
+}
+
+/// Every event waiting, after at most `wait` for the first. Pointer motion is kept to its last place,
+/// since the earlier ones only drew the pointer along the way. Whether the screen needs drawing again.
+fn step<S: Source>(
+    app: &mut App<S>,
+    events: &mut impl Events,
+    wait: Duration,
+) -> std::io::Result<bool> {
+    let (mut redraw, mut hover, mut wait) = (false, None, wait);
+    while events.poll(wait)? {
+        wait = Duration::ZERO;
+        match events.read()? {
+            Event::Mouse(m) if m.kind == MouseEventKind::Moved => hover = Some(m),
+            other => {
+                settle_hover(app, hover.take());
+                redraw = true;
+                match other {
+                    Event::Key(k) => app.key(k),
+                    Event::Mouse(m) => app.mouse(m),
+                    _ => {}
+                }
+            }
+        }
+    }
+    Ok(redraw | settle_hover(app, hover))
+}
+
+/// Applies a pointer's last place, and whether it changed the selection or what is hovered.
+fn settle_hover<S: Source>(app: &mut App<S>, hover: Option<MouseEvent>) -> bool {
+    let Some(m) = hover else {
+        return false;
+    };
+    let (cursor, hovered) = (app.cursor().clone(), app.hover.clone());
+    app.mouse(m);
+    *app.cursor() != cursor || app.hover != hovered
+}
+
 fn run_loop(app: &mut App<Http>, rx: &Receiver<Notice>) -> std::io::Result<()> {
     let mut terminal = init();
     let (mut moved, mut read) = (false, Instant::now());
+    let mut redraw = true;
     while !app.quit {
-        terminal.draw(|f| view::draw(app, f))?;
-        if event::poll(Duration::from_millis(100))? {
-            match event::read()? {
-                Event::Key(k) => app.key(k),
-                Event::Mouse(m) => app.mouse(m),
-                _ => {}
-            }
+        if redraw {
+            terminal.draw(|f| view::draw(app, f))?;
         }
+        redraw = step(app, &mut Terminal, Duration::from_millis(100))?;
         if let Some(seed) = app.editor.take() {
             let text = edit(&mut terminal, &seed);
             app.edited(text);
+            redraw = true;
         }
+        let live = app.live;
         moved = drain(rx, app, moved);
+        redraw |= live != app.live;
         if moved && read.elapsed() >= SETTLE {
             app.changed();
             (moved, read) = (false, Instant::now());
+            redraw = true;
         }
     }
     Ok(())
@@ -166,3 +223,7 @@ pub fn main(config: Config, project: Option<String>, name: &str) -> ExitCode {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/run.rs"]
+mod tests;

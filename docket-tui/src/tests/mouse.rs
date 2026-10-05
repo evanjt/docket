@@ -171,13 +171,55 @@ fn test_mouse_click_selects_a_row_and_a_second_click_opens_it() {
 }
 
 #[test]
-fn test_mouse_move_over_an_id_selects_it() {
+fn test_mouse_click_in_the_lower_half_of_one_line_rows_keeps_the_window() {
+    let mut a = app();
+    browse(&mut a, Listing::Ties("PK1".into()));
+    let Page::Browser(b) = &mut a.page else {
+        panic!("not a browser");
+    };
+    b.entries = (0..80)
+        .map(|i| crate::page::Entry {
+            id: format!("R{i}"),
+            word: "ready".into(),
+            title: "t".into(),
+            note: String::new(),
+        })
+        .collect();
+    b.sel = 0;
+    let buf = draw(&mut a, 160, 48);
+    let at = find(&buf, "R30 ", 0, list_width(160));
+    click(&mut a, at);
+    assert_eq!(row_of(&a), (30, 0));
+    let buf = draw(&mut a, 160, 48);
+    assert_eq!(find(&buf, "R30 ", 0, list_width(160)), at);
+    assert_eq!(row_of(&a), (30, 0));
+}
+
+#[test]
+fn test_mouse_move_over_an_id_hovers_it_and_leaves_the_cursor() {
     let mut a = app();
     browse(&mut a, Listing::Route(Route::Questions));
     let at = in_detail(&mut a, "B1");
+    let before = a.cursor().clone();
     event(&mut a, MouseEventKind::Moved, at);
-    assert_eq!(a.cursor().selected(), Some(&Target::Item("B1".into())));
+    assert!(matches!(a.hover, Some(Zone::Spot(_, Target::Item(ref id))) if id == "B1"));
+    assert_eq!(*a.cursor(), before);
     assert_eq!(a.page.title(), "questions");
+    event(&mut a, MouseEventKind::Moved, (0, 0));
+    assert_eq!(a.hover, None);
+    assert_eq!(*a.cursor(), before);
+}
+
+#[test]
+fn test_mouse_move_over_a_list_row_hovers_it() {
+    let mut a = app();
+    browse(&mut a, Listing::Ties("PK1".into()));
+    let buf = draw(&mut a, 160, 40);
+    let at = find(&buf, "T1 ", 0, list_width(160));
+    let sel = row_of(&a);
+    event(&mut a, MouseEventKind::Moved, at);
+    assert!(matches!(a.hover, Some(Zone::Row(_))));
+    assert_eq!(row_of(&a), sel);
 }
 
 #[test]

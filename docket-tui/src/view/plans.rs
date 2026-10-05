@@ -9,7 +9,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::app::App;
 use crate::doc::{Doc, Target, seg, spot};
-use crate::mouse::Pane;
+use crate::mouse::{Pane, Zone};
 use crate::page::{Page, PlanRow, Plans};
 use crate::source::Source;
 use crate::style;
@@ -18,15 +18,23 @@ use crate::view::project::bar;
 use crate::view::{draw_doc, list_width};
 use docket_core::board::Board;
 
-fn row_line(r: &PlanRow, selected: bool, marked: bool, width: usize) -> Line<'static> {
+fn row_line(
+    r: &PlanRow,
+    selected: bool,
+    hovered: bool,
+    marked: bool,
+    width: usize,
+) -> Line<'static> {
     if let Some(h) = &r.heading {
         return Line::from(Span::styled(format!(" {h}"), style::bold()));
     }
-    let mark = if selected {
-        Modifier::REVERSED
-    } else {
-        Modifier::empty()
-    };
+    let mut mark = Modifier::empty();
+    if selected {
+        mark |= Modifier::REVERSED;
+    }
+    if hovered {
+        mark |= style::HOVER;
+    }
     let fold = match r.folded {
         Some(true) => "+ ",
         Some(false) => "- ",
@@ -75,12 +83,22 @@ pub fn draw<S: Source>(app: &mut App<S>, f: &mut Frame, area: Rect) {
     let inner = block.inner(left);
     app.map.panes.push((left, Pane::List));
     app.map.list_rows = height;
+    let hover = match app.hover {
+        Some(Zone::Row(i)) => Some(i),
+        _ => None,
+    };
     let mut lines = Vec::new();
     for (i, r) in p.rows.iter().enumerate().skip(p.list_top).take(height) {
         if r.heading.is_none() {
             app.map.row(inner, i, lines.len(), 1);
         }
-        lines.push(row_line(r, i == p.sel, p.marks.contains(&r.id), width));
+        lines.push(row_line(
+            r,
+            i == p.sel,
+            hover == Some(i),
+            p.marks.contains(&r.id),
+            width,
+        ));
     }
     f.render_widget(Paragraph::new(lines).block(block), left);
 }

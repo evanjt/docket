@@ -92,7 +92,7 @@ fn test_cursor_settles_on_the_same_target_after_a_refetch() {
 fn test_render_reverses_the_selected_spot_only() {
     let mut d = Doc::default();
     d.prose("T1 and Q1", 40, &known);
-    let lines = d.render(Some(1));
+    let lines = d.render(Some(1), None);
     let spans = &lines[0].spans;
     assert!(!spans[0].style.add_modifier.contains(Modifier::REVERSED));
     assert!(spans[0].style.add_modifier.contains(Modifier::UNDERLINED));

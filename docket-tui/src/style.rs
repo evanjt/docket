@@ -50,6 +50,9 @@ pub fn dim() -> Style {
     Style::default().add_modifier(Modifier::DIM)
 }
 
+/// What marks the list row or hot spot under the pointer; the keyboard cursor is reversed.
+pub const HOVER: Modifier = Modifier::ITALIC.union(Modifier::UNDERLINED);
+
 /// What stops the work: a missing fact, NO LOOP, a failure.
 #[must_use]
 pub fn alarm() -> Style {

@@ -1,11 +1,13 @@
 //! The screen's state: the page it is on, the pages behind and ahead, and what it has read.
 
+use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
+use std::rc::Rc;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use crate::doc::{Cursor, Listing, Target};
-use crate::mouse::Map;
+use crate::doc::{Cursor, Doc, Listing, Target};
+use crate::mouse::{Map, Zone};
 use crate::page::{Browser, Detail, Help, Home, Page, Plans, Project, Queue, Settings, Typing};
 use crate::source::Source;
 use crate::view;
@@ -31,7 +33,16 @@ pub struct App<S: Source> {
     pub editor: Option<String>,
     /// Where the last draw put each hot spot, list row and pane, for the mouse.
     pub map: Map,
+    /// The zone under the pointer at its last move, drawn apart from the keyboard cursor.
+    pub hover: Option<Zone>,
+    /// Counts each read of the board and pages, so a document built from them can be told stale.
+    pub generation: u64,
+    /// The last Project page document, with what it was built from.
+    pub doc_cache: RefCell<Option<(DocKey, Rc<Doc>)>>,
 }
+
+/// What the Project page's document depends on: the generation, the project, the width and the moves shown.
+pub type DocKey = (u64, String, u16, bool);
 
 impl<S: Source> App<S> {
     /// Opens on home, read at once.
@@ -50,6 +61,9 @@ impl<S: Source> App<S> {
             prompt: None,
             editor: None,
             map: Map::default(),
+            hover: None,
+            generation: 0,
+            doc_cache: RefCell::new(None),
         };
         app.load();
         app
@@ -135,6 +149,7 @@ impl<S: Source> App<S> {
             return;
         }
         self.flash = None;
+        self.hover = None;
         if self.prompting(k) || self.typed(k) {
             return;
         }

@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::LazyLock;
 
 use regex::Regex;
-use sea_orm::{ConnectionTrait, DbErr, FromQueryResult};
+use sea_orm::{ConnectionTrait, DbErr};
 
 use docket_core::api::Progress;
 use docket_core::item::{Field, Item};
@@ -18,7 +18,7 @@ use docket_core::word::ItemType;
 use crate::store::{ProjectRow, STATE_COLUMNS, Tx, column, items, sql};
 use crate::verbs::Failure;
 
-use crate::reads::public::Members;
+pub use crate::reads::public::member_count;
 
 /// Every parent edge of the project, child to plan.
 pub async fn parent_ties<C: ConnectionTrait>(c: &C, slug: &str) -> Result<Vec<Tie>, DbErr> {
@@ -52,32 +52,6 @@ pub async fn package_members<C: ConnectionTrait>(
         vec![prid.into()],
     )
     .await
-}
-
-/// How many items under rid, at any depth, are open and how many are closed.
-pub async fn member_count<C: ConnectionTrait>(c: &C, rid: i64) -> Result<Members, DbErr> {
-    let stmt = sql(
-        "WITH RECURSIVE under(rid) AS ( \
-           SELECT rid FROM items WHERE parent_rid=? \
-           UNION SELECT i.rid FROM items i JOIN under u ON i.parent_rid=u.rid) \
-         SELECT COUNT(*) FILTER (WHERE state='open') AS open, \
-                COUNT(*) FILTER (WHERE state<>'open') AS closed \
-         FROM items WHERE rid IN (SELECT rid FROM under)",
-        vec![rid.into()],
-    );
-    Ok(Counted::find_by_statement(stmt)
-        .one(c)
-        .await?
-        .map_or_else(Members::default, |n| Members {
-            open: n.open.unsigned_abs(),
-            closed: n.closed.unsigned_abs(),
-        }))
-}
-
-#[derive(FromQueryResult)]
-struct Counted {
-    open: i64,
-    closed: i64,
 }
 
 /// A package's members closed or dropped, all of them, and those claimed now.

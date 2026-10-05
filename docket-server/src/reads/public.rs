@@ -81,49 +81,51 @@ pub async fn id_of<C: ConnectionTrait>(db: &C, rid: i64) -> Result<Option<String
     Ok(item::Entity::find_by_id(rid).one(db).await?.map(|i| i.id))
 }
 
-/// What a plan holds at any depth: its open items and its closed ones.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Members {
-    pub open: u64,
-    pub closed: u64,
-}
+pub use docket_core::member::Members;
 
 #[derive(FromQueryResult)]
-struct Count {
-    prid: i64,
-    open: i64,
-    closed: i64,
+struct Placed {
+    rid: i64,
+    parent_rid: Option<i64>,
+    state: String,
 }
 
-/// `{plan rid: its members, at any depth}` for every item that holds some, in one query.
+/// `{plan rid: its members, at any depth}` for every item that holds some. One flat read walked in
+/// memory: a recursive query here was estimated at millions of rows and JIT-compiled on every call.
 pub async fn member_counts<C: ConnectionTrait>(
     db: &C,
     slug: &str,
 ) -> Result<HashMap<i64, Members>, DbErr> {
+    totals(db, "project=?", slug.into()).await
+}
+
+/// How many items under rid, at any depth, are open and how many are closed.
+pub async fn member_count<C: ConnectionTrait>(db: &C, rid: i64) -> Result<Members, DbErr> {
+    let mut all = totals(
+        db,
+        "project=(SELECT project FROM items WHERE rid=?)",
+        rid.into(),
+    )
+    .await?;
+    Ok(all.remove(&rid).unwrap_or_default())
+}
+
+async fn totals<C: ConnectionTrait>(
+    db: &C,
+    filter: &str,
+    value: sea_orm::Value,
+) -> Result<HashMap<i64, Members>, DbErr> {
     let stmt = sql(
-        "WITH RECURSIVE under(root, rid) AS ( \
-           SELECT parent_rid, rid FROM items WHERE parent_rid IS NOT NULL AND project=? \
-           UNION SELECT u.root, i.rid FROM under u JOIN items i ON i.parent_rid=u.rid) \
-         SELECT u.root AS prid, \
-                COUNT(*) FILTER (WHERE i.state='open') AS open, \
-                COUNT(*) FILTER (WHERE i.state<>'open') AS closed \
-         FROM under u JOIN items i ON i.rid=u.rid GROUP BY u.root",
-        vec![slug.into()],
+        &format!("SELECT rid, parent_rid, state FROM items WHERE {filter}"),
+        vec![value],
     );
-    Ok(Count::find_by_statement(stmt)
+    let rows: Vec<(i64, Option<i64>, bool)> = Placed::find_by_statement(stmt)
         .all(db)
         .await?
         .into_iter()
-        .map(|c| {
-            (
-                c.prid,
-                Members {
-                    open: c.open.unsigned_abs(),
-                    closed: c.closed.unsigned_abs(),
-                },
-            )
-        })
-        .collect())
+        .map(|p| (p.rid, p.parent_rid, p.state == "open"))
+        .collect();
+    Ok(docket_core::member::member_totals(&rows))
 }
 
 /// The status word of a row, the same on every surface.

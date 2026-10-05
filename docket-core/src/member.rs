@@ -128,6 +128,40 @@ pub fn members_of<S: BuildHasher>(
     out
 }
 
+/// What a plan holds at any depth: its open items and its closed ones.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Members {
+    pub open: u64,
+    pub closed: u64,
+}
+
+/// `{plan rid: its members at any depth}` from every item's `(rid, parent, open)`, for each item that
+/// holds some. A parent cycle stops at the first plan seen twice.
+#[must_use]
+pub fn member_totals(rows: &[(i64, Option<i64>, bool)]) -> HashMap<i64, Members> {
+    let up: HashMap<i64, i64> = rows
+        .iter()
+        .filter_map(|&(rid, parent, _)| parent.map(|p| (rid, p)))
+        .collect();
+    let mut out: HashMap<i64, Members> = HashMap::new();
+    for &(rid, _, open) in rows {
+        let (mut seen, mut at) = (HashSet::from([rid]), rid);
+        while let Some(&p) = up.get(&at) {
+            if !seen.insert(p) {
+                break;
+            }
+            let m = out.entry(p).or_default();
+            if open {
+                m.open += 1;
+            } else {
+                m.closed += 1;
+            }
+            at = p;
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 #[path = "tests/member.rs"]
 mod tests;

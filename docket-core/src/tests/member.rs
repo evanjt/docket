@@ -97,3 +97,34 @@ fn test_an_item_under_a_labelled_plan_carries_the_label() {
     assert_eq!(labels_carried(&ties, &own, 4), ["lone"]);
     assert!(labels_carried(&ties, &own, 5).is_empty());
 }
+
+fn totals(rows: &[(i64, Option<i64>, bool)]) -> Vec<(i64, u64, u64)> {
+    let mut out: Vec<(i64, u64, u64)> = member_totals(rows)
+        .into_iter()
+        .map(|(rid, m)| (rid, m.open, m.closed))
+        .collect();
+    out.sort_unstable();
+    out
+}
+
+#[test]
+fn test_member_totals_count_every_depth_under_each_plan() {
+    // 1 holds 2 and 3; 2 holds 4, which is closed; 5 is a second plan over 6; 7 stands alone.
+    let rows = [
+        (1, None, true),
+        (2, Some(1), true),
+        (3, Some(1), false),
+        (4, Some(2), false),
+        (5, None, true),
+        (6, Some(5), true),
+        (7, None, true),
+    ];
+    assert_eq!(totals(&rows), [(1, 1, 2), (2, 0, 1), (5, 1, 0)]);
+}
+
+#[test]
+fn test_member_totals_survive_a_parent_cycle_and_no_rows() {
+    let rows = [(1, Some(2), true), (2, Some(1), false), (3, Some(1), true)];
+    assert_eq!(totals(&rows), [(1, 1, 1), (2, 2, 0)]);
+    assert!(member_totals(&[]).is_empty());
+}

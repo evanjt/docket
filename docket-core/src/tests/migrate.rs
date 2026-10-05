@@ -1064,3 +1064,19 @@ fn test_items_under_a_projects_own_work_key_become_tasks_labelled_with_the_key()
     );
     assert!(own[0].line().contains("keeps its ids"));
 }
+
+#[test]
+fn test_an_open_item_with_a_stored_area_and_no_other_tie_is_placed_in_it() {
+    let (project, mut items, events) = crafts();
+    items.iter_mut().find(|i| i.id == "T5").unwrap().area = Some(s("kites"));
+    let rows = Rows {
+        project: &project,
+        items: items.iter().collect(),
+        events: events.iter().collect(),
+    };
+    let c = plan(&rows, Rules::default());
+    assert_eq!(area_of(&c, "T5").as_deref(), Some("kites"));
+    assert_eq!(c.placed.unplaced, 0);
+    assert!(risky(&c, |k| matches!(k, Case::Unplaced { .. })).is_empty());
+    assert!(c.writable().is_ok(), "{:?}", c.writable());
+}

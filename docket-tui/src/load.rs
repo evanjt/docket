@@ -2,7 +2,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use docket_core::pace::{Class, Counted, Logged, Move, Net, epoch, minutes, moves, net, pace};
+use docket_core::pace::{Logged, Move, epoch, minutes, moves};
 use docket_core::rows::{EventRow, Row};
 use docket_core::word::Kind;
 
@@ -13,8 +13,6 @@ use crate::page::{Detail, Entry, HomeRow, Page, PlanRow, ProjectData};
 use crate::source::Source;
 use docket_core::board::Board;
 
-/// How many closes the pace is read over.
-const RECENT_CLOSES: u64 = 20;
 /// How far back the moves reach, in seconds.
 const WINDOW: i64 = 86_400;
 /// How many rows NEXT shows.
@@ -82,6 +80,8 @@ impl<S: Source> App<S> {
             let wip = self.source.list("wip", &slug)?;
             let recent = self.source.recent(&slug)?;
             let mut data = project_data(&board, status, next, wip, &recent, now());
+            data.releases = self.source.releases(&slug).unwrap_or_default();
+            data.problems = self.source.problems(&slug).unwrap_or_default();
             data.lead = self.source.lead(&slug).ok();
             data.machines = self
                 .source
@@ -119,8 +119,31 @@ impl<S: Source> App<S> {
         self.load_detail();
     }
 
-    /// The rows a listing holds.
+    /// The rows a listing holds, each with the area its item is in, and only the filter's area when
+    /// the filter names one.
     fn entries(&mut self, slug: &str, listing: &Listing) -> crate::source::Result<Vec<Entry>> {
+        let mut entries = self.read_entries(slug, listing)?;
+        if let Some(board) = self.board(slug) {
+            for e in &mut entries {
+                if let Some(i) = board.get(&e.id) {
+                    e.area = board
+                        .project
+                        .areas
+                        .name(i.area_id)
+                        .unwrap_or_default()
+                        .to_string();
+                }
+            }
+        }
+        if let Listing::Next(f) = listing
+            && let Some(a) = &f.area
+        {
+            entries.retain(|e| e.area.eq_ignore_ascii_case(a));
+        }
+        Ok(entries)
+    }
+
+    fn read_entries(&mut self, slug: &str, listing: &Listing) -> crate::source::Result<Vec<Entry>> {
         let rows = |r: Vec<Row>| r.iter().map(Entry::of_row).collect();
         match listing {
             Listing::Search(q) if q.trim().is_empty() => Ok(Vec::new()),
@@ -139,11 +162,36 @@ impl<S: Source> App<S> {
                 Ok(board
                     .with_word(w)
                     .into_iter()
-                    .map(|i| Entry::of_item(i, w.clone()))
+                    .map(|i| {
+                        Entry::of_item(
+                            i,
+                            w.clone(),
+                            board.project.releases.name(i.release_id),
+                            board.project.areas.name(i.area_id),
+                        )
+                    })
                     .collect())
             }
             Listing::Ties(id) => self.ties(slug, id),
             Listing::Group(name) => self.source.group(slug, name).map(rows),
+            Listing::Problems(kind) => {
+                let problems = self.source.problems(slug)?;
+                let board = self.board(slug).ok_or("no board")?;
+                Ok(docket_core::check::ids(&problems, kind)
+                    .iter()
+                    .filter_map(|id| board.get(id))
+                    .map(|i| {
+                        let mut e = Entry::of_item(
+                            i,
+                            board.word(i),
+                            board.project.releases.name(i.release_id),
+                            board.project.areas.name(i.area_id),
+                        );
+                        e.note = docket_core::check::phrase(kind, 1);
+                        e
+                    })
+                    .collect())
+            }
         }
     }
 
@@ -154,7 +202,12 @@ impl<S: Source> App<S> {
         let board = self.board(slug).ok_or("no board")?;
         let entry = |id: &str, note: &str| {
             board.get(id).map(|i| {
-                let mut e = Entry::of_item(i, board.word(i));
+                let mut e = Entry::of_item(
+                    i,
+                    board.word(i),
+                    board.project.releases.name(i.release_id),
+                    board.project.areas.name(i.area_id),
+                );
                 e.note = note.to_string();
                 e
             })
@@ -297,7 +350,7 @@ fn home_row<S: Source>(source: &S, project: docket_core::rows::ProjectRow) -> Ho
     }
 }
 
-/// The project page's rows: the moves of the window, or the newest ones when it holds none, and the pace.
+/// The project page's rows: the moves of the window, or the newest ones when it holds none.
 #[must_use]
 pub fn project_data(
     board: &Board,
@@ -321,8 +374,7 @@ pub fn project_data(
         minutes(&windowed, open)
     };
     ProjectData {
-        pace: pace(&all, RECENT_CLOSES, now),
-        net: net_of(board, recent, now - 3600),
+        releases: Vec::new(),
         status,
         next,
         wip,
@@ -331,6 +383,7 @@ pub fn project_data(
         now,
         lead: None,
         machines: Vec::new(),
+        problems: Vec::new(),
         trend: daily(recent, TREND_DAYS, now),
     }
 }
@@ -374,14 +427,14 @@ pub fn daily(recent: &[EventRow], days: usize, now: i64) -> Vec<(u64, u64)> {
         .collect()
 }
 
-/// The moves of a project's newest events, oldest first, standing items left out.
+/// The moves of a project's newest events, oldest first.
 fn moves_of(board: &Board, recent: &[EventRow]) -> Vec<Move> {
     let ids: Vec<(i64, String, &EventRow)> = recent
         .iter()
         .rev()
         .filter_map(|e| {
             let rid = e.rid?;
-            let item = board.by_rid(rid).filter(|_| !board.is_standing(rid))?;
+            let item = board.by_rid(rid)?;
             Some((epoch(&e.at)?, item.id.clone(), e))
         })
         .collect();
@@ -397,48 +450,15 @@ fn moves_of(board: &Board, recent: &[EventRow]) -> Vec<Move> {
     moves(&logged)
 }
 
-/// The current release's tickets closed and opened since `since`, and the research closes that opened
-/// nothing, read from the newest events.
-#[must_use]
-pub fn net_of(board: &Board, recent: &[EventRow], since: i64) -> Net {
-    let releases = &board.project.releases;
-    let counted: Vec<Counted> = recent
-        .iter()
-        .filter_map(|e| {
-            let item = board.by_rid(e.rid?)?;
-            let class = match board.kind(item) {
-                Kind::Work => Class::Code {
-                    current: docket_core::queue::in_current(
-                        &releases.open,
-                        releases.name(item.release_id),
-                    ),
-                },
-                Kind::Decision | Kind::Research => Class::Research {
-                    opened: !board.spawned(item.rid).is_empty(),
-                },
-                _ => Class::Other,
-            };
-            Some(Counted {
-                at: epoch(&e.at)?,
-                kind: &e.kind,
-                class,
-            })
-        })
-        .collect();
-    net(&counted, since)
-}
-
 /// The tree's sections in order, each with the kinds it holds.
-const SECTIONS: [(&str, Kind); 5] = [
+const SECTIONS: [(&str, Kind); 3] = [
     ("PLANS", Kind::Audit),
     ("STORIES", Kind::Story),
     ("PACKAGES", Kind::Package),
-    ("CONCEPTS", Kind::Concept),
-    ("CENTRAL IDEAS", Kind::Idea),
 ];
 
-/// The open plans, stories, packages, concepts and ideas, each with its progress, opened ones showing
-/// their children beneath them.
+/// The open plans, stories and packages, each with its progress, opened ones showing their
+/// children beneath them, then each area with its open and closed items.
 #[must_use]
 pub fn plan_rows(board: &Board, open: &std::collections::BTreeSet<String>) -> Vec<PlanRow> {
     let mut out = Vec::new();
@@ -453,6 +473,31 @@ pub fn plan_rows(board: &Board, open: &std::collections::BTreeSet<String>) -> Ve
         });
         for root in roots {
             push_plan(board, root, 0, open, &mut out);
+        }
+    }
+    let areas = board.area_progress();
+    if !areas.is_empty() {
+        out.push(PlanRow {
+            heading: Some(format!("AREAS  {}", areas.len())),
+            ..PlanRow::default()
+        });
+        for a in areas {
+            let live = if a.live > 0 {
+                format!(", {} live", a.live)
+            } else {
+                String::new()
+            };
+            out.push(PlanRow {
+                heading: Some(format!(
+                    "  {}  {} open, {} done{live}",
+                    a.name, a.open, a.done
+                )),
+                done: a.done,
+                total: a.open + a.done,
+                live: a.live,
+                area: Some(a.name),
+                ..PlanRow::default()
+            });
         }
     }
     out
@@ -478,14 +523,12 @@ fn push_plan(
         total: g.total,
         live: g.live,
         folded: (!held.is_empty()).then_some(!unfolded),
+        area: None,
     });
     if !unfolded || depth > 3 {
         return;
     }
-    let mut kids: Vec<&docket_core::rows::ItemRow> = match board.kind(item) {
-        Kind::Concept | Kind::Idea => board.tied(item.rid),
-        _ => board.children(item.rid),
-    };
+    let mut kids: Vec<&docket_core::rows::ItemRow> = board.children(item.rid);
     kids.sort_by(|a, b| (&a.key, a.num).cmp(&(&b.key, b.num)));
     for kid in kids {
         push_plan(board, kid, depth + 1, open, out);

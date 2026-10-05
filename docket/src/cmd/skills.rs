@@ -82,6 +82,7 @@ pub fn skills(
     );
     match what.as_str() {
         "install" | "diff" => {
+            crate::cmd::write::refuse_install_in_job(&what)?;
             let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
             let steps = templates::skill_steps(&home, &install.tools());
             if what == "diff" {

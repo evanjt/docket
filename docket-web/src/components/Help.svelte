@@ -6,7 +6,7 @@
 
   const KEYS: [string, string][] = [
     ['Ctrl K', 'go to an item, a page or a project, or run a verb on the open item'],
-    ['g o, g w, g p', 'overview, work, plans'],
+    ['g o, g w, g p, g r', 'overview, work, plans, areas'],
     ['g y, g a, g s', 'yours, activity, settings'],
     ['g h', 'every project'],
     ['j, k', 'next and previous row on Work'],
@@ -29,7 +29,7 @@
     </dl>
     <h2>Words</h2>
     <dl>
-      {#each [...FLOW, ...ASIDE, 'done', 'dropped', 'standing'] as w (w)}
+      {#each [...FLOW, ...ASIDE, 'done', 'dropped'] as w (w)}
         <dt><Word word={w} /></dt>
         <dd>{MEANING[w]}</dd>
       {/each}

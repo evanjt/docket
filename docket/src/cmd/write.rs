@@ -6,10 +6,11 @@ use serde_json::Value;
 
 use docket_core::api::{
     AddRequest, AnswerRequest, Answered, AskRequest, Asked, Brief, CloseRequest, Closed, Common,
-    DropRequest, Dropped, EditRequest, ItemView, KeyRequest, KeySet, LinkRequest, Linked, Moved,
-    MovedMany, NewRequest, Opened, ParentRequest, Parented, PriorityRequest, Reindexed,
-    ReleaseRequest, SetField, StartRequest, Started,
+    DropRequest, Dropped, EditRequest, ItemView, LinkRequest, Linked, Moved, MovedMany, NewRequest,
+    Opened, ParentRequest, Parented, PriorityRequest, Reindexed, ReleaseRequest, SetField,
+    StartRequest, Started,
 };
+use docket_core::word::ItemType;
 
 use crate::cmd::lists::shares_text;
 use crate::ctx::{Ctx, id};
@@ -76,13 +77,37 @@ pub fn refuse_in_job(verb: &str) -> Result<()> {
     }
 }
 
-/// A job names the release of every item it files.
+/// A job writes nothing outside its worktree, so it installs no instructions or skills.
 ///
 /// # Errors
-/// `DOCKET_JOB` names the job this runs in, and no release is given.
-fn refuse_unreleased(verb: &str, release: Option<&String>) -> Result<()> {
+/// `DOCKET_JOB` names the job this runs in, and `what` is `install`.
+pub fn refuse_install_in_job(what: &str) -> Result<()> {
     let job = std::env::var("DOCKET_JOB").ok();
-    match crate::job::unreleased(verb, job.as_deref(), release.map(String::as_str)) {
+    match crate::job::install_refusal(what, job.as_deref()) {
+        Some(why) => Err(Fail::refused(why)),
+        None => Ok(()),
+    }
+}
+
+/// A job names the release and the area or plan of every item it files.
+///
+/// # Errors
+/// `DOCKET_JOB` names the job this runs in, and no release, or neither an area nor a plan, is given.
+fn refuse_unfiled(
+    verb: &str,
+    release: Option<&String>,
+    area: Option<&String>,
+    parent: Option<&String>,
+) -> Result<()> {
+    let job = std::env::var("DOCKET_JOB").ok();
+    let name = String::as_str;
+    match crate::job::unfiled(
+        verb,
+        job.as_deref(),
+        release.map(name),
+        area.map(name),
+        parent.map(name),
+    ) {
         Some(why) => Err(Fail::refused(why)),
         None => Ok(()),
     }
@@ -98,12 +123,14 @@ pub struct New<'a> {
     pub theme: Option<&'a String>,
     pub release: Option<&'a String>,
     pub group: Option<&'a String>,
+    pub area: Option<&'a String>,
+    pub parent: Option<&'a String>,
 }
 
 /// # Errors
 /// The server refuses.
 pub fn new(ctx: &mut Ctx, n: &New) -> Result<i32> {
-    refuse_unreleased("new", n.release)?;
+    refuse_unfiled("new", n.release, n.area, n.parent)?;
     let common = ctx.common(false)?;
     let body = read_body(n.body)?;
     let req = NewRequest {
@@ -117,6 +144,8 @@ pub fn new(ctx: &mut Ctx, n: &New) -> Result<i32> {
         theme: n.theme.cloned(),
         release: n.release.filter(|r| !r.is_empty()).cloned(),
         group: n.group.cloned(),
+        area: n.area.cloned(),
+        parent: n.parent.cloned(),
     };
     let out: Opened = ctx.api.post("new", &req)?;
     opened(ctx, &out, body.as_deref());
@@ -161,17 +190,23 @@ fn opened(ctx: &Ctx, out: &Opened, body: Option<&str>) {
     }
 }
 
+pub struct Add<'a> {
+    pub title: &'a str,
+    pub key: Option<&'a String>,
+    pub body: Option<&'a String>,
+    pub from: Option<&'a String>,
+    pub release: Option<&'a String>,
+    pub area: Option<&'a String>,
+    pub parent: Option<&'a String>,
+}
+
 /// # Errors
 /// The server refuses.
-pub fn add(
-    ctx: &mut Ctx,
-    title: &str,
-    key: Option<&String>,
-    body: Option<&String>,
-    from: Option<&String>,
-    release: Option<&String>,
-) -> Result<i32> {
-    refuse_unreleased("add", release)?;
+pub fn add(ctx: &mut Ctx, a: &Add) -> Result<i32> {
+    let (key, body, from, release, area, parent) =
+        (a.key, a.body, a.from, a.release, a.area, a.parent);
+    let title = a.title;
+    refuse_unfiled("add", release, area, parent)?;
     let common = ctx.common(false)?;
     let body = read_body(body)?;
     let req = AddRequest {
@@ -181,6 +216,8 @@ pub fn add(
         body: body.clone(),
         from: from.filter(|f| !f.is_empty()).cloned(),
         release: release.filter(|r| !r.is_empty()).cloned(),
+        area: area.filter(|a| !a.is_empty()).cloned(),
+        parent: parent.filter(|p| !p.is_empty()).cloned(),
     };
     let out: Opened = ctx.api.post("add", &req)?;
     opened(ctx, &out, body.as_deref());
@@ -287,14 +324,7 @@ pub fn close(ctx: &mut Ctx, c: &Close) -> Result<i32> {
     let item = id(c.id)?;
     let v = ctx.read(&format!("/show/{item}"), &[])?;
     let project = ctx.project_row(&slug)?;
-    let key = v["key"].as_str().unwrap_or_default();
-    let kind = project["keys"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|k| k["key"] == key)
-        .and_then(|k| k["kind"].as_str())
-        .unwrap_or("work");
+    let is_question = v["type"].as_str() == Some(ItemType::Question.as_str());
     if let Some(busy) = local::unfinished(&ctx.cwd).filter(|_| !c.force) {
         return Err(Fail::refused(format!(
             "This repository is mid-{}, so a sha read or given now may not be the one that lands. Finish or \
@@ -303,7 +333,7 @@ pub fn close(ctx: &mut Ctx, c: &Close) -> Result<i32> {
         )));
     }
     let mut resolution = c.resolution.filter(|r| !r.is_empty()).cloned();
-    if resolution.is_none() && kind != "decision" {
+    if resolution.is_none() && !is_question {
         let branch = v["claim_branch"].as_str();
         resolution = claim_sha(ctx, &slug, &project, branch);
         if resolution.is_none() {
@@ -397,25 +427,35 @@ pub fn priority(ctx: &mut Ctx, req: &PriorityRequest) -> Result<i32> {
     Ok(0)
 }
 
+/// What `docket edit` was asked to change.
+pub struct Edit<'a> {
+    pub id: &'a str,
+    pub set: &'a [String],
+    pub release: Option<&'a String>,
+    pub carry: bool,
+    pub area: Option<&'a String>,
+    pub append: Option<&'a String>,
+    pub body: Option<&'a String>,
+}
+
 /// # Errors
 /// The body cannot be read, or the server refuses.
-pub fn edit(
-    ctx: &mut Ctx,
-    item: &str,
-    set: &[String],
-    release: Option<&String>,
-    append: Option<&String>,
-    body: Option<&String>,
-) -> Result<i32> {
+pub fn edit(ctx: &mut Ctx, e: &Edit) -> Result<i32> {
     let common = ctx.common(false)?;
-    let append = append.filter(|a| !a.is_empty()).cloned();
-    let body = body.filter(|b| !b.is_empty());
-    if set.is_empty() && append.is_none() && body.is_none() && release.is_none() {
+    let append = e.append.filter(|a| !a.is_empty()).cloned();
+    let body = e.body.filter(|b| !b.is_empty());
+    if e.set.is_empty()
+        && append.is_none()
+        && body.is_none()
+        && e.release.is_none()
+        && e.area.is_none()
+    {
         return Err(Fail::refused(
-            "edit needs --set field=value, --release NAME, --append \"text\" or --body FILE|-.",
+            "edit needs --set field=value, --release NAME, --area NAME, --append \"text\" or --body FILE|-.",
         ));
     }
-    let set = set
+    let set = e
+        .set
         .iter()
         .map(|kv| {
             let (field, value) = kv.split_once('=').unwrap_or((kv, ""));
@@ -427,12 +467,14 @@ pub fn edit(
         .collect();
     let req = EditRequest {
         common,
-        id: item.to_string(),
+        id: e.id.to_string(),
         set,
         append,
         body: read_body(body)?,
         expect_updated_at: None,
-        release: release.cloned(),
+        release: e.release.cloned(),
+        carry: e.carry,
+        area: e.area.cloned(),
     };
     moved(ctx, "edit", &req)
 }
@@ -485,14 +527,6 @@ pub fn parent(ctx: &mut Ctx, words: &[String], none: bool) -> Result<i32> {
             None => println!("{a} under no plan"),
         }
     }
-    Ok(0)
-}
-
-/// # Errors
-/// The server refuses.
-pub fn key(ctx: &mut Ctx, req: &KeyRequest) -> Result<i32> {
-    let out: KeySet = ctx.api.post("key", req)?;
-    println!("{}  {}  {}", out.key, out.kind, out.meaning);
     Ok(0)
 }
 

@@ -12,6 +12,18 @@ use crate::dump::{EventDump, ItemDump};
 pub const AGENT: &str = "agent";
 /// The assignee of an ask.
 pub const OWNER: &str = "owner";
+/// The failed attempts at an item the project allows before the item is assigned to the owner.
+pub const FAILURE_LIMIT: usize = 2;
+/// How many of the project's last ended attempts must all have failed for the queue to report a halt.
+pub const HALT_RUN: usize = 3;
+/// Who an assignment is given to: the agent or the owner.
+pub const ASSIGNEES: [&str; 2] = [AGENT, OWNER];
+/// Whose turn an item is on.
+pub const TURNS: [&str; 2] = ["agent", "user"];
+/// The runners a claim may name: the agents a machine runs, and a job started elsewhere.
+pub const CLAIM_RUNNERS: [&str; 3] = ["codex", "claude", "remote"];
+/// The roles an attempt is made in.
+pub const ROLES: [&str; 5] = ["build", "rebase", "review", "plan", "audit"];
 pub const OUTCOMES: [&str; 5] = ["landed", "conflict", "gate", "blocked", "failed"];
 
 /// What an attempt is: an agent's claim, or the item handed to the owner.
@@ -100,8 +112,32 @@ pub struct Assignment {
     pub tokens_in: Option<i64>,
     pub tokens_out: Option<i64>,
     pub cost_reported: Option<f64>,
+    /// When the job began and ended and how it exited, as its report states them.
+    pub job_started_at: Option<String>,
+    pub job_ended_at: Option<String>,
+    pub job_exit: Option<i32>,
     /// What an ask needs of the owner: one of `queue::NEEDS`.
     pub need: Option<String>,
+}
+
+/// Whether an item with `failed` failed attempts is the owner's now, at the project's `limit`.
+#[must_use]
+pub fn past_failure_limit(failed: usize, limit: usize) -> bool {
+    failed >= limit
+}
+
+/// Why the queue reports a halt: the project's last ended attempts, newest first, all failed.
+#[must_use]
+pub fn halt(newest_first: &[Outcome]) -> Option<String> {
+    (newest_first.len() >= HALT_RUN
+        && newest_first[..HALT_RUN]
+            .iter()
+            .all(|o| *o == Outcome::Failed))
+    .then(|| {
+        format!(
+            "the last {HALT_RUN} ended attempts all failed: look at why before dispatching more"
+        )
+    })
 }
 
 /// An event on one item, as the rule reads it.
@@ -136,11 +172,14 @@ pub struct End {
 }
 
 /// What a finished job used, as its report states it.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Usage {
     pub tokens_in: Option<i64>,
     pub tokens_out: Option<i64>,
     pub cost_reported: Option<f64>,
+    pub job_started_at: Option<String>,
+    pub job_ended_at: Option<String>,
+    pub job_exit: Option<i32>,
 }
 
 /// What one event does: the open row ended, then a row opened, or the open claim given the usage of
@@ -255,6 +294,11 @@ fn usage_of(e: &Event) -> Usage {
         tokens_in: get("tokens_in").and_then(Value::as_i64),
         tokens_out: get("tokens_out").and_then(Value::as_i64),
         cost_reported: get("cost_reported").and_then(Value::as_f64),
+        job_started_at: field(e, "start"),
+        job_ended_at: field(e, "end"),
+        job_exit: get("exit")
+            .and_then(Value::as_i64)
+            .and_then(|n| i32::try_from(n).ok()),
     }
 }
 
@@ -279,6 +323,9 @@ fn row(e: &Event) -> Assignment {
         tokens_in: None,
         tokens_out: None,
         cost_reported: None,
+        job_started_at: None,
+        job_ended_at: None,
+        job_exit: None,
         need: None,
     }
 }
@@ -350,8 +397,12 @@ pub fn rebuild(events: &[Event]) -> Vec<Assignment> {
             }
         }
         if let (Some(u), Some(a)) = (s.usage, rows.last_mut()) {
-            (a.tokens_in, a.tokens_out, a.cost_reported) =
-                (u.tokens_in, u.tokens_out, u.cost_reported);
+            a.tokens_in = u.tokens_in.or(a.tokens_in);
+            a.tokens_out = u.tokens_out.or(a.tokens_out);
+            a.cost_reported = u.cost_reported.or(a.cost_reported);
+            a.job_started_at = u.job_started_at.or(a.job_started_at.take());
+            a.job_ended_at = u.job_ended_at.or(a.job_ended_at.take());
+            a.job_exit = u.job_exit.or(a.job_exit);
         }
         rows.extend(s.open);
     }

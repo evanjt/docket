@@ -22,7 +22,7 @@
   let busy = $state<string | null>(null);
   let expanded = $state(new Set<string>());
 
-  const isQuestion = (r: Row) => ctx.row?.keys.find((k) => k.key === r.key)?.kind === 'decision';
+  const isQuestion = (r: Row) => r.type === 'question';
   const links = $derived({ known: (x: string) => !!ctx.board?.nodes.has(x), item: (x: string) => ctx.item(x) });
 
   async function send(r: Row) {
@@ -152,7 +152,7 @@
   .note {
     margin: 0;
     padding: 8px 12px;
-    border-left: 3px solid var(--w-parked);
+    border-left: 3px solid var(--w-waiting-on-owner);
     background: var(--surface);
     border-radius: 0 var(--radius) var(--radius) 0;
   }

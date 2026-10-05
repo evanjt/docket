@@ -54,6 +54,8 @@ INSERT INTO events (uid, project, rid, at, host, kind, note, data) VALUES
 INSERT INTO search (rid, id, title, body, files) VALUES
   (1, 'T1', 'Fix the sync', 'serves A1#1', 'src/a.rs'),
   (5, 'T2', 'Done one', 'mentions T1 here', 'src/a.rs');
+UPDATE items SET priority='high' WHERE rid=1;
+UPDATE items SET priority='critical' WHERE rid=2;
 "#;
 
 struct Seeded {
@@ -65,6 +67,7 @@ impl Seeded {
     async fn new() -> Self {
         let scratch = Scratch::new(2).await;
         scratch.seed(SEED).await;
+        scratch.seed(crate::tests::TYPES_BY_KEY).await;
         let keys = Keys::parse("devbox owner ownerkey\nother agent agentkey").unwrap();
         Self {
             app: app(&scratch.db, keys),
@@ -183,14 +186,14 @@ async fn test_deps_lists_each_tie_and_the_mentions() {
 }
 
 #[tokio::test]
-async fn test_deps_words_another_projects_row_by_its_own_keys() {
+async fn test_deps_words_another_projects_row_by_its_type() {
     let s = Seeded::new().await;
     let seed = "INSERT INTO projects (slug, keys, created_at, updated_at) VALUES ('o/r', \
                 '[{\"key\":\"P\",\"kind\":\"package\"},{\"key\":\"T\",\"kind\":\"work\"}]', 'c', 'u'); \
                 INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, opened_at, updated_at) VALUES \
                 (20, 'o/r', 'P', 1, 'Other package', 'open', 'agent', '[]', '', 'o', 'u'), \
                 (21, 'o/r', 'T', 1, 'Other member', 'open', 'agent', '[]', '', 'o', 'u'); \
-                UPDATE items SET parent_rid=20 WHERE rid=21; \
+                UPDATE items SET parent_rid=20, type='task' WHERE rid=21; UPDATE items SET type='plan' WHERE rid=20; \
                 INSERT INTO links (rid, kind, to_path) VALUES (20, 'cites_file', 'src/a.rs');";
     s.db.seed(seed).await;
     let d = s.ok("/deps/T1?project=o/p").await;
@@ -208,18 +211,8 @@ async fn test_context_reads_what_show_prints_beside_the_row() {
     let s = Seeded::new().await;
     let c = s.ok("/context/T1?project=o/p").await;
     assert_eq!(c["priority"], "high");
-    assert_eq!(c["package"]["id"], "PK1");
-    assert_eq!(
-        c["package"]["progress"],
-        json!({"done": 1, "total": 3, "live": 1})
-    );
     assert_eq!(c["holds"], json!(["T6"]));
-    assert_eq!(c["concepts"], json!(["CON1"]));
-    let p = s.ok("/context/PK1?project=o/p").await;
-    assert_eq!(ids(&p["members"]), ["T1", "T2", "T4"]);
-    let con = s.ok("/context/CON1?project=o/p").await;
-    assert_eq!(con["standing"]["total"], 1);
-    assert_eq!(con["standing"]["words"], json!({"ready": 1}));
+    assert_eq!(c["area"], Value::Null);
 }
 
 #[tokio::test]
@@ -337,7 +330,7 @@ async fn test_graph_counts_what_sits_under_a_plans_sub_plan() {
 }
 
 #[tokio::test]
-async fn test_check_finds_an_open_audit_and_bare_bodies() {
+async fn test_check_finds_bare_bodies_and_no_audit_problem_for_an_open_plan() {
     let s = Seeded::new().await;
     let c = s.ok("/check?project=o/p").await;
     let kinds: Vec<&str> = c
@@ -346,21 +339,21 @@ async fn test_check_finds_an_open_audit_and_bare_bodies() {
         .iter()
         .map(|p| p["kind"].as_str().unwrap())
         .collect();
-    assert!(kinds.contains(&"open_audit"), "{c}");
+    assert!(!kinds.contains(&"open_audit"), "{c}");
     assert!(kinds.contains(&"no_body"), "{c}");
     assert_eq!(s.ok("/check?project=o/q").await, json!([]));
 }
 
 const STALLED: &str = r#"
 INSERT INTO projects (slug, keys, themes, skills, remotes, created_at, updated_at) VALUES ('o/s',
-  '[{"key":"T","kind":"work"},{"key":"PK","kind":"package"}]', '[]', '{}', '[]', 'c', 'u');
+  '[{"key":"T","kind":"work"},{"key":"PK","kind":"audit"}]', '[]', '{}', '[]', 'c', 'u');
 INSERT INTO releases (id, project, name, position) VALUES (11, 'o/s', '1.0', 0), (12, 'o/s', '1.1', 1);
 INSERT INTO items (rid, project, key, num, title, state, turn, wait_on, wait_item, wait_ref, wait_since, release_id, tags, body, opened_at, updated_at) VALUES
-  (101, 'o/s', 'PK', 1, 'First package', 'open', 'agent', 'condition', NULL, 'everything it opened is closed', 'w', NULL, '[]', 'x', 'o', 'u'),
-  (102, 'o/s', 'PK', 2, 'Second package', 'open', 'agent', 'condition', NULL, 'everything it opened is closed', 'w', NULL, '[]', 'x', 'o', 'u'),
+  (101, 'o/s', 'PK', 1, 'First package', 'open', 'agent', NULL, NULL, NULL, NULL, NULL, '[]', 'x', 'o', 'u'),
+  (102, 'o/s', 'PK', 2, 'Second package', 'open', 'agent', NULL, NULL, NULL, NULL, NULL, '[]', 'x', 'o', 'u'),
   (103, 'o/s', 'T', 1, 'Member of the first', 'open', 'agent', 'item', 102, 'PK2', 'w', NULL, '[]', 'x', 'o', 'u'),
   (104, 'o/s', 'T', 2, 'Member of the second', 'open', 'agent', 'item', 101, 'PK1', 'w', NULL, '[]', 'x', 'o', 'u'),
-  (105, 'o/s', 'PK', 3, 'Current package', 'open', 'agent', 'condition', NULL, 'everything it opened is closed', 'w', 11, '[]', 'x', 'o', 'u'),
+  (105, 'o/s', 'PK', 3, 'Current package', 'open', 'agent', NULL, NULL, NULL, NULL, 11, '[]', 'x', 'o', 'u'),
   (106, 'o/s', 'T', 3, 'Later member', 'open', 'agent', NULL, NULL, NULL, NULL, 12, '[]', 'x', 'o', 'u'),
   (107, 'o/s', 'T', 4, 'Current waiter', 'open', 'agent', 'item', 108, 'T5', 'w', 11, '[]', 'x', 'o', 'u'),
   (108, 'o/s', 'T', 5, 'Later item', 'open', 'agent', NULL, NULL, NULL, NULL, 12, '[]', 'x', 'o', 'u'),
@@ -378,6 +371,8 @@ INSERT INTO dependencies (rid, on_rid, created_at) VALUES (103, 102, 'w'), (104,
 async fn test_check_finds_a_cycle_through_containers_and_a_hold_by_a_later_release() {
     let s = Seeded::new().await;
     s.db.seed(STALLED).await;
+    s.db.seed("UPDATE items SET type='plan' WHERE key='PK'")
+        .await;
     let c = s.ok("/check?project=o/s").await;
     assert_eq!(
         c,
@@ -404,47 +399,12 @@ async fn test_shares_flags_idle_claims_and_files_they_share() {
 }
 
 #[tokio::test]
-async fn test_summary_nets_the_current_tickets_closed_against_those_opened() {
-    let s = Seeded::new().await;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let (recent, old) = (
-        docket_core::clock::stamp(now - 60),
-        docket_core::clock::stamp(now - 7200),
-    );
-    s.db.seed(&format!(
-        r#"
-INSERT INTO projects (slug, keys, themes, skills, remotes, created_at, updated_at) VALUES ('o/n',
-  '[{{"key":"T","kind":"work"}},{{"key":"Q","kind":"decision"}}]', '[]', '{{}}', '[]', 'c', 'u');
-INSERT INTO releases (id, project, name, position) VALUES (21, 'o/n', '1.0', 0), (22, 'o/n', '1.1', 1);
-INSERT INTO items (rid, project, key, num, title, state, turn, resolution, release_id, tags, body, opened_at, updated_at) VALUES
-  (201, 'o/n', 'Q', 1, 'Carried out', 'done', NULL, 'carried by T1', NULL, '[]', 'x', 'o', 'u'),
-  (202, 'o/n', 'Q', 2, 'Opened nothing', 'done', NULL, 'opened none', NULL, '[]', 'x', 'o', 'u'),
-  (203, 'o/n', 'T', 1, 'Current ticket', 'open', 'agent', NULL, 21, '[]', 'x', 'o', 'u'),
-  (204, 'o/n', 'T', 2, 'Later ticket', 'open', 'agent', NULL, 22, '[]', 'x', 'o', 'u'),
-  (205, 'o/n', 'T', 3, 'Closed ticket', 'done', NULL, 'abc1234', 21, '[]', 'x', 'o', 'u');
-INSERT INTO links (rid, kind, to_rid) VALUES (203, 'origin', 201);
-INSERT INTO events (uid, project, rid, at, host, kind, note, data) VALUES
-  ('n1', 'o/n', 205, '{old}', 'devbox', 'opened', NULL, NULL),
-  ('n2', 'o/n', 201, '{recent}', 'devbox', 'closed', 'carried by T1', NULL),
-  ('n3', 'o/n', 203, '{recent}', 'devbox', 'opened', NULL, NULL),
-  ('n4', 'o/n', 204, '{recent}', 'devbox', 'opened', NULL, NULL),
-  ('n5', 'o/n', 202, '{recent}', 'devbox', 'closed', 'opened none', NULL),
-  ('n6', 'o/n', 205, '{recent}', 'devbox', 'closed', 'abc1234', NULL);
-"#
-    ))
-    .await;
-    let m = s.ok("/summary?project=o/n").await;
-    assert_eq!(m["net"], json!({ "closed": 1, "opened": 1, "idle": 1 }));
-}
-
-#[tokio::test]
 async fn test_summary_reads_claims_plans_and_due_audits() {
     let s = Seeded::new().await;
     let m = s.ok("/summary?project=o/p").await;
     for gone in [
+        "pace",
+        "net",
         "release",
         "held_themes",
         "hour",
@@ -470,12 +430,12 @@ async fn test_summary_reads_claims_plans_and_due_audits() {
             .unwrap()
             .starts_with("no event for")
     );
-    assert_eq!(ids(&m["plans"]), ["A1", "A2"]);
+    assert_eq!(ids(&m["plans"]), ["PK1", "A1", "A2"]);
     assert_eq!(
         (
-            &m["plans"][0]["done"],
-            &m["plans"][0]["total"],
-            &m["plans"][0]["live"]
+            &m["plans"][1]["done"],
+            &m["plans"][1]["total"],
+            &m["plans"][1]["live"]
         ),
         (&json!(1), &json!(4), &json!(1))
     );
@@ -486,6 +446,7 @@ async fn test_summary_reads_claims_plans_and_due_audits() {
 async fn test_summary_reads_the_ties_once() {
     let mut scratch = Scratch::new(2).await;
     scratch.seed(SEED).await;
+    scratch.seed(crate::tests::TYPES_BY_KEY).await;
     let reads = Arc::new(AtomicUsize::new(0));
     let seen = reads.clone();
     scratch.db.set_metric_callback(move |info| {
@@ -503,26 +464,43 @@ async fn test_summary_reads_the_ties_once() {
 }
 
 #[tokio::test]
-async fn test_audit_sections_principles_and_bound_items() {
+async fn test_audit_sections_principles_and_the_rows_under_a_plan() {
     let s = Seeded::new().await;
     let a = s.ok("/audit?project=o/p&id=A1").await;
     assert_eq!(a["target"]["id"], "A1");
     assert_eq!(ids(&a["rows"]), ["T1", "PK1", "T2", "T4"]);
     assert_eq!(a["principles"], json!([[1, "One owner."], [2, "No gaps."]]));
     assert_eq!(a["served"]["1"], json!([{"id": "T1", "state": "open"}]));
-    let pk = s.ok("/audit?project=o/p&id=PK1").await;
-    assert_eq!(pk["breakdown"]["progress"]["total"], 3);
-    let con = s.ok("/audit?project=o/p&id=CON1").await;
-    assert_eq!(ids(&con["rows"]), ["T1"]);
     assert_eq!(
         ids(&s.ok("/audit?project=o/p&group=g").await["rows"]).len(),
         2
     );
-    let orphans = s.ok("/audit?project=o/p&orphans=true").await;
-    let mut found = ids(&orphans["rows"]);
-    found.sort_unstable();
-    assert_eq!(found, ["Q1", "T3", "T4", "T5", "T6"]);
     assert_eq!(s.get("/audit?project=o/p").await.0, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_the_audit_read_of_a_labelled_item_prints_each_label_with_its_description() {
+    let s = Seeded::new().await;
+    s.db.seed(
+        "INSERT INTO labels (id, project, name, description) VALUES \
+           (1, 'o/p', 'area:sync', 'everything that moves data between replicas'), \
+           (2, 'o/p', 'slow', NULL); \
+         INSERT INTO item_labels (rid, label_id) VALUES (4, 1), (2, 2);",
+    )
+    .await;
+    let want = json!([
+        {"name": "slow", "description": null},
+        {"name": "area:sync", "description": "everything that moves data between replicas"},
+    ]);
+    assert_eq!(s.ok("/audit?project=o/p&id=PK1").await["labels"], want);
+    assert_eq!(
+        s.ok("/audit?project=o/p&id=A1").await["labels"],
+        json!([want[1]])
+    );
+    assert_eq!(
+        s.ok("/audit?project=o/p&id=CON1").await["labels"],
+        json!([])
+    );
 }
 
 #[tokio::test]
@@ -565,7 +543,7 @@ async fn test_project_matches_by_remote_or_name_and_creates_the_rest() {
         .get("/projects?filter=%7B%22slug%22%3A%22n%2Fnew%22%7D")
         .await;
     assert_eq!(row[0]["remotes"], json!(["git@h:n/new.git"]));
-    assert_eq!(row[0]["keys"].as_array().unwrap().len(), 9);
+    assert!(row[0].get("keys").is_none());
     let (_, m) = post(json!({"basename": "zzz", "create": false})).await;
     assert_eq!(m["how"], "none");
 }
@@ -664,4 +642,29 @@ async fn test_state_reads_never_select_an_items_body() {
     for (uri, status) in seen {
         assert_eq!(status, StatusCode::OK, "{uri}");
     }
+}
+
+#[tokio::test]
+async fn test_a_project_with_an_empty_key_list_reads_every_item_by_its_type() {
+    let s = Seeded::new().await;
+    s.db.seed(
+        "INSERT INTO projects (slug, keys, created_at, updated_at) VALUES ('o/e', '[]', 'c', 'u'); \
+         INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, type, opened_at, updated_at) VALUES \
+           (200, 'o/e', 'A', 1, 'Plan', 'open', 'agent', '[]', 'x', 'plan', 'o', 'u'), \
+           (201, 'o/e', 'T', 1, 'Member', 'open', 'agent', '[]', 'x', 'task', 'o', 'u'), \
+           (202, 'o/e', 'Q', 1, 'Which', 'open', 'user', '[]', 'x', 'question', 'o', 'u'); \
+         UPDATE items SET parent_rid=200 WHERE rid=201;",
+    )
+    .await;
+    assert_eq!(s.ok("/show/A1?project=o/e").await["word"], "building");
+    assert_eq!(
+        s.ok("/show/Q1?project=o/e").await["word"],
+        "waiting on owner"
+    );
+    assert_eq!(s.ok("/show/T1?project=o/e").await["word"], "ready");
+    assert_eq!(ids(&s.ok("/next?project=o/e").await), ["T1"]);
+    let (_, row) = s
+        .get("/projects?filter=%7B%22slug%22%3A%22o%2Fe%22%7D")
+        .await;
+    assert!(row[0].get("keys").is_none());
 }

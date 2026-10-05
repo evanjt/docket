@@ -209,7 +209,7 @@ fn keys(page: &Page) -> &'static str {
             "j/k row   Enter open   x mark   a answer   r reply   ! priority   c rate   L link   : verb   ? help"
         }
         Page::Queue(_) => {
-            "j/k next   a answer   r reply   R retry   x mark   ! priority   : verb   Esc back   ? help"
+            "j/k next   a answer   r reply   x mark   ! priority   : verb   Esc back   ? help"
         }
         Page::Plans(_) => {
             "j/k move   Space open or close   x mark   ! priority   L link   : verb   ? help"

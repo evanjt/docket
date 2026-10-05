@@ -10,11 +10,13 @@ use crate::auth::Keys;
 
 const SEED: &str = r#"
 INSERT INTO projects (slug, keys, skills, created_at, updated_at) VALUES
-  ('acme/widgets', '[{"key":"T","kind":"work"},{"key":"A","kind":"audit"}]', '{"owner":"Ada Lovelace"}', 'c', 'u'),
-  ('acme/gizmo', '[{"key":"B","kind":"work"}]', '{}', 'c', 'u');
+  ('acme/widgets', '[]', '{"owner":"Ada Lovelace"}', 'c', 'u'),
+  ('acme/gizmo', '[]', '{}', 'c', 'u');
 INSERT INTO releases (id, project, name, position) VALUES (1, 'acme/widgets', '2.4', 0), (2, 'acme/widgets', '2.5', 1);
 INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, claim_branch, claim_host, claim_since, opened_at, updated_at, theme, group_name)
   VALUES (1, 'acme/widgets', 'T', 1, 'The proofing timer drifts after a restart', 'open', 'agent', '[]', '', 'b', 'delta', 's', 'o', 'u', 'Lanterns', 'harbour-lights');
+INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, opened_at, updated_at)
+  VALUES (2, 'acme/gizmo', 'ZK', 1, 'short', 'open', 'agent', '[]', '', 'o', 'u');
 INSERT INTO events (uid, project, rid, at, host, kind) VALUES ('e1', 'acme/widgets', 1, 'a', 'gamma.example.org', 'opened');
 INSERT INTO machines (name, ssh, slots, runners, note, updated_at)
   VALUES ('alpha', 'user@203.0.113.7', 2, '["claude"]', NULL, 'u');
@@ -23,6 +25,7 @@ INSERT INTO machines (name, ssh, slots, runners, note, updated_at)
 async fn get(key: &str) -> (StatusCode, Value) {
     let db = Scratch::new(2).await;
     db.seed(SEED).await;
+    db.seed(crate::tests::TYPES_BY_KEY).await;
     let app = app(
         &db.db,
         Keys::parse("alpha owner ownerkey\nbeta agent agentkey").unwrap(),
@@ -52,10 +55,7 @@ async fn test_the_owner_reads_every_private_name() {
             "owners": ["Ada Lovelace"],
             "machines": [["alpha", "user@203.0.113.7"]],
             "hosts": ["delta", "gamma.example.org"],
-            "keys": ["A", "B", "T"],
-            "themes": ["Lanterns"],
-            "groups": ["harbour-lights"],
-            "releases": ["2.4", "2.5"],
+            "keys": ["A", "B", "I", "Q", "T", "ZK"],
             "titles": ["The proofing timer drifts after a restart"],
         })
     );

@@ -3,8 +3,10 @@
 
 use serde_json::Value;
 
+use docket_core::check;
 use docket_core::flow::GET_GOING;
-use docket_core::pace::{Net, Pace, duration};
+use docket_core::metrics::Forecast;
+use docket_core::pace::duration;
 
 use crate::ctx::Ctx;
 use crate::fail::{Fail, Result};
@@ -33,23 +35,32 @@ fn count(total: &[(String, u64)], word: &str) -> u64 {
 pub struct Read {
     pub total: Vec<(String, u64)>,
     pub summary: Value,
+    /// The `/metrics` body of the current release, null when the server has none.
+    pub metrics: Value,
     pub yours: Value,
     pub next: Value,
     pub now: i64,
+    /// The line offering a squash, when one is due.
+    pub squash: Option<String>,
 }
 
 /// # Errors
 /// The project cannot be resolved, or the server refuses.
 pub fn status(ctx: &mut Ctx) -> Result<i32> {
+    crate::cmd::published::settle_push(ctx);
     let status = ctx.read("/status", &[])?;
     let total = counts(&status["by_word"]);
     let slug = ctx.project()?;
     let read = Read {
         total,
         summary: ctx.read("/summary", &[])?,
+        metrics: ctx
+            .read("/metrics", &[("scope", Some("release".into()))])
+            .unwrap_or(Value::Null),
         yours: ctx.read("/todo", &[])?,
         next: ctx.read("/next", &[("n", Some("8".into()))])?,
         now: now(),
+        squash: crate::cmd::published::offer(ctx),
     };
     if ctx.json {
         let mut out = json_status(&read);
@@ -67,7 +78,7 @@ pub fn status(ctx: &mut Ctx) -> Result<i32> {
 }
 
 /// The sections the status text is made from, as JSON: the word counts, the claims, yours, due
-/// audits, plans, problem counts by kind, pace and next.
+/// audits, plans, problem counts by kind, metrics and next.
 #[must_use]
 pub fn json_status(r: &Read) -> Value {
     let s = &r.summary;
@@ -78,9 +89,9 @@ pub fn json_status(r: &Read) -> Value {
         "due": s["due"],
         "plans": s["plans"],
         "problems": Value::Object(
-            problem_counts(&s["problems"]).into_iter().map(|(k, n)| (k, n.into())).collect()
+            check::counts(&s["problems"]).into_iter().map(|(k, n)| (k, n.into())).collect()
         ),
-        "pace": s["pace"],
+        "metrics": r.metrics,
         "next": r.next,
     })
 }
@@ -95,18 +106,16 @@ fn now() -> i64 {
 #[must_use]
 pub fn render(slug: &str, r: &Read) -> Vec<String> {
     let s = &r.summary;
-    let mut out = vec![head(slug, s, &r.total)];
-    let net: Net = serde_json::from_value(s["net"].clone()).unwrap_or_default();
-    let net = net.line("the last hour");
-    if !net.is_empty() {
-        out.push(net);
+    let mut out = vec![slug.to_string()];
+    if let Ok(forecast) = serde_json::from_value::<Forecast>(r.metrics["forecast"].clone()) {
+        out.push(forecast.line());
     }
     out.push(flow_line(&r.total));
     let closed = count(&r.total, "done");
     let open: u64 = r
         .total
         .iter()
-        .filter(|(w, _)| !matches!(w.as_str(), "done" | "dropped" | "standing"))
+        .filter(|(w, _)| !matches!(w.as_str(), "done" | "dropped"))
         .map(|(_, n)| n)
         .sum();
     #[allow(clippy::cast_precision_loss)]
@@ -124,6 +133,7 @@ pub fn render(slug: &str, r: &Read) -> Vec<String> {
         &r.yours,
     ));
     out.extend(titled_lines("AUDITS DUE", "", "no plan is due", &s["due"]));
+    out.extend(r.squash.iter().cloned());
     out.extend(plan_lines(&s["plans"]));
     let problems = problem_summary(&s["problems"]);
     if !problems.is_empty() {
@@ -137,27 +147,6 @@ pub fn render(slug: &str, r: &Read) -> Vec<String> {
     }
     out.push("Claim: docket start ID. Search: docket search <words>.".into());
     out
-}
-
-/// The project, with the pace of closes and how long the open work takes at it.
-fn head(slug: &str, s: &Value, total: &[(String, u64)]) -> String {
-    let mut parts = vec![slug.to_string()];
-    let pace = Pace {
-        closed: s["pace"]["closed"].as_u64().unwrap_or(0),
-        opened: 0,
-        working: s["pace"]["working"].as_i64().unwrap_or(0),
-    };
-    if let Some(per_hour) = pace.per_hour() {
-        parts.push(format!("closing {per_hour}/h"));
-        let todo = count(total, "ready") + count(total, "building");
-        if todo > 0 {
-            parts.push(format!(
-                "clear in {}",
-                duration(i64::try_from(todo * 3600 / per_hour).unwrap_or(0))
-            ));
-        }
-    }
-    parts.join("   ")
 }
 
 /// `ready 212 > building 18 > done 141    blocked 3  parked 9`.
@@ -301,39 +290,11 @@ pub fn problem_lines(problems: &Value) -> Vec<String> {
         .collect()
 }
 
-/// Problems per kind, in the order each kind first appears.
-fn problem_counts(problems: &Value) -> Vec<(String, u64)> {
-    let mut counts: Vec<(String, u64)> = Vec::new();
-    for p in problems.as_array().into_iter().flatten() {
-        let kind = p["kind"].as_str().unwrap_or("other");
-        match counts.iter_mut().find(|(k, _)| k == kind) {
-            Some((_, n)) => *n += 1,
-            None => counts.push((kind.to_string(), 1)),
-        }
-    }
-    counts
-}
-
 /// `95 release inversions, 5 cycles`: one count per kind of problem.
 fn problem_summary(problems: &Value) -> String {
-    problem_counts(problems)
+    check::counts(problems)
         .into_iter()
-        .map(|(kind, n)| {
-            let (one, many) = match kind.as_str() {
-                "conflict" => ("sync conflict", "sync conflicts"),
-                "undefined_key" => ("undefined key", "undefined keys"),
-                "integrity" => ("integrity failure", "integrity failures"),
-                "foreign_keys" => ("foreign key violation", "foreign key violations"),
-                "cycle" => ("cycle", "cycles"),
-                "held_later" => ("release inversion", "release inversions"),
-                "held_gate" => ("hold on closed work", "holds on closed work"),
-                "open_audit" => ("open audit", "open audits"),
-                "stale_wait" => ("stale wait", "stale waits"),
-                "no_body" => ("item with no body", "items with no body"),
-                _ => ("other problem", "other problems"),
-            };
-            format!("{n} {}", if n == 1 { one } else { many })
-        })
+        .map(|(kind, n)| check::phrase(&kind, n))
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -368,15 +329,6 @@ fn problem_line(p: &Value) -> String {
             s("on"),
             s("id"),
             s("on")
-        ),
-        "held_gate" => format!(
-            "{} is held although everything under it is closed: docket resume {}",
-            s("id"),
-            s("id")
-        ),
-        "open_audit" => format!(
-            "{} is open for audit while {n} items under it are open",
-            s("id")
         ),
         "stale_wait" => format!(
             "{} has waited since {} until: {}",

@@ -4,7 +4,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::word::Kind;
+use crate::word::{ItemType, Kind};
 
 /// A verb that cannot apply. The message is the whole explanation.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,7 +53,13 @@ pub struct Item {
     pub theme: Option<String>,
     /// The release row the item is in; none is the backlog.
     pub release_id: Option<i64>,
+    /// The area row the item is in.
+    pub area_id: Option<i64>,
     pub rank: Option<i64>,
+    /// What the item is; its rules follow from it.
+    pub item_type: ItemType,
+    /// One of critical, high, normal and low.
+    pub priority: String,
     pub tags: Vec<String>,
     pub body: String,
     pub conflict: i64,
@@ -89,7 +95,9 @@ pub enum Field {
     GroupName(Option<String>),
     Theme(Option<String>),
     ReleaseId(Option<i64>),
+    AreaId(Option<i64>),
     Rank(Option<i64>),
+    Priority(String),
     Tags(Vec<String>),
     Body(String),
     Conflict(i64),
@@ -125,7 +133,9 @@ impl Item {
                 Field::GroupName(v) => self.group_name = v,
                 Field::Theme(v) => self.theme = v,
                 Field::ReleaseId(v) => self.release_id = v,
+                Field::AreaId(v) => self.area_id = v,
                 Field::Rank(v) => self.rank = v,
+                Field::Priority(v) => self.priority = v,
                 Field::Tags(v) => self.tags = v,
                 Field::Body(v) => self.body = v,
                 Field::Conflict(v) => self.conflict = v,

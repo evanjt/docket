@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::member::{Tie, descendants};
 use crate::word::Kind;
@@ -15,23 +15,30 @@ pub struct Candidate<'a> {
     pub claimed: bool,
     pub waiting: bool,
     pub conflict: bool,
+    /// For a question, whether it has its decision; an undecided one is the owner's, never offered.
+    pub decided: bool,
     pub complexity: Option<&'a str>,
     pub theme: Option<&'a str>,
     /// The release by name; none is the backlog.
     pub release: Option<&'a str>,
     pub tier: usize,
+    /// The item's area's priority as a tier, 0 for critical; an area with none reads as normal.
+    pub area_tier: usize,
+    /// The item's area by name.
+    pub area: Option<&'a str>,
     pub opened_at: &'a str,
 }
 
-/// The three roles a session takes from the queue with.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The three roles a session takes from the queue with, in the order they rank within a release and
+/// priority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Role {
-    /// A goal into tickets: a plan with nothing under it yet, an investigation, a decided question.
-    Plan,
-    /// The tickets.
-    Work,
     /// A plan whose tickets are all closed.
     Audit,
+    /// A goal into tickets: a plan with nothing under it yet, an investigation, a decided question.
+    Plan,
+    /// The tickets and bugs.
+    Work,
 }
 
 impl Role {
@@ -41,9 +48,19 @@ impl Role {
     pub fn parse(name: &str) -> Option<Self> {
         match name {
             "plan" => Some(Role::Plan),
-            "work" => Some(Role::Work),
+            "work" | "build" => Some(Role::Work),
             "audit" => Some(Role::Audit),
             _ => None,
+        }
+    }
+
+    /// The name a job runs under: a build for the tickets.
+    #[must_use]
+    pub fn job(self) -> &'static str {
+        match self {
+            Role::Plan => "plan",
+            Role::Work => "build",
+            Role::Audit => "audit",
         }
     }
 }
@@ -51,17 +68,36 @@ impl Role {
 /// What `docket next` narrows the queue by.
 #[derive(Clone, Debug, Default)]
 pub struct Filter<'a> {
-    /// The roles to take, in the order they rank within a release; empty takes any, unranked.
+    /// The roles to take; empty takes any.
     pub roles: &'a [Role],
     pub priority: Option<usize>,
     pub key: Option<&'a str>,
+    /// Only this item, when it is ready.
+    pub rid: Option<i64>,
     pub under: Option<&'a HashSet<i64>>,
     pub complexity: Option<&'a str>,
     pub theme: Option<&'a str>,
+    /// Only items in this area, matched ignoring case.
+    pub area: Option<&'a str>,
+    /// Only items of this release, a name already resolved.
+    pub release: Option<&'a str>,
     /// The releases not yet shipped, in the order they ship.
     pub releases: &'a [String],
     /// Keep only items of the current release, the first of `releases`.
     pub current_release_only: bool,
+    /// Each wait of one open item on another, as `(item, what it waits on)`; an item that holds
+    /// others up ranks by how many it unblocks.
+    pub dependencies: &'a [(i64, i64)],
+}
+
+/// One row the ready queue offers: the item, its tier, the role it is taken in and how many open
+/// items, at any depth, wait on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Ranked {
+    pub rid: i64,
+    pub tier: usize,
+    pub role: Role,
+    pub unblocks: usize,
 }
 
 /// Where an item's release falls among the releases not yet shipped: its position, and the backlog
@@ -80,8 +116,9 @@ pub fn in_current(releases: &[String], release: Option<&str>) -> bool {
     release.is_some() && release_rank(releases, release) == Some(0)
 }
 
-/// The role an open item is taken by. A plan with children is due for its audit once everything
-/// under it, at any depth, is closed; before that it belongs to no role.
+/// The role an open item is taken by: the one owner of the rule, which the job's role follows. A
+/// plan with children is due for its audit once everything under it, at any depth, is closed; before
+/// that it belongs to no role. A question without its decision belongs to the owner.
 fn role_of(c: &Candidate, ties: &[Tie], open: &HashSet<i64>) -> Option<Role> {
     match c.kind {
         Kind::Work => Some(Role::Work),
@@ -95,8 +132,33 @@ fn role_of(c: &Candidate, ties: &[Tie], open: &HashSet<i64>) -> Option<Role> {
                 None
             }
         }
+        Kind::Decision if !c.decided => None,
         _ => Some(Role::Plan),
     }
+}
+
+/// How many open items wait on each item, directly or through others.
+fn unblocked(deps: &[(i64, i64)], open: &HashSet<i64>) -> HashMap<i64, usize> {
+    let mut waiters: HashMap<i64, Vec<i64>> = HashMap::new();
+    for (rid, on) in deps
+        .iter()
+        .filter(|(r, o)| open.contains(r) && open.contains(o))
+    {
+        waiters.entry(*on).or_default().push(*rid);
+    }
+    let mut out = HashMap::new();
+    for &root in waiters.keys() {
+        let (mut seen, mut todo) = (HashSet::new(), vec![root]);
+        while let Some(x) = todo.pop() {
+            for &w in waiters.get(&x).into_iter().flatten() {
+                if w != root && seen.insert(w) {
+                    todo.push(w);
+                }
+            }
+        }
+        out.insert(root, seen.len());
+    }
+    out
 }
 
 fn takeable(c: &Candidate, f: &Filter, ties: &[Tie], open: &HashSet<i64>) -> bool {
@@ -105,45 +167,56 @@ fn takeable(c: &Candidate, f: &Filter, ties: &[Tie], open: &HashSet<i64>) -> boo
         && !c.claimed
         && !c.waiting
         && !c.conflict
-        && !c.kind.is_read_only()
+        && !c.kind.is_retired_plan()
         && role_of(c, ties, open).is_some_and(|r| f.roles.is_empty() || f.roles.contains(&r))
         && f.under.is_none_or(|u| u.contains(&c.rid))
         && f.complexity.is_none_or(|x| c.complexity == Some(x))
         && f.key.is_none_or(|k| c.key == k)
+        && f.rid.is_none_or(|r| c.rid == r)
         && release_rank(f.releases, c.release).is_some()
         && (!f.current_release_only || in_current(f.releases, c.release))
+        && f.release.is_none_or(|r| c.release == Some(r))
         && f.theme
             .is_none_or(|t| c.theme.is_some_and(|mine| mine.eq_ignore_ascii_case(t)))
+        && f.area
+            .is_none_or(|a| c.area.is_some_and(|mine| mine.eq_ignore_ascii_case(a)))
 }
 
-/// The queue an agent takes from, as `(rid, tier)`: the earliest release first, then the role's place in
-/// the filter's roles, then the most urgent, then the oldest.
+/// The queue an agent takes from: the earliest release first, then the most urgent, then the item
+/// whose area is more important (which never lifts the item's own priority), then the role
+/// (audit, plan, build), then the item that unblocks the most, then the oldest.
 #[must_use]
-pub fn next(items: &[Candidate], ties: &[Tie], filter: &Filter, limit: usize) -> Vec<(i64, usize)> {
+pub fn next(items: &[Candidate], ties: &[Tie], filter: &Filter, limit: usize) -> Vec<Ranked> {
     let open: HashSet<i64> = items.iter().filter(|c| c.open).map(|c| c.rid).collect();
-    let mut rows: Vec<_> = items
+    let unblocks = unblocked(filter.dependencies, &open);
+    let mut rows: Vec<Ranked> = items
         .iter()
         .filter(|c| takeable(c, filter, ties, &open))
         .filter(|c| filter.priority.is_none_or(|p| c.tier <= p))
+        .filter_map(|c| {
+            Some(Ranked {
+                rid: c.rid,
+                tier: c.tier,
+                role: role_of(c, ties, &open)?,
+                unblocks: unblocks.get(&c.rid).copied().unwrap_or(0),
+            })
+        })
         .collect();
-    let role_rank = |c: &Candidate| {
-        role_of(c, ties, &open)
-            .and_then(|r| filter.roles.iter().position(|x| *x == r))
-            .unwrap_or(0)
-    };
-    rows.sort_by_key(|c| {
+    let by_rid: HashMap<i64, &Candidate> = items.iter().map(|c| (c.rid, c)).collect();
+    rows.sort_by_key(|r| {
+        let c = by_rid[&r.rid];
         (
             release_rank(filter.releases, c.release),
-            role_rank(c),
-            c.tier,
+            r.tier,
+            c.area_tier,
+            r.role,
+            std::cmp::Reverse(r.unblocks),
             c.opened_at,
-            c.rid,
+            r.rid,
         )
     });
-    rows.into_iter()
-        .take(limit)
-        .map(|c| (c.rid, c.tier))
-        .collect()
+    rows.truncate(limit);
+    rows
 }
 
 /// The needs an ask can name, in the order the owner's queue groups them: a device or thing in
@@ -164,6 +237,7 @@ pub struct OwnerRow<'a> {
     pub derived: bool,
     pub need: Option<&'a str>,
     pub theme: Option<&'a str>,
+    pub area: Option<&'a str>,
     pub release: Option<&'a str>,
     pub tier: usize,
     pub asked_at: &'a str,
@@ -175,6 +249,8 @@ pub struct OwnerFilter<'a> {
     pub priority: Option<usize>,
     pub key: Option<&'a str>,
     pub theme: Option<&'a str>,
+    /// Only items in this area, matched ignoring case.
+    pub area: Option<&'a str>,
     pub releases: &'a [String],
     pub limit: Option<usize>,
 }
@@ -222,6 +298,11 @@ pub fn owner_queue(items: &[OwnerRow], filter: &OwnerFilter) -> OwnerQueue {
             filter
                 .theme
                 .is_none_or(|t| r.theme.is_some_and(|mine| mine.eq_ignore_ascii_case(t)))
+        })
+        .filter(|r| {
+            filter
+                .area
+                .is_none_or(|a| r.area.is_some_and(|mine| mine.eq_ignore_ascii_case(a)))
         })
         .collect();
     let waiting = rows.iter().filter(|r| r.waiting && !r.derived).count();

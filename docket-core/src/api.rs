@@ -67,8 +67,14 @@ pub struct ItemView {
     /// The release it is in by name; none is the backlog.
     #[serde(default)]
     pub release: Option<String>,
+    /// The area it is in by name.
+    #[serde(default)]
+    pub area: Option<String>,
     pub rank: Option<i64>,
     pub tags: Vec<String>,
+    /// The labels it carries: its own, then those of each plan above it.
+    #[serde(default)]
+    pub labels: Vec<String>,
     pub body: String,
     pub conflict: i64,
     pub opened_at: String,
@@ -76,6 +82,9 @@ pub struct ItemView {
     pub group: Option<String>,
     pub word: String,
     pub priority: String,
+    /// What the item is: task, bug, question, investigation or plan.
+    #[serde(default, rename = "type")]
+    pub item_type: String,
     pub superseded_by: Option<String>,
     pub related: Vec<String>,
     /// The plan the item belongs to.
@@ -147,6 +156,13 @@ pub struct NewRequest {
     pub release: Option<String>,
     #[serde(default)]
     pub group: Option<String>,
+    /// The area it is filed in, by name; under a plan it is the plan's, and naming another is refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area: Option<String>,
+    /// The plan it is filed under; with no release it takes the plan's, and it may name an earlier
+    /// one, never a later one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -164,6 +180,12 @@ pub struct AddRequest {
     /// The release it is filed for, as `NewRequest::release`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub release: Option<String>,
+    /// The area it is filed in, as `NewRequest::area`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area: Option<String>,
+    /// The plan it is filed under, as `NewRequest::parent`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -223,6 +245,9 @@ pub struct JobReportRequest {
     pub tokens_out: Option<i64>,
     #[serde(default)]
     pub cost_reported: Option<f64>,
+    /// The job's final report, its word first: `DONE`, `WAITING Q3` or `FAILED why`.
+    #[serde(default)]
+    pub report: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -257,6 +282,9 @@ pub struct ReopenRequest {
     pub common: Common,
     pub id: String,
     pub why: String,
+    /// The area the item reopens in; needed when its own area holds closed items only.
+    #[serde(default)]
+    pub area: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -330,6 +358,12 @@ pub struct DecideRequest {
     pub id: String,
     pub choice: String,
     pub basis: String,
+    /// The area an agent places the item in.
+    #[serde(default)]
+    pub area: Option<String>,
+    /// What the placed area is about.
+    #[serde(default)]
+    pub about: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -372,6 +406,14 @@ pub struct EditRequest {
     /// The release it moves to, as `NewRequest::release`; empty moves it to the backlog.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub release: Option<String>,
+    /// Move with it every item the move would leave out of order: its dependants and plans when it
+    /// goes later, its dependencies and children when it goes earlier.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub carry: bool,
+    /// The area it and every item under it move to; refused on an item under a plan, whose area is
+    /// the plan's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area: Option<String>,
 }
 
 /// `docket releases add|move|ship`: one release added, its open items moved, or it shipped.
@@ -388,6 +430,61 @@ pub struct ReleasesRequest {
     pub target_date: Option<String>,
     #[serde(default)]
     pub note: Option<String>,
+}
+
+/// `docket areas add|edit|move|rm`: one area added, changed, moved to another place, or removed.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct AreasRequest {
+    #[serde(flatten)]
+    pub common: Common,
+    pub action: String,
+    pub name: String,
+    /// `edit`: the area's new name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rename: Option<String>,
+    /// `add` and `edit`: what the area holds; empty clears it on `edit`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub about: Option<String>,
+    /// `add` and `edit`: one of the four priority words; empty clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<String>,
+    /// `move`: the place it takes, the first being 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<i64>,
+}
+
+/// `docket label add|rm ID NAME`: a label given to an item, or taken from it.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct LabelRequest {
+    #[serde(flatten)]
+    pub common: Common,
+    pub action: String,
+    pub id: String,
+    pub name: String,
+    /// `add`: what the label means; replaces the description it has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub about: Option<String>,
+}
+
+/// The labels the item carries after the write.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct LabelDone {
+    pub id: String,
+    pub labels: Vec<crate::label::Label>,
+}
+
+/// One label as `/labels` lists it, with how many items were given it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LabelRow {
+    #[serde(flatten)]
+    pub label: crate::label::Label,
+    pub items: i64,
+}
+
+/// The areas after the write, in position order.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct AreasDone {
+    pub areas: Vec<crate::area::Area>,
 }
 
 /// The releases after the write, and the items it moved.
@@ -416,27 +513,6 @@ pub struct ParentRequest {
     pub a: Vec<String>,
     #[serde(default)]
     pub plan: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct KeyRequest {
-    #[serde(flatten)]
-    pub common: Common,
-    pub key: String,
-    pub kind: String,
-    pub meaning: String,
-    #[serde(default)]
-    pub turn: Option<String>,
-}
-
-/// `retry`: an item the loop parked or sent back, given a fresh start.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct RetryRequest {
-    #[serde(flatten)]
-    pub common: Common,
-    pub id: String,
-    #[serde(default)]
-    pub note: Option<String>,
 }
 
 /// `fact`: one project fact set, or unset by an empty value.
@@ -541,14 +617,6 @@ pub struct Parented {
     pub plan: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct KeySet {
-    pub key: String,
-    pub kind: String,
-    pub meaning: String,
-    pub turn: String,
-}
-
 /// The project a checkout matched or created; `how` is matched, created, ambiguous or none.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectResolved {
@@ -603,6 +671,26 @@ pub struct MachineRequest {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Machines {
     pub machines: Vec<crate::machine::Machine>,
+}
+
+/// What a squash wrote, recorded on the server: the published commit, the work snapshot whose tree it
+/// carries, and the plans it covers by id.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublicationRequest {
+    #[serde(flatten)]
+    pub common: Common,
+    pub published: String,
+    pub work: String,
+    #[serde(default)]
+    pub plans: Vec<String>,
+}
+
+/// A project's publications, newest first, the first being where the next squash starts:
+/// `GET /publications` and the answer to a record.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Publications {
+    pub project: String,
+    pub publications: Vec<crate::publication::Publication>,
 }
 
 /// `docket lead take`, `renew` or `give`: the act, and the session naming the holder on its host.

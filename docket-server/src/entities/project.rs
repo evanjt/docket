@@ -12,6 +12,7 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     #[crudcrate(primary_key, sortable, filterable)]
     pub slug: String,
+    #[crudcrate(exclude(one, list))]
     pub keys: serde_json::Value,
     pub remotes: serde_json::Value,
     pub themes: serde_json::Value,

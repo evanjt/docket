@@ -50,12 +50,16 @@ async fn seeded() -> (Router, Scratch) {
     .await;
     let app = app(&db.db, Keys::parse("box owner k").unwrap());
     let steps = [
-        ("releases", json!({"action": "add", "name": "1.0"})),
-        ("releases", json!({"action": "add", "name": "1.1"})),
-        ("releases", json!({"action": "ship", "name": "1.0"})),
+        ("releases", json!({"action": "add", "name": "1.0.0"})),
+        ("releases", json!({"action": "add", "name": "1.1.0"})),
+        ("releases", json!({"action": "ship", "name": "1.0.0"})),
+        (
+            "areas",
+            json!({"action": "add", "name": "pantry", "about": "dry goods", "priority": "high"}),
+        ),
         (
             "new",
-            json!({"key": "B", "title": "Crust \u{e9}", "release": "1.1", "body": "- **Evidence.** `src/crust.ts:3` and `tests/crust_test.rs`.\n"}),
+            json!({"key": "B", "title": "Crust \u{e9}", "release": "1.1.0", "body": "- **Evidence.** `src/crust.ts:3` and `tests/crust_test.rs`.\n"}),
         ),
         ("new", json!({"key": "B", "title": "Old pace"})),
         (
@@ -64,12 +68,20 @@ async fn seeded() -> (Router, Scratch) {
         ),
         (
             "new",
-            json!({"key": "A", "title": "Shelves", "body": "- **Principles.**\n  1. One owner.\n- **Evidence.** `src/crust.ts:1`\n"}),
+            json!({"key": "A", "title": "Shelves", "area": "pantry", "body": "- **Principles.**\n  1. One owner.\n- **Evidence.** `src/crust.ts:1`\n"}),
         ),
         ("new", json!({"key": "A", "title": "Recording"})),
         ("parent", json!({"a": ["B1"], "plan": "A1"})),
         ("link", json!({"a": ["B2"], "kind": "origin", "b": "Q1"})),
         ("link", json!({"a": ["A1"], "kind": "related", "b": "A2"})),
+        (
+            "label",
+            json!({"action": "add", "id": "A1", "name": "area:shelf", "about": "what stands on the shelves"}),
+        ),
+        (
+            "label",
+            json!({"action": "add", "id": "B1", "name": "crumbly"}),
+        ),
         ("wait", json!({"id": "B1", "on": "Q1"})),
         ("drop", json!({"id": "B2", "superseded_by": "B1"})),
         ("new", json!({"key": "B", "title": "After shelves"})),
@@ -84,6 +96,9 @@ async fn seeded() -> (Router, Scratch) {
     ];
     for (verb, mut body) in steps {
         body["project"] = json!("o/p");
+        if verb == "new" && body.get("area").is_none() {
+            body["area"] = json!("pantry");
+        }
         call(&app, Method::POST, &format!("/do/{verb}"), Some(body)).await;
     }
     (app, db)
@@ -145,7 +160,14 @@ async fn test_restore_round_trips_a_full_dump() {
     );
     let after = full_page(&app(&db.db, Keys::parse("box owner k").unwrap())).await;
     assert_eq!(as_map(&before), as_map(&after));
-    assert!(as_map(&after)["o/p/items/B1.md"].contains("\nrelease: \"1.1\"\n"));
+    assert!(as_map(&after)["o/p/items/B1.md"].contains("\nrelease: \"1.1.0\"\n"));
+    assert!(as_map(&after)["o/p/items/B1.md"].contains("\narea: \"pantry\"\n"));
+    assert!(as_map(&after)["o/p/items/B3.md"].contains("\narea: \"pantry\"\n"));
+    assert!(as_map(&after)["o/p/items/A1.md"].contains("\nlabels: [\"area:shelf\"]\n"));
+    assert!(as_map(&after)["o/p/items/B1.md"].contains("\nlabels: [\"crumbly\"]\n"));
+    assert!(!as_map(&after)["o/p/items/B3.md"].contains("\nlabels:"));
+    assert!(as_map(&after)["o/p/project.json"].contains("what stands on the shelves"));
+    assert!(as_map(&after)["o/p/project.json"].contains("dry goods"));
     assert!(as_map(&after)["o/p/project.json"].contains("shipped_at"));
     let cites: i64 = scalar(
         &db.db,

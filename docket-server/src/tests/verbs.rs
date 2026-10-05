@@ -10,16 +10,27 @@ use crate::auth::Keys;
 use docket_migration::scratch::Scratch as Database;
 const KEYS: &str = r#"[{"key": "T", "kind": "work", "meaning": "tasks", "turn": "agent"}, {"key": "B", "kind": "work", "meaning": "bugs", "turn": "agent"}, {"key": "Q", "kind": "decision", "meaning": "questions", "turn": "user"}, {"key": "I", "kind": "research", "meaning": "investigations", "turn": "agent"}, {"key": "A", "kind": "audit", "meaning": "audits", "turn": "agent"}, {"key": "STY", "kind": "story", "meaning": "stories", "turn": "agent"}, {"key": "CON", "kind": "concept", "meaning": "concepts", "turn": "agent"}, {"key": "CID", "kind": "idea", "meaning": "central ideas", "turn": "agent"}, {"key": "PK", "kind": "package", "meaning": "packages", "turn": "agent"}]"#;
 const SLUG: &str = "test/proj";
-const GATE: &str = "everything it opened is closed";
 
 /// A scratch database and project, every call made as the owner on one branch unless told otherwise.
 struct Scratch {
     app: Router,
     db: Database,
+    /// The area `new` and `add` file in when a test names neither an area nor a plan.
+    filing_area: Option<&'static str>,
 }
 
 impl Scratch {
+    /// A project with one area, which an item filed without naming any lands in.
     async fn new() -> Self {
+        let mut s = Self::bare().await;
+        s.ok("areas", json!({ "action": "add", "name": "general" }))
+            .await;
+        s.filing_area = Some("general");
+        s
+    }
+
+    /// A project with no area, and nothing filed for a test that names none.
+    async fn bare() -> Self {
         let db = Database::new(2).await;
         db.seed(&format!(
             "INSERT INTO projects (slug, keys, created_at, updated_at) VALUES ('{SLUG}', '{KEYS}', 'c', 'u')"
@@ -29,6 +40,7 @@ impl Scratch {
         Self {
             app: app(&db.db, keys),
             db,
+            filing_area: None,
         }
     }
 
@@ -68,6 +80,12 @@ impl Scratch {
         let fields = body.as_object_mut().unwrap();
         fields.entry("project").or_insert(json!(SLUG));
         fields.entry("branch").or_insert(json!("audit/t-1"));
+        if let Some(area) = self.filing_area
+            && matches!(verb, "new" | "add")
+            && !fields.contains_key("parent")
+        {
+            fields.entry("area").or_insert(json!(area));
+        }
         self.send(Method::POST, &format!("/do/{verb}"), key, Some(body))
             .await
     }
@@ -161,6 +179,17 @@ impl Scratch {
         self.ok("new", json!({ "key": key, "title": title })).await
     }
 
+    /// The project as the migration finds it before areas exist: no area rows, and no item in one.
+    async fn forget_areas(&mut self) {
+        self.db
+            .seed(&format!(
+                "UPDATE items SET area_id=NULL WHERE project='{SLUG}'; \
+                 DELETE FROM areas WHERE project='{SLUG}'"
+            ))
+            .await;
+        self.filing_area = None;
+    }
+
     /// An item of a kind kept to read, written as the import leaves it.
     async fn kept(&self, key: &str, num: i64, title: &str) {
         self.db
@@ -203,7 +232,7 @@ async fn test_question_pathway() {
     s.open("B", "Till freezes at opening").await;
     s.open("Q", "One cache or two").await;
     assert_eq!(s.word("B1").await, "ready");
-    assert_eq!(s.word("Q1").await, "parked");
+    assert_eq!(s.word("Q1").await, "waiting on owner");
     s.ok("start", json!({ "id": "B1" })).await;
     s.ok("wait", json!({ "id": "B1", "on": "Q1" })).await;
     assert_eq!(s.word("B1").await, "blocked");
@@ -331,12 +360,12 @@ async fn test_a_release_files_an_item_in_a_release_that_exists_and_none_files_it
     .await;
     s.ok(
         "new",
-        json!({ "key": "T", "title": "Wider settings page", "release": "1.1", "theme": "upkeep" }),
+        json!({ "key": "T", "title": "Wider settings page", "release": "1.1.0", "theme": "upkeep" }),
     )
     .await;
     s.ok("add", json!({ "title": "Hook runs twice" })).await;
-    assert_eq!(s.item("B1").await["release"], "1.0");
-    assert_eq!(s.item("T1").await["release"], "1.1");
+    assert_eq!(s.item("B1").await["release"], "1.0.0");
+    assert_eq!(s.item("T1").await["release"], "1.1.0");
     assert_eq!(s.item("T1").await["theme"], "upkeep");
     assert_eq!(s.item("B2").await["release"], Value::Null);
     assert_eq!(
@@ -345,21 +374,22 @@ async fn test_a_release_files_an_item_in_a_release_that_exists_and_none_files_it
             json!({ "title": "Lint the hooks", "release": "upkeep" })
         )
         .await,
-        "upkeep is not a release here: give current or one of 1.0 1.1"
+        "upkeep is not a release here: give current or one of 1.0.0 1.1.0"
     );
 }
 
 #[tokio::test]
 async fn test_edit_to_a_release_the_project_does_not_have_is_refused() {
     let s = two_releases().await;
-    filed(&s, "T", "1.0").await;
+    filed(&s, "T", "1.0.0").await;
     assert_eq!(
-        s.refused("edit", json!({ "id": "T1", "release": "0.42" }))
+        s.refused("edit", json!({ "id": "T1", "release": "0.42.0" }))
             .await,
-        "0.42 is not a release here: give current or one of 1.0 1.1"
+        "0.42.0 is not a release here: give current or one of 1.0.0 1.1.0"
     );
-    s.ok("edit", json!({ "id": "T1", "release": "1.1" })).await;
-    assert_eq!(s.item("T1").await["release"], "1.1");
+    s.ok("edit", json!({ "id": "T1", "release": "1.1.0" }))
+        .await;
+    assert_eq!(s.item("T1").await["release"], "1.1.0");
     s.ok("edit", json!({ "id": "T1", "release": "" })).await;
     assert_eq!(s.item("T1").await["release"], Value::Null);
 }
@@ -367,31 +397,31 @@ async fn test_edit_to_a_release_the_project_does_not_have_is_refused() {
 #[tokio::test]
 async fn test_a_release_ships_only_once_its_open_items_are_closed_or_moved_on() {
     let s = two_releases().await;
-    filed(&s, "T", "1.0").await;
-    filed(&s, "T", "1.0").await;
+    filed(&s, "T", "1.0.0").await;
+    filed(&s, "T", "1.0.0").await;
     s.ok("close", json!({ "id": "T2", "resolution": "fixed" }))
         .await;
     assert_eq!(
-        s.refused("releases", json!({ "action": "ship", "name": "1.0" }))
+        s.refused("releases", json!({ "action": "ship", "name": "1.0.0" }))
             .await,
-        "1.0 still holds 1 open: T1. Close them, or pass --move-open-to a later release."
+        "1.0.0 still holds 1 open: T1. Close them, or pass --move-open-to a later release."
     );
     let out = s
         .ok(
             "releases",
-            json!({ "action": "ship", "name": "1.0", "to": "1.1" }),
+            json!({ "action": "ship", "name": "1.0.0", "to": "1.1.0" }),
         )
         .await;
     assert_eq!(out["moved"], json!(["T1"]));
-    assert_eq!(s.item("T1").await["release"], "1.1");
+    assert_eq!(s.item("T1").await["release"], "1.1.0");
     assert!(out["releases"][0]["shipped_at"].is_string());
     assert_eq!(
-        s.refused("edit", json!({ "id": "T1", "release": "1.0" }))
+        s.refused("edit", json!({ "id": "T1", "release": "1.0.0" }))
             .await,
-        "1.0 has shipped: give current or one of 1.1"
+        "1.0.0 has shipped: give current or one of 1.1.0"
     );
     filed(&s, "T", "current").await;
-    assert_eq!(s.item("T3").await["release"], "1.1");
+    assert_eq!(s.item("T3").await["release"], "1.1.0");
 }
 
 #[tokio::test]
@@ -406,25 +436,30 @@ async fn test_releases_are_added_in_version_order_and_kept_by_the_owner() {
         .iter()
         .map(|r| r["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["1.0", "1.0.5", "1.1"]);
+    assert_eq!(names, ["1.0.0", "1.0.5", "1.1.0"]);
+    assert_eq!(
+        s.refused("releases", json!({ "action": "add", "name": "1.1.0" }))
+            .await,
+        "1.1.0 is already a release"
+    );
     assert_eq!(
         s.refused("releases", json!({ "action": "add", "name": "1.1" }))
             .await,
-        "1.1 is already a release"
+        "1.1 is not a semantic version: give MAJOR.MINOR.PATCH, as 1.1.0"
     );
     let (status, _) = s
         .post_as(
             "agentkey",
             "releases",
-            json!({ "action": "add", "name": "2.0" }),
+            json!({ "action": "add", "name": "2.0.0" }),
         )
         .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
-    filed(&s, "T", "1.0").await;
+    filed(&s, "T", "1.0.0").await;
     let out = s
         .ok(
             "releases",
-            json!({ "action": "move", "name": "1.0", "to": "1.1" }),
+            json!({ "action": "move", "name": "1.0.0", "to": "1.1.0" }),
         )
         .await;
     assert_eq!(out["moved"], json!(["T1"]));
@@ -456,7 +491,22 @@ async fn test_a_new_question_lists_the_decided_questions_close_to_it() {
 }
 
 #[tokio::test]
-async fn test_setting_tags_keeps_the_priority_unless_the_list_names_one() {
+async fn test_a_new_item_takes_its_type_from_its_key_and_its_priority_into_the_column() {
+    let s = Scratch::new().await;
+    let out = s
+        .ok(
+            "new",
+            json!({ "key": "B", "title": "Till freezes at opening", "priority": "critical" }),
+        )
+        .await;
+    assert_eq!(out["item"]["type"], "bug");
+    assert_eq!(out["item"]["priority"], "critical");
+    assert_eq!(out["item"]["tags"], json!([]));
+    assert_eq!(s.open("A", "Open the till").await["item"]["type"], "plan");
+}
+
+#[tokio::test]
+async fn test_setting_tags_leaves_the_priority_column_alone() {
     let s = Scratch::new().await;
     s.open("B", "Till freezes at opening").await;
     s.ok("priority", json!({ "ids": ["B1"], "tier": "high" }))
@@ -468,7 +518,7 @@ async fn test_setting_tags_keeps_the_priority_unless_the_list_names_one() {
     .await;
     let b1 = s.item("B1").await;
     assert_eq!(b1["priority"], "high");
-    assert_eq!(b1["tags"], json!(["high", "single"]));
+    assert_eq!(b1["tags"], json!(["single"]));
 }
 
 #[tokio::test]
@@ -491,7 +541,7 @@ async fn test_question_not_yet_decidable() {
     assert_eq!(s.word("Q1").await, "ready");
     s.ok("ask", json!({ "id": "Q1", "note": "measured, ready" }))
         .await;
-    assert_eq!(s.word("Q1").await, "parked");
+    assert_eq!(s.word("Q1").await, "waiting on owner");
 }
 
 #[tokio::test]
@@ -505,7 +555,7 @@ async fn test_device_pathway() {
             json!({ "id": "B1", "note": "needs a run on the S22" }),
         )
         .await;
-    assert_eq!(out["item"]["word"], "parked");
+    assert_eq!(out["item"]["word"], "waiting on owner");
     assert_eq!(out["item"]["claim_branch"], Value::Null);
     assert_eq!(out["twins"], json!([]));
     assert_eq!(
@@ -754,17 +804,15 @@ async fn test_removing_the_last_dependency_resumes_and_a_reopened_one_holds_agai
 }
 
 #[tokio::test]
-async fn test_resuming_a_gated_plan_is_refused_while_a_member_is_open() {
+async fn test_a_plan_with_open_members_is_not_waiting_so_resume_is_refused() {
     let s = Scratch::new().await;
     plan(&s).await;
     s.open("B", "Port the proofer").await;
     s.ok("parent", json!({ "a": ["B1"], "plan": "A1" })).await;
     assert_eq!(
         s.refused("resume", json!({ "id": "A1" })).await,
-        format!("A1 waits until {GATE}, and B1 is open. Close it first, or pass --force.")
+        "A1 is not waiting."
     );
-    s.ok("resume", json!({ "id": "A1", "force": true })).await;
-    assert_eq!(s.item("A1").await["wait_on"], Value::Null);
 }
 
 #[tokio::test]
@@ -798,7 +846,7 @@ async fn test_edit_fields_and_body() {
             json!({ "id": "B1", "set": [{ "field": "state", "value": "done" }] })
         )
         .await,
-        "state is not editable; fields are title, complexity, theme, group, tags, turn_note. State and turn move with their own verbs. Also priority: docket priority, release: --release NAME."
+        "state is not editable; fields are title, complexity, theme, group, tags, turn_note. State and turn move with their own verbs. Also priority: docket priority, release: --release NAME, area: --area NAME."
     );
     let refused = s
         .refused(
@@ -818,7 +866,7 @@ async fn test_edit_fields_and_body() {
     );
     assert_eq!(
         s.refused("edit", json!({ "id": "B1" })).await,
-        "edit needs --set field=value, --release NAME, --append \"text\" or --body FILE|-."
+        "edit needs --set field=value, --release NAME, --area NAME, --append \"text\" or --body FILE|-."
     );
     assert_eq!(
         s.refused(
@@ -1015,16 +1063,25 @@ async fn plan(s: &Scratch) {
 }
 
 #[tokio::test]
-async fn test_audit_waits_until_everything_under_it_is_closed() {
+async fn test_a_plan_stores_no_wait_and_closes_once_everything_under_it_is_closed() {
     let s = Scratch::new().await;
     plan(&s).await;
     s.open("B", "Port the proofer").await;
     s.open("Q", "Which scale does the mixer read").await;
     s.ok("parent", json!({ "a": ["B1", "Q1"], "plan": "A1" }))
         .await;
-    assert_eq!(s.word("A1").await, "blocked");
-    assert_eq!(s.item("A1").await["wait_ref"], GATE);
-    s.refused("start", json!({ "id": "A1" })).await;
+    assert_eq!(s.word("A1").await, "building");
+    assert_eq!(s.item("A1").await["wait_on"], Value::Null);
+    assert_eq!(s.item("A1").await["wait_ref"], Value::Null);
+    assert_eq!(
+        s.refused("close", json!({ "id": "A1", "resolution": "clean" }))
+            .await,
+        "A1 has work under it that is still open: B1, Q1. It closes only when nothing under it is open; unclaim it and it comes back when they close."
+    );
+    assert_eq!(
+        s.refused("start", json!({ "id": "A1" })).await,
+        "A1 has work under it that is still open: B1, Q1. It is audited once nothing under it is open."
+    );
     s.ok(
         "answer",
         json!({ "id": "Q1", "decision": "the bench scale" }),
@@ -1038,20 +1095,22 @@ async fn test_audit_waits_until_everything_under_it_is_closed() {
         .await;
     s.ok("close", json!({ "id": "B1", "resolution": "abc1234" }))
         .await;
-    assert_eq!(s.word("A1").await, "blocked");
+    assert_eq!(s.word("A1").await, "building");
     let out = s
         .ok("drop", json!({ "id": "B2", "why": "not needed" }))
         .await;
-    assert_eq!(ids(&out["released"]), vec!["A1"]);
-    assert_eq!(s.word("A1").await, "ready");
-    let waited = s
+    assert_eq!(out["released"], json!([]));
+    assert_eq!(s.word("A1").await, "audit due");
+    assert_eq!(s.item("A1").await["wait_on"], Value::Null);
+    let kinds: Vec<Value> = s
         .events("A1")
         .await
         .into_iter()
-        .find(|e| e["kind"] == "waited")
-        .unwrap();
-    assert_eq!(waited["note"], format!("until: {GATE} (2 open)"));
-    assert_eq!(waited["branch"], Value::Null);
+        .map(|e| e["kind"].clone())
+        .collect();
+    assert!(!kinds.contains(&json!("waited")), "{kinds:?}");
+    assert!(!kinds.contains(&json!("resumed")), "{kinds:?}");
+    s.ok("start", json!({ "id": "A1" })).await;
 }
 
 #[tokio::test]
@@ -1062,13 +1121,13 @@ async fn test_a_reopened_item_holds_its_audit_again() {
     s.ok("parent", json!({ "a": ["B1"], "plan": "A1" })).await;
     s.ok("close", json!({ "id": "B1", "resolution": "abc1234" }))
         .await;
-    assert_eq!(s.word("A1").await, "ready");
+    assert_eq!(s.word("A1").await, "audit due");
     s.ok(
         "reopen",
         json!({ "id": "B1", "why": "the port reads the wrong constant" }),
     )
     .await;
-    assert_eq!(s.word("A1").await, "blocked");
+    assert_eq!(s.word("A1").await, "building");
 }
 
 #[tokio::test]
@@ -1083,7 +1142,7 @@ async fn test_a_plans_ticket_is_claimed_and_closed_on_its_own_branch() {
         .await;
     s.ok("start", json!({ "id": "B2", "branch": "audit/b2-1" }))
         .await;
-    assert_eq!(s.word("A1").await, "blocked");
+    assert_eq!(s.word("A1").await, "building");
     assert_eq!(
         s.refused(
             "close",
@@ -1104,20 +1163,20 @@ async fn test_a_plans_ticket_is_claimed_and_closed_on_its_own_branch() {
 }
 
 #[tokio::test]
-async fn test_an_audit_that_finds_work_goes_back_to_waiting() {
+async fn test_a_held_plan_closes_with_work_open_under_it_and_an_unheld_one_does_not() {
     let s = Scratch::new().await;
     plan(&s).await;
     s.ok("start", json!({ "id": "A1" })).await;
     s.open("B", "The rye ratio is in no table").await;
     s.ok("parent", json!({ "a": ["B1"], "plan": "A1" })).await;
+    assert_eq!(s.word("A1").await, "in progress");
+    s.ok("release", json!({ "id": "A1" })).await;
     assert_eq!(s.word("A1").await, "building");
     assert_eq!(
         s.refused("close", json!({ "id": "A1", "resolution": "clean" }))
             .await,
         "A1 has work under it that is still open: B1. It closes only when nothing under it is open; unclaim it and it comes back when they close."
     );
-    s.ok("release", json!({ "id": "A1" })).await;
-    assert_eq!(s.word("A1").await, "blocked");
     s.ok("close", json!({ "id": "B1", "resolution": "abc1234" }))
         .await;
     s.ok("start", json!({ "id": "A1" })).await;
@@ -1189,34 +1248,25 @@ async fn test_a_new_plan_is_the_plan_roles_until_it_opens_work() {
 }
 
 #[tokio::test]
-async fn test_packages_concepts_ideas_and_stories_are_read_only() {
+async fn test_new_refuses_a_key_outside_the_fixed_five() {
     let s = Scratch::new().await;
     for key in ["PK", "CON", "CID", "STY"] {
         assert_eq!(
             s.refused("new", json!({ "key": key, "title": "one more" }))
                 .await,
-            format!(
-                "{key} is kept to read: plans group the work now. File a plan with docket new A \"goal\"."
-            )
+            format!("{key} is not one of docket's keys. File under T, B, Q, I, A.")
         );
     }
-    s.kept("PK", 1, "Shelves have one owner").await;
-    assert_eq!(
-        s.refused("start", json!({ "id": "PK1" })).await,
-        "PK1 is a package and kept to read: plans group the work now, and its tickets are claimed one by one."
-    );
-    s.ok("drop", json!({ "id": "PK1", "why": "now a plan" }))
-        .await;
 }
 
 #[tokio::test]
-async fn test_an_empty_plan_is_ready_and_unlinking_the_last_open_item_releases_the_audit() {
+async fn test_an_empty_plan_is_ready_and_unlinking_the_last_open_item_makes_it_ready_again() {
     let s = Scratch::new().await;
     plan(&s).await;
     assert_eq!(s.word("A1").await, "ready");
     s.open("B", "Unrelated after all").await;
     s.ok("parent", json!({ "a": ["B1"], "plan": "A1" })).await;
-    assert_eq!(s.word("A1").await, "blocked");
+    assert_eq!(s.word("A1").await, "building");
     s.ok("parent", json!({ "a": ["B1"] })).await;
     assert_eq!(s.word("A1").await, "ready");
 }
@@ -1242,105 +1292,66 @@ async fn test_parent_takes_several_items_at_once() {
 }
 
 #[tokio::test]
-async fn test_key_adds_a_key_and_keeps_its_kind_once_it_holds_items() {
+async fn test_new_refuses_any_key_but_the_five_and_a_stored_key_still_shows_and_closes() {
     let s = Scratch::new().await;
-    let out = s
-        .ok(
-            "key",
-            json!({ "key": "X", "kind": "research", "meaning": "explorations, measured by hand" }),
-        )
-        .await;
-    assert_eq!(
-        out,
-        json!({ "key": "X", "kind": "research", "meaning": "explorations, measured by hand", "turn": "agent" })
-    );
-    s.open("X", "Measure it").await;
-    assert_eq!(
-        s.refused(
-            "key",
-            json!({ "key": "X", "kind": "work", "meaning": "now work" })
-        )
-        .await,
-        "X is research and holds 1 items; changing its kind changes the rules they were filed under."
-    );
-    s.ok(
-        "key",
-        json!({ "key": "X", "kind": "research", "meaning": "explorations, renamed" }),
-    )
+    s.db.seed(&format!(
+        "UPDATE projects SET keys = keys || '[{{\"key\": \"ZQ\", \"kind\": \"work\", \"meaning\": \"own\", \"turn\": \"agent\"}}]'::jsonb WHERE slug = '{SLUG}'"
+    ))
     .await;
     assert_eq!(
-        s.refused(
-            "key",
-            json!({ "key": "x1", "kind": "work", "meaning": "not a key" })
-        )
-        .await,
-        "'x1' is not a key: one to three capitals."
+        s.refused("new", json!({ "key": "ZQ", "title": "One more" }))
+            .await,
+        "ZQ is not one of docket's keys. File under T, B, Q, I, A."
     );
-    let (_, projects) = s.send(Method::GET, "/projects", "ownerkey", None).await;
-    let keys = projects[0]["keys"].as_array().unwrap();
-    assert_eq!(keys.len(), 10);
-    assert_eq!(keys[9]["meaning"], "explorations, renamed");
+    s.kept("ZQ", 1, "Measure it").await;
+    assert_eq!(s.item("ZQ1").await["id"], "ZQ1");
+    s.ok("close", json!({ "id": "ZQ1", "resolution": "abc1234" }))
+        .await;
+    assert_eq!(s.word("ZQ1").await, "done");
+    let (status, _) = s
+        .post(
+            "key",
+            json!({ "key": "X", "kind": "research", "meaning": "explorations" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 // ---- keys, and the kinds kept to read ----
 
 #[tokio::test]
-async fn test_three_capital_keys_allocate_and_link() {
+async fn test_three_capital_keys_keep_their_items_and_link() {
     let s = Scratch::new().await;
-    s.ok(
-        "key",
-        json!({ "key": "FIX", "kind": "work", "meaning": "fixes" }),
-    )
-    .await;
     s.open("Q", "Which fixes").await;
     s.ok("answer", json!({ "id": "Q1", "decision": "these" }))
         .await;
-    let out = s.open("FIX", "A baker corrects a step once").await;
-    assert_eq!(out["item"]["num"], 1);
+    assert_eq!(
+        s.refused(
+            "new",
+            json!({ "key": "FIX", "title": "A baker corrects a step once" })
+        )
+        .await,
+        "FIX is not one of docket's keys. File under T, B, Q, I, A."
+    );
+    s.kept("FIX", 1, "A baker corrects a step once").await;
     s.ok(
         "link",
         json!({ "a": ["FIX1"], "kind": "origin", "b": "Q1" }),
     )
     .await;
     assert_eq!(s.item("FIX1").await["origin"], json!(["Q1"]));
-    s.refused(
-        "key",
-        json!({ "key": "ABCD", "kind": "work", "meaning": "too long" }),
-    )
-    .await;
 }
 
 #[tokio::test]
-async fn test_a_story_no_longer_waits_on_its_work() {
-    let s = Scratch::new().await;
-    s.kept("STY", 1, "A baker corrects a step once").await;
-    s.open("B", "The shared step has no editor").await;
-    s.ok("parent", json!({ "a": ["B1"], "plan": "STY1" })).await;
-    assert_eq!(s.word("STY1").await, "ready");
-    let out = s
-        .ok("close", json!({ "id": "B1", "resolution": "abc1234" }))
-        .await;
-    assert_eq!(out["released"], json!([]));
-    assert_eq!(s.word("STY1").await, "ready");
-}
-
-#[tokio::test]
-async fn test_standing_items_never_close_never_wait_and_are_nobodys_move() {
+async fn test_concept_and_idea_items_read_and_close_like_any_other_item() {
     let s = Scratch::new().await;
     s.kept("CON", 1, "The pantry").await;
     s.kept("CID", 1, "Nothing deletes").await;
-    assert_eq!(s.word("CON1").await, "standing");
-    assert_eq!(
-        s.refused("close", json!({ "id": "CON1", "resolution": "done" }))
-            .await,
-        "CON1 is a concept and stays open for good. Retire it with docket drop CON1 \"why\" if it no longer holds."
-    );
-    assert_eq!(
-        s.refused("wait", json!({ "id": "CID1", "until": "later" }))
-            .await,
-        "CID1 is a standing item and never waits."
-    );
-    s.ok("drop", json!({ "id": "CID1", "why": "no longer holds" }))
+    assert_eq!(s.word("CON1").await, "ready");
+    s.ok("close", json!({ "id": "CON1", "resolution": "done" }))
+        .await;
+    assert_eq!(s.word("CON1").await, "done");
+    s.ok("wait", json!({ "id": "CID1", "until": "later" }))
         .await;
 }
 
@@ -1493,9 +1504,92 @@ async fn test_decide_appends_the_choice_and_its_basis() {
     assert_eq!(decided["data"], json!({"derived": "CID1"}));
 }
 
+#[tokio::test]
+async fn test_decide_with_an_area_records_a_placement_the_derived_digest_lists() {
+    let mut s = Scratch::new().await;
+    s.open("B", "Mend the kite").await;
+    s.forget_areas().await;
+    s.ok(
+        "decide",
+        json!({ "id": "B1", "choice": "", "basis": "its title names kites",
+                "area": "Kites", "about": "string, frames and tails" }),
+    )
+    .await;
+    let decided = s
+        .events("B1")
+        .await
+        .into_iter()
+        .find(|e| e["kind"] == "decided")
+        .unwrap();
+    assert_eq!(decided["note"], "area kites");
+    let data = decided["data"].to_string();
+    assert_eq!(
+        docket_core::area::Placement::of(&data),
+        Some(docket_core::area::Placement {
+            area: "kites".to_string(),
+            about: Some("string, frames and tails".to_string()),
+        })
+    );
+    let (_, listed) = s
+        .send(
+            Method::GET,
+            &format!("/derived?project={SLUG}&n=10"),
+            "ownerkey",
+            None,
+        )
+        .await;
+    assert_eq!(listed[0]["id"], "B1");
+    assert_eq!(listed[0]["chose"], "area kites");
+}
+
+#[tokio::test]
+async fn test_decide_with_an_area_is_refused_on_a_closed_item_unsorted_or_a_question() {
+    let mut s = Scratch::new().await;
+    s.open("B", "Mend the kite").await;
+    s.open("Q", "Which string").await;
+    s.ok("close", json!({ "id": "B1", "resolution": "fixed" }))
+        .await;
+    s.open("B", "Open one").await;
+    s.forget_areas().await;
+    let closed = s
+        .refused(
+            "decide",
+            json!({ "id": "B1", "choice": "", "basis": "b", "area": "kites" }),
+        )
+        .await;
+    assert!(closed.contains("closed"), "{closed}");
+    let unsorted = s
+        .refused(
+            "decide",
+            json!({ "id": "B2", "choice": "", "basis": "b", "area": "unsorted" }),
+        )
+        .await;
+    assert!(unsorted.contains("unsorted"), "{unsorted}");
+    let question = s
+        .refused(
+            "decide",
+            json!({ "id": "Q1", "choice": "", "basis": "b", "area": "kites" }),
+        )
+        .await;
+    assert!(question.contains("docket answer"), "{question}");
+}
+
+#[tokio::test]
+async fn test_decide_with_an_area_is_refused_once_the_project_has_area_rows() {
+    let s = two_areas().await;
+    s.open("B", "Mend the kite").await;
+    let why = s
+        .refused(
+            "decide",
+            json!({ "id": "B1", "choice": "", "basis": "b", "area": "kites" }),
+        )
+        .await;
+    assert!(why.contains("docket edit B1 --area kites"), "{why}");
+}
+
 async fn two_releases() -> Scratch {
     let s = Scratch::new().await;
-    for name in ["1.0", "1.1"] {
+    for name in ["1.0.0", "1.1.0"] {
         s.ok("releases", json!({ "action": "add", "name": name }))
             .await;
     }
@@ -1513,12 +1607,12 @@ async fn filed(s: &Scratch, key: &str, release: &str) {
 #[tokio::test]
 async fn test_a_wait_on_an_item_in_a_later_release_is_refused_unless_forced() {
     let s = two_releases().await;
-    filed(&s, "T", "1.0").await;
-    filed(&s, "T", "1.1").await;
-    filed(&s, "T", "1.0").await;
+    filed(&s, "T", "1.0.0").await;
+    filed(&s, "T", "1.1.0").await;
+    filed(&s, "T", "1.0.0").await;
     assert_eq!(
         s.refused("wait", json!({ "id": "T1", "on": "T2" })).await,
-        "T1 (1.0) would be held by T2 (1.1), which ships later. Move T2 to 1.0, or move T1 to 1.1, or pass --force."
+        "T1 (1.0.0) would be held by T2 (1.1.0), which ships later. Move T2 to 1.0.0, or move T1 to 1.1.0, or pass --force."
     );
     s.ok("wait", json!({ "id": "T2", "on": "T1" })).await;
     s.ok("wait", json!({ "id": "T3", "on": "T1" })).await;
@@ -1531,12 +1625,12 @@ async fn test_a_wait_on_an_item_in_a_later_release_is_refused_unless_forced() {
 #[tokio::test]
 async fn test_a_plan_is_not_linked_to_a_member_in_a_later_release_unless_forced() {
     let s = two_releases().await;
-    filed(&s, "A", "1.0").await;
-    filed(&s, "T", "1.1").await;
+    filed(&s, "A", "1.0.0").await;
+    filed(&s, "T", "1.1.0").await;
     assert_eq!(
         s.refused("parent", json!({ "a": ["T1"], "plan": "A1" }))
             .await,
-        "A1 (1.0) would be held by T1 (1.1), which ships later. Move T1 to 1.0, or move A1 to 1.1, or pass --force."
+        "A1 (1.0.0) would be held by T1 (1.1.0), which ships later. Move T1 to 1.0.0, or move A1 to 1.1.0, or pass --force."
     );
     s.ok(
         "parent",
@@ -1548,21 +1642,23 @@ async fn test_a_plan_is_not_linked_to_a_member_in_a_later_release_unless_forced(
 #[tokio::test]
 async fn test_a_release_edit_that_puts_a_hold_into_a_later_release_is_refused() {
     let s = two_releases().await;
-    filed(&s, "T", "1.0").await;
-    filed(&s, "T", "1.0").await;
+    filed(&s, "T", "1.0.0").await;
+    filed(&s, "T", "1.0.0").await;
     s.ok("wait", json!({ "id": "T1", "on": "T2" })).await;
     assert_eq!(
-        s.refused("edit", json!({ "id": "T2", "release": "1.1" }))
+        s.refused("edit", json!({ "id": "T2", "release": "1.1.0" }))
             .await,
-        "T1 (1.0) would be held by T2 (1.1), which ships later. Move T2 to 1.0, or move T1 to 1.1, or pass --force."
+        "T1 (1.0.0) would be held by T2 (1.1.0), which ships later. Move T2 to 1.0.0, or move T1 to 1.1.0, or pass --carry to move them together, or --force."
     );
     assert_eq!(
         s.refused("edit", json!({ "id": "T2", "release": "" }))
             .await,
-        "T1 (1.0) would be held by T2 (the backlog), which ships later. Move T2 to 1.0, or move T1 to the backlog, or pass --force."
+        "T1 (1.0.0) would be held by T2 (the backlog), which ships later. Move T2 to 1.0.0, or move T1 to the backlog, or pass --carry to move them together, or --force."
     );
-    s.ok("edit", json!({ "id": "T1", "release": "1.1" })).await;
-    s.ok("edit", json!({ "id": "T2", "release": "1.1" })).await;
+    s.ok("edit", json!({ "id": "T1", "release": "1.1.0" }))
+        .await;
+    s.ok("edit", json!({ "id": "T2", "release": "1.1.0" }))
+        .await;
 }
 
 #[tokio::test]
@@ -1702,6 +1798,53 @@ async fn test_an_unclaim_stores_its_outcome_and_who_gave_it_back() {
 }
 
 #[tokio::test]
+async fn test_a_second_failed_unclaim_assigns_the_item_to_the_owner() {
+    let s = Scratch::new().await;
+    s.open("B", "Kettle trips the fuse").await;
+    for attempt in 1..=2 {
+        s.ok(
+            "start",
+            json!({ "id": "B1", "runner": "claude", "job": "b1-j" }),
+        )
+        .await;
+        assert_eq!(s.item("B1").await["turn"], "agent", "attempt {attempt}");
+        s.ok(
+            "release",
+            json!({ "id": "B1", "outcome": "failed", "note": "the job died" }),
+        )
+        .await;
+        let turn = s.item("B1").await["turn"].clone();
+        assert_eq!(turn, if attempt == 2 { "user" } else { "agent" });
+    }
+    let rows = s.assignments("B1").await;
+    assert_eq!(rows.len(), 3, "{rows:?}");
+    assert_eq!(
+        (&rows[2]["assignee"], &rows[2]["kind"], &rows[2]["ended_at"]),
+        (&json!("owner"), &json!("ask"), &Value::Null)
+    );
+}
+
+#[tokio::test]
+async fn test_a_failed_unclaim_under_a_raised_failure_limit_stays_the_agents() {
+    let s = Scratch::new().await;
+    s.open("B", "Kettle trips the fuse").await;
+    s.db.seed(&format!(
+        "UPDATE projects SET skills = '{{\"failure_limit\": \"3\"}}' WHERE slug = '{SLUG}'"
+    ))
+    .await;
+    for _ in 0..2 {
+        s.ok(
+            "start",
+            json!({ "id": "B1", "runner": "claude", "job": "b1-j" }),
+        )
+        .await;
+        s.ok("release", json!({ "id": "B1", "outcome": "failed" }))
+            .await;
+    }
+    assert_eq!(s.item("B1").await["turn"], "agent");
+}
+
+#[tokio::test]
 async fn test_a_job_report_stores_its_tokens_and_cost_on_the_open_attempt() {
     let s = Scratch::new().await;
     s.open("B", "Kettle trips the fuse").await;
@@ -1730,6 +1873,39 @@ async fn test_a_job_report_stores_its_tokens_and_cost_on_the_open_attempt() {
     s.ok("close", json!({ "id": "B1", "resolution": "abc1234" }))
         .await;
     assert_eq!(s.assignments("B1").await[0]["tokens_out"], json!(45));
+}
+
+#[tokio::test]
+async fn test_a_job_report_stores_its_start_end_and_exit_on_the_open_attempt() {
+    let s = Scratch::new().await;
+    s.open("B", "Kettle trips the fuse").await;
+    s.ok(
+        "start",
+        json!({ "id": "B1", "runner": "claude", "job": "b1-j" }),
+    )
+    .await;
+    s.ok(
+        "job-report",
+        json!({ "id": "B1", "start": "2026-10-05T10:00:00Z", "end": "2026-10-05T10:20:00Z",
+                "exit": 3 }),
+    )
+    .await;
+    s.ok("job-report", json!({ "id": "B1", "tokens_out": 7 }))
+        .await;
+    let rows = s.assignments("B1").await;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(
+        (
+            &rows[0]["job_started_at"],
+            &rows[0]["job_ended_at"],
+            &rows[0]["job_exit"]
+        ),
+        (
+            &json!("2026-10-05T10:00:00Z"),
+            &json!("2026-10-05T10:20:00Z"),
+            &json!(3)
+        )
+    );
 }
 
 #[tokio::test]
@@ -1881,4 +2057,477 @@ async fn test_a_derived_answer_lists_first_in_the_owner_queue_until_it_is_confir
     s.ok("answer", json!({ "id": "Q2", "decision": "Two" }))
         .await;
     assert_eq!(todo().await, ["Q1"]);
+}
+
+#[tokio::test]
+async fn test_moving_a_plan_before_its_child_is_refused_and_carry_moves_both() {
+    let s = two_releases().await;
+    filed(&s, "A", "1.1.0").await;
+    filed(&s, "T", "1.1.0").await;
+    s.ok("parent", json!({ "a": ["T1"], "plan": "A1" })).await;
+    assert_eq!(
+        s.refused("edit", json!({ "id": "A1", "release": "1.0.0" }))
+            .await,
+        "A1 (1.0.0) would be held by T1 (1.1.0), which ships later. Move T1 to 1.0.0, or move A1 to 1.1.0, or pass --carry to move them together, or --force."
+    );
+    s.ok(
+        "edit",
+        json!({ "id": "A1", "release": "1.0.0", "carry": true }),
+    )
+    .await;
+    assert_eq!(s.item("A1").await["release"], "1.0.0");
+    assert_eq!(s.item("T1").await["release"], "1.0.0");
+    for id in ["A1", "T1"] {
+        let moved: Vec<Value> = s
+            .events(id)
+            .await
+            .into_iter()
+            .filter(|e| {
+                e["kind"] == "edited"
+                    && e["note"].as_str().is_some_and(|n| n.starts_with("release"))
+            })
+            .collect();
+        assert_eq!(moved.len(), 1, "{id}: {moved:?}");
+    }
+    let note = |e: &Value| e["note"].as_str().unwrap().to_string();
+    let child = s.events("T1").await;
+    assert!(
+        child.iter().any(|e| note(e).contains("with A1")),
+        "{child:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_carrying_a_dependency_later_moves_its_dependants_and_plans() {
+    let s = two_releases().await;
+    filed(&s, "A", "1.0.0").await;
+    filed(&s, "T", "1.0.0").await;
+    filed(&s, "T", "1.0.0").await;
+    s.ok("parent", json!({ "a": ["T1"], "plan": "A1" })).await;
+    s.ok("wait", json!({ "id": "T1", "on": "T2" })).await;
+    assert!(
+        s.refused("edit", json!({ "id": "T2", "release": "1.1.0" }))
+            .await
+            .contains("T1 (1.0.0)")
+    );
+    s.ok(
+        "edit",
+        json!({ "id": "T2", "release": "1.1.0", "carry": true }),
+    )
+    .await;
+    for id in ["T1", "T2", "A1"] {
+        assert_eq!(s.item(id).await["release"], "1.1.0", "{id}");
+    }
+}
+
+#[tokio::test]
+async fn test_a_child_filed_under_a_plan_takes_the_plans_release_and_never_a_later_one() {
+    let s = two_releases().await;
+    filed(&s, "A", "1.0.0").await;
+    s.ok(
+        "new",
+        json!({ "key": "T", "title": "Filed", "parent": "A1" }),
+    )
+    .await;
+    assert_eq!(s.item("T1").await["release"], "1.0.0");
+    assert_eq!(s.item("T1").await["parent"], "A1");
+    assert_eq!(
+        s.refused(
+            "new",
+            json!({ "key": "T", "title": "Later", "parent": "A1", "release": "1.1.0" })
+        )
+        .await,
+        "A1 (1.0.0) would be held by T2 (1.1.0), which ships later. Move T2 to 1.0.0, or move A1 to 1.1.0, or pass --force."
+    );
+}
+
+async fn two_areas() -> Scratch {
+    let mut s = Scratch::bare().await;
+    for name in ["lanterns", "kites"] {
+        s.ok("areas", json!({ "action": "add", "name": name }))
+            .await;
+    }
+    s.filing_area = Some("lanterns");
+    s
+}
+
+#[tokio::test]
+async fn test_an_item_put_under_a_plan_takes_the_plans_area_to_any_depth() {
+    let s = two_areas().await;
+    s.ok(
+        "new",
+        json!({ "key": "A", "title": "Light the festival", "area": "lanterns" }),
+    )
+    .await;
+    s.ok(
+        "new",
+        json!({ "key": "A", "title": "Fly at the shore", "area": "kites" }),
+    )
+    .await;
+    s.ok(
+        "new",
+        json!({ "key": "T", "title": "Tie the tails", "parent": "A2" }),
+    )
+    .await;
+    assert_eq!(s.item("T1").await["area"], "kites");
+    s.ok("parent", json!({ "a": ["A2"], "plan": "A1" })).await;
+    for id in ["A2", "T1"] {
+        assert_eq!(s.item(id).await["area"], "lanterns", "{id}");
+        let carried = s.events(id).await.into_iter().any(|e| {
+            e["kind"] == "edited"
+                && e["note"]
+                    .as_str()
+                    .is_some_and(|n| n.starts_with("area lanterns") && n.contains("A1"))
+        });
+        assert!(carried, "{id}");
+    }
+    assert_eq!(
+        s.refused("edit", json!({ "id": "A2", "area": "kites" }))
+            .await,
+        "A2 is under A1, and its area is A1's: edit the area of A1 instead"
+    );
+    s.ok("edit", json!({ "id": "A1", "area": "kites" })).await;
+    for id in ["A1", "A2", "T1"] {
+        assert_eq!(s.item(id).await["area"], "kites", "{id}");
+    }
+    s.ok("parent", json!({ "a": ["A2"] })).await;
+    assert_eq!(s.item("A2").await["area"], "kites");
+}
+
+#[tokio::test]
+async fn test_a_write_naming_an_area_the_project_lacks_is_refused_with_its_areas() {
+    let s = two_areas().await;
+    assert_eq!(
+        s.refused(
+            "new",
+            json!({ "key": "T", "title": "Fold the hulls", "area": "Boats" })
+        )
+        .await,
+        "Boats is not an area here: give one of lanterns, kites"
+    );
+    s.ok("add", json!({ "title": "Fold the hulls", "area": "Kites" }))
+        .await;
+    assert_eq!(s.item("B1").await["area"], "kites");
+    s.ok(
+        "new",
+        json!({ "key": "A", "title": "Light", "area": "lanterns" }),
+    )
+    .await;
+    assert_eq!(
+        s.refused(
+            "new",
+            json!({ "key": "T", "title": "Wick", "parent": "A1", "area": "kites" })
+        )
+        .await,
+        "an item under A1 takes its area, lanterns: leave out --area"
+    );
+}
+
+#[tokio::test]
+async fn test_areas_are_kept_by_the_owner_and_removed_only_when_nothing_carries_them() {
+    let s = two_areas().await;
+    assert_eq!(
+        s.refused("areas", json!({ "action": "add", "name": "Lanterns" }))
+            .await,
+        "Lanterns is already an area: lanterns"
+    );
+    let out = s
+        .ok(
+            "areas",
+            json!({ "action": "add", "name": "boats", "about": "paper hulls", "priority": "high" }),
+        )
+        .await;
+    assert_eq!(out["areas"][2]["description"], "paper hulls");
+    assert_eq!(out["areas"][2]["priority"], "high");
+    let out = s
+        .ok(
+            "areas",
+            json!({ "action": "move", "name": "boats", "to": 1 }),
+        )
+        .await;
+    let names: Vec<&str> = out["areas"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["boats", "lanterns", "kites"]);
+    let out = s
+        .ok(
+            "areas",
+            json!({ "action": "edit", "name": "boats", "rename": "rafts", "priority": "" }),
+        )
+        .await;
+    assert_eq!(out["areas"][0]["name"], "rafts");
+    assert_eq!(out["areas"][0]["priority"], Value::Null);
+    s.ok(
+        "new",
+        json!({ "key": "T", "title": "Lash", "area": "rafts" }),
+    )
+    .await;
+    assert_eq!(
+        s.refused("areas", json!({ "action": "rm", "name": "rafts" }))
+            .await,
+        "rafts is carried by 1 items: T1. Move them to another area first."
+    );
+    s.ok("edit", json!({ "id": "T1", "area": "kites" })).await;
+    let out = s
+        .ok("areas", json!({ "action": "rm", "name": "rafts" }))
+        .await;
+    assert_eq!(out["areas"].as_array().unwrap().len(), 2);
+    assert_eq!(out["areas"][0]["position"], 0);
+    let (status, _) = s
+        .post_as(
+            "agentkey",
+            "areas",
+            json!({ "action": "add", "name": "sails" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn test_graph_nodes_carry_the_name_of_their_area() {
+    let s = two_areas().await;
+    s.ok(
+        "new",
+        json!({ "key": "T", "title": "Tie the tails", "area": "kites" }),
+    )
+    .await;
+    let (status, graph) = s
+        .send(
+            Method::GET,
+            &format!("/graph?project={SLUG}"),
+            "ownerkey",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{graph}");
+    assert_eq!(graph["nodes"][0]["area"], "kites");
+}
+
+#[tokio::test]
+async fn test_a_label_is_given_to_an_item_and_read_by_everything_under_it() {
+    let s = Scratch::new().await;
+    s.ok("new", json!({ "key": "A", "title": "Move the data" }))
+        .await;
+    s.ok(
+        "new",
+        json!({ "key": "T", "title": "Copy it", "parent": "A1" }),
+    )
+    .await;
+    s.ok("new", json!({ "key": "T", "title": "Alone" })).await;
+    let out = s
+        .ok(
+            "label",
+            json!({ "action": "add", "id": "A1", "name": "area:sync", "about": "moves data between replicas" }),
+        )
+        .await;
+    assert_eq!(out["labels"][0]["name"], "area:sync");
+    assert_eq!(s.item("A1").await["labels"], json!(["area:sync"]));
+    assert_eq!(s.item("T1").await["labels"], json!(["area:sync"]));
+    assert_eq!(s.item("T2").await["labels"], json!([]));
+    let (_, listed) = s
+        .send(
+            Method::GET,
+            &format!("/labels?project={SLUG}"),
+            "ownerkey",
+            None,
+        )
+        .await;
+    assert_eq!(
+        listed,
+        json!([{"name": "area:sync", "description": "moves data between replicas", "items": 1}])
+    );
+    let noted = s
+        .events("A1")
+        .await
+        .into_iter()
+        .any(|e| e["kind"] == "edited" && e["note"] == "label area:sync");
+    assert!(noted);
+    s.ok(
+        "label",
+        json!({ "action": "add", "id": "T2", "name": "AREA:sync" }),
+    )
+    .await;
+    assert_eq!(s.item("T2").await["labels"], json!(["area:sync"]));
+    s.ok(
+        "label",
+        json!({ "action": "rm", "id": "A1", "name": "area:sync" }),
+    )
+    .await;
+    assert_eq!(s.item("T1").await["labels"], json!([]));
+    assert_eq!(
+        s.refused(
+            "label",
+            json!({ "action": "rm", "id": "A1", "name": "area:sync" })
+        )
+        .await,
+        "A1 does not carry the label area:sync"
+    );
+}
+
+#[tokio::test]
+async fn test_an_agent_may_label_an_item_and_a_blank_name_is_refused() {
+    let s = Scratch::new().await;
+    s.ok("new", json!({ "key": "T", "title": "Copy it" })).await;
+    let (status, _) = s
+        .post_as(
+            "agentkey",
+            "label",
+            json!({ "action": "add", "id": "T1", "name": "slow" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        s.refused("label", json!({ "action": "add", "id": "T1", "name": " " }))
+            .await,
+        "a label needs a name"
+    );
+}
+
+#[tokio::test]
+async fn test_an_item_filed_with_no_area_is_refused_naming_the_areas_or_how_to_add_one() {
+    let s = Scratch::bare().await;
+    let why = s.refused("new", json!({ "key": "T", "title": "x" })).await;
+    assert!(why.contains("docket areas add"), "{why}");
+    for name in ["kites", "lanterns"] {
+        s.ok("areas", json!({ "action": "add", "name": name }))
+            .await;
+    }
+    let why = s.refused("new", json!({ "key": "T", "title": "x" })).await;
+    assert!(why.contains("kites, lanterns"), "{why}");
+    let why = s.refused("add", json!({ "title": "x" })).await;
+    assert!(why.contains("kites, lanterns"), "{why}");
+}
+
+#[tokio::test]
+async fn test_an_item_filed_under_a_plan_takes_the_plans_area_and_one_naming_an_area_takes_it() {
+    let s = Scratch::bare().await;
+    for name in ["kites", "lanterns"] {
+        s.ok("areas", json!({ "action": "add", "name": name }))
+            .await;
+    }
+    s.ok(
+        "new",
+        json!({ "key": "A", "title": "Fly", "area": "kites" }),
+    )
+    .await;
+    s.ok("new", json!({ "key": "T", "title": "x", "parent": "A1" }))
+        .await;
+    assert_eq!(s.item("T1").await["area"], "kites");
+    s.ok(
+        "new",
+        json!({ "key": "T", "title": "y", "area": "lanterns" }),
+    )
+    .await;
+    assert_eq!(s.item("T2").await["area"], "lanterns");
+}
+
+/// A project with an area `kites` and a history area `unsorted` holding the done task `T1` and the done plan `A1`.
+async fn with_history_area() -> Scratch {
+    let s = Scratch::bare().await;
+    s.ok("areas", json!({ "action": "add", "name": "kites" }))
+        .await;
+    s.ok("areas", json!({ "action": "add", "name": "unsorted" }))
+        .await;
+    s.ok(
+        "new",
+        json!({ "key": "T", "title": "Mend the kite", "area": "unsorted" }),
+    )
+    .await;
+    s.ok("close", json!({ "id": "T1", "resolution": "fixed" }))
+        .await;
+    s.ok(
+        "new",
+        json!({ "key": "A", "title": "Old plan", "area": "unsorted" }),
+    )
+    .await;
+    s.ok("close", json!({ "id": "A1", "resolution": "done" }))
+        .await;
+    s.db.seed(&format!(
+        "UPDATE areas SET history=true WHERE project='{SLUG}' AND name='unsorted'"
+    ))
+    .await;
+    s
+}
+
+#[tokio::test]
+async fn test_new_into_a_history_area_is_refused_naming_the_other_areas() {
+    let s = with_history_area().await;
+    let why = s
+        .refused(
+            "new",
+            json!({ "key": "T", "title": "x", "area": "unsorted" }),
+        )
+        .await;
+    assert!(why.contains("kites"), "{why}");
+}
+
+#[tokio::test]
+async fn test_reopen_from_a_history_area_needs_an_area_and_moves_the_item_there() {
+    let s = with_history_area().await;
+    let why = s
+        .refused("reopen", json!({ "id": "T1", "why": "again" }))
+        .await;
+    assert!(why.contains("--area") && why.contains("kites"), "{why}");
+    s.ok(
+        "reopen",
+        json!({ "id": "T1", "why": "again", "area": "kites" }),
+    )
+    .await;
+    assert_eq!(s.item("T1").await["area"], "kites");
+    let events = s.events("T1").await;
+    assert!(events.iter().any(|e| e["kind"] == "edited"), "{events:?}");
+    let into = s
+        .refused(
+            "reopen",
+            json!({ "id": "T1", "why": "again", "area": "kites" }),
+        )
+        .await;
+    assert!(into.contains("open"), "{into}");
+}
+
+#[tokio::test]
+async fn test_reopen_into_a_history_area_is_refused() {
+    let s = with_history_area().await;
+    let why = s
+        .refused(
+            "reopen",
+            json!({ "id": "T1", "why": "again", "area": "unsorted" }),
+        )
+        .await;
+    assert!(why.contains("kites"), "{why}");
+}
+
+#[tokio::test]
+async fn test_edit_area_into_a_history_area_is_refused_on_an_open_item_only() {
+    let s = with_history_area().await;
+    s.ok(
+        "reopen",
+        json!({ "id": "T1", "why": "again", "area": "kites" }),
+    )
+    .await;
+    let why = s
+        .refused("edit", json!({ "id": "T1", "area": "unsorted" }))
+        .await;
+    assert!(why.contains("kites"), "{why}");
+    s.ok("close", json!({ "id": "T1", "resolution": "fixed" }))
+        .await;
+    s.ok("edit", json!({ "id": "T1", "area": "unsorted" }))
+        .await;
+}
+
+#[tokio::test]
+async fn test_parent_under_a_closed_plan_in_a_history_area_names_the_plan_area() {
+    let s = with_history_area().await;
+    s.ok(
+        "new",
+        json!({ "key": "T", "title": "Fresh", "area": "kites" }),
+    )
+    .await;
+    let why = s
+        .refused("parent", json!({ "a": ["T2"], "plan": "A1" }))
+        .await;
+    assert!(why.contains("unsorted"), "{why}");
 }

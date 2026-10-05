@@ -9,13 +9,6 @@ fn planned(rules: Rules) -> Changes {
     plan(&rows[0], rules)
 }
 
-fn decided() -> Rules {
-    Rules {
-        held: Some(Held::Detach),
-        areas: Some(Areas::Current),
-    }
-}
-
 fn risky(c: &Changes, pick: impl Fn(&Case) -> bool) -> Vec<&Risky> {
     c.risky.iter().filter(|r| pick(&r.case)).collect()
 }
@@ -28,8 +21,15 @@ fn s(id: &str) -> String {
     id.to_string()
 }
 
+/// Nothing stops the write but the items no plan or concept places.
+fn writable_but_for_areas(c: &Changes) -> bool {
+    !c.risky
+        .iter()
+        .any(|r| r.case.blocks() || r.waits.is_some_and(|d| d != Decision::Unplaced))
+}
+
 #[test]
-fn test_a_plan_held_by_later_work_waits_on_the_rule_and_the_write_is_refused() {
+fn test_a_plan_held_by_later_work_pulls_them_into_its_release_without_a_rule_given() {
     let c = planned(Rules::default());
     let held = risky(&c, |k| matches!(k, Case::HeldPlan { .. }));
     assert_eq!(held.len(), 1, "{:#?}", c.risky);
@@ -37,68 +37,25 @@ fn test_a_plan_held_by_later_work_waits_on_the_rule_and_the_write_is_refused() {
         held[0].case,
         Case::HeldPlan {
             plan: s("A1"),
-            release: s("0.3"),
-            later: vec![(s("T2"), s("0.4"))],
+            release: s("0.3.0"),
+            later: vec![(s("T2"), s("0.3.1"))],
         }
     );
-    assert_eq!(held[0].waits, Some(Decision::Held));
-    let refused = c.writable().unwrap_err().0;
-    assert!(refused.contains("A1"), "{refused}");
-    assert!(refused.contains("swarming"), "{refused}");
-}
-
-#[test]
-fn test_each_rule_for_a_held_plan_repairs_it_its_own_way() {
-    let detach = planned(decided());
+    assert_eq!(held[0].waits, None);
     assert!(has(
-        &detach,
-        &Change::Origin {
-            id: s("T2"),
-            from: s("A1")
-        }
-    ));
-    assert!(!has(
-        &detach,
-        &Change::Parent {
-            id: s("T2"),
-            parent: s("A1")
-        }
-    ));
-    assert_eq!(
-        risky(&detach, |k| matches!(k, Case::HeldPlan { .. }))[0].waits,
-        None
-    );
-    detach.writable().unwrap();
-
-    let moved = planned(Rules {
-        held: Some(Held::MovePlan),
-        ..decided()
-    });
-    assert!(has(
-        &moved,
-        &Change::InRelease {
-            id: s("A1"),
-            release: Some(s("0.4"))
-        }
-    ));
-
-    let pulled = planned(Rules {
-        held: Some(Held::PullChildren),
-        ..decided()
-    });
-    assert!(has(
-        &pulled,
+        &c,
         &Change::InRelease {
             id: s("T2"),
-            release: Some(s("0.3"))
+            release: Some(s("0.3.0"))
         }
     ));
-    assert!(pulled.grows.contains(&s("T2")), "{:?}", pulled.grows);
+    assert!(c.grows.contains(&s("T2")), "{:?}", c.grows);
+    assert!(writable_but_for_areas(&c), "{:#?}", c.risky);
 }
 
 #[test]
 fn test_the_edge_that_closes_a_wait_cycle_is_kept_as_related() {
-    let c = planned(decided());
+    let c = planned(Rules::default());
     let cycles = risky(&c, |k| matches!(k, Case::Cycle { .. }));
     let found: Vec<&Case> = cycles.iter().map(|r| &r.case).collect();
     assert_eq!(
@@ -146,7 +103,7 @@ fn test_the_edge_that_closes_a_wait_cycle_is_kept_as_related() {
 
 #[test]
 fn test_an_item_under_two_plans_keeps_the_earliest_and_relates_the_rest() {
-    let c = planned(decided());
+    let c = planned(Rules::default());
     let two = risky(&c, |k| matches!(k, Case::TwoPlans { .. }));
     assert_eq!(two.len(), 1, "{:#?}", c.risky);
     assert_eq!(
@@ -171,7 +128,7 @@ fn test_an_item_under_two_plans_keeps_the_earliest_and_relates_the_rest() {
 }
 
 #[test]
-fn test_an_area_theme_becomes_a_label_and_its_release_waits_on_the_rule() {
+fn test_an_area_theme_keeps_its_label_and_needs_no_decision() {
     let c = planned(Rules::default());
     let folded = risky(&c, |k| matches!(k, Case::FoldedTheme { .. }));
     assert_eq!(folded.len(), 1, "{:#?}", c.risky);
@@ -182,7 +139,12 @@ fn test_an_area_theme_becomes_a_label_and_its_release_waits_on_the_rule() {
             open: 1,
         }
     );
-    assert_eq!(folded[0].waits, Some(Decision::Areas));
+    assert_eq!(folded[0].waits, None);
+    assert_eq!(
+        folded[0].action,
+        "0 to their plan's release, 1 to the backlog"
+    );
+    assert!(writable_but_for_areas(&c), "{:#?}", c.risky);
     assert!(has(
         &c,
         &Change::Label {
@@ -190,21 +152,8 @@ fn test_an_area_theme_becomes_a_label_and_its_release_waits_on_the_rule() {
             label: s("area:swarming")
         }
     ));
-
-    let current = planned(decided());
     assert!(has(
-        &current,
-        &Change::InRelease {
-            id: s("T6"),
-            release: Some(s("0.3"))
-        }
-    ));
-    let backlog = planned(Rules {
-        areas: Some(Areas::Backlog),
-        ..decided()
-    });
-    assert!(has(
-        &backlog,
+        &c,
         &Change::InRelease {
             id: s("T6"),
             release: None
@@ -214,31 +163,31 @@ fn test_an_area_theme_becomes_a_label_and_its_release_waits_on_the_rule() {
 
 #[test]
 fn test_a_dependency_in_a_later_release_is_pulled_in_and_counted() {
-    let c = planned(decided());
+    let c = planned(Rules::default());
     let inverted = risky(&c, |k| matches!(k, Case::Inversion { .. }));
     assert_eq!(inverted.len(), 1, "{:#?}", c.risky);
     assert_eq!(
         inverted[0].case,
         Case::Inversion {
             id: s("T9"),
-            release: s("0.3"),
+            release: s("0.3.0"),
             on: s("T10"),
-            on_release: s("0.5"),
+            on_release: s("0.3.2"),
         }
     );
-    assert_eq!(c.grows, [s("T10")]);
+    assert_eq!(c.grows, [s("T2"), s("T10")]);
     assert!(has(
         &c,
         &Change::InRelease {
             id: s("T10"),
-            release: Some(s("0.3"))
+            release: Some(s("0.3.0"))
         }
     ));
 }
 
 #[test]
 fn test_the_releases_fact_comes_first_then_version_themes_in_order() {
-    let c = planned(decided());
+    let c = planned(Rules::default());
     let names: Vec<(&str, usize, bool)> = c
         .releases
         .iter()
@@ -246,20 +195,20 @@ fn test_the_releases_fact_comes_first_then_version_themes_in_order() {
         .collect();
     assert_eq!(
         names,
-        [("0.3", 0, true), ("0.4", 1, true), ("0.5", 2, false)]
+        [("0.3.0", 0, true), ("0.3.1", 1, true), ("0.3.2", 2, false)]
     );
     assert!(has(
         &c,
         &Change::InRelease {
             id: s("B1"),
-            release: Some(s("0.3"))
+            release: Some(s("0.3.0"))
         }
     ));
 }
 
 #[test]
-fn test_waits_openers_turn_tags_and_standing_kinds_map_to_the_core() {
-    let c = planned(decided());
+fn test_waits_openers_turn_tags_and_concepts_map_to_the_core() {
+    let c = planned(Rules::default());
     for change in [
         Change::Parent {
             id: s("T7"),
@@ -296,21 +245,19 @@ fn test_waits_openers_turn_tags_and_standing_kinds_map_to_the_core() {
             id: s("STY1"),
             label: s("story"),
         },
-        Change::Label {
+        Change::InArea {
             id: s("T1"),
-            label: s("con1"),
+            area: s("hives-stay-dry"),
         },
-        Change::BecomesLabel {
+        Change::BecomesArea {
             id: s("CON1"),
-            label: s("con1"),
+            area: s("hives-stay-dry"),
         },
     ] {
         assert!(has(&c, &change), "missing {change:?}");
     }
-    assert_eq!(
-        c.labels.get("con1").map(String::as_str),
-        Some("Hives stay dry")
-    );
+    assert_eq!(c.areas[0].description, "Hives stay dry");
+    assert!(!c.labels.contains_key("con1"), "{:?}", c.labels);
     assert!(!c.changes.iter().any(|ch| matches!(
         ch,
         Change::Label { label, .. } if label == "high"
@@ -319,7 +266,7 @@ fn test_waits_openers_turn_tags_and_standing_kinds_map_to_the_core() {
 
 #[test]
 fn test_claims_past_and_present_become_assignment_rows_with_the_outcome_their_notes_name() {
-    let c = planned(decided());
+    let c = planned(Rules::default());
     let rows: Vec<&Assignment> = c
         .changes
         .iter()
@@ -362,7 +309,7 @@ fn test_a_project_with_no_release_sends_every_item_to_the_backlog() {
     for i in &mut page.items {
         i.theme = None;
     }
-    let c = plan(&Rows::of(&page)[0], decided());
+    let c = plan(&Rows::of(&page)[0], Rules::default());
     assert!(c.releases.is_empty());
     assert_eq!(
         risky(&c, |k| matches!(k, Case::NoRelease { .. }))[0].case,
@@ -382,7 +329,7 @@ fn test_a_wait_on_the_later_of_two_plans_is_still_a_cycle() {
     let mut page: DumpPage = serde_json::from_str(PAGE).unwrap();
     let t12 = page.items.iter_mut().find(|i| i.id == "T12").unwrap();
     t12.opened = vec![s("A1"), s("A2")];
-    let c = plan(&Rows::of(&page)[0], decided());
+    let c = plan(&Rows::of(&page)[0], Rules::default());
     assert!(
         c.risky.iter().any(|r| r.case
             == Case::Cycle {
@@ -414,7 +361,7 @@ fn test_an_area_themed_item_takes_its_plans_release_and_the_backlog_without_one(
     let project = ProjectDump {
         slug: s("o/p"),
         keys: serde_json::json!([{"key": "T", "kind": "work"}, {"key": "A", "kind": "audit"}]),
-        skills: serde_json::json!({"releases": "0.3 0.4"}),
+        skills: serde_json::json!({"releases": "0.3.0 0.3.1"}),
         ..ProjectDump::default()
     };
     let item = |id: &str, theme: &str, opened: &[&str]| ItemDump {
@@ -427,24 +374,26 @@ fn test_an_area_themed_item_takes_its_plans_release_and_the_backlog_without_one(
         ..ItemDump::default()
     };
     let items = [
-        item("A1", "0.4", &[]),
+        item("A1", "0.3.1", &[]),
         item("A2", "tooling", &["A1"]),
         item("T1", "tooling", &["A2"]),
         item("T2", "tooling", &[]),
+        item("A3", "tooling", &[]),
+        item("T3", "tooling", &["A3"]),
     ];
     let rows = Rows {
         project: &project,
         items: items.iter().collect(),
         events: Vec::new(),
     };
-    let c = plan(
-        &rows,
-        Rules {
-            held: Some(Held::PullChildren),
-            areas: Some(Areas::Plan),
-        },
-    );
-    for (id, release) in [("A2", Some(s("0.4"))), ("T1", Some(s("0.4"))), ("T2", None)] {
+    let c = plan(&rows, Rules::default());
+    for (id, release) in [
+        ("A2", Some(s("0.3.1"))),
+        ("T1", Some(s("0.3.1"))),
+        ("T2", None),
+        ("A3", None),
+        ("T3", None),
+    ] {
         assert!(
             has(
                 &c,
@@ -481,4 +430,637 @@ fn test_a_parent_already_set_is_kept_and_held_like_an_opened_one() {
     ));
     let held = risky(&c, |k| matches!(k, Case::HeldPlan { .. }));
     assert_eq!(held.len(), 1, "{:#?}", c.risky);
+}
+
+fn placed_in(items: &[ItemDump]) -> Changes {
+    let project = ProjectDump {
+        slug: s("o/p"),
+        keys: serde_json::json!([{"key": "T", "kind": "work"}, {"key": "A", "kind": "audit"}]),
+        skills: serde_json::json!({"releases": "0.3.0 0.8.0"}),
+        ..ProjectDump::default()
+    };
+    let rows = Rows {
+        project: &project,
+        items: items.iter().collect(),
+        events: Vec::new(),
+    };
+    plan(&rows, Rules::default())
+}
+
+fn open_item(id: &str, release: &str, opened: &[&str], waits_on: Option<&str>) -> ItemDump {
+    ItemDump {
+        project: s("o/p"),
+        id: s(id),
+        title: s(id),
+        state: s("open"),
+        theme: Some(s(release)),
+        opened: opened.iter().map(|o| s(o)).collect(),
+        wait_on: waits_on.map(|_| s("item")),
+        wait_ref: waits_on.map(s),
+        ..ItemDump::default()
+    }
+}
+
+fn assert_in(c: &Changes, id: &str, release: &str) {
+    assert!(
+        has(
+            c,
+            &Change::InRelease {
+                id: s(id),
+                release: Some(s(release))
+            }
+        ),
+        "{id} not in {release}: {:#?}",
+        c.changes
+    );
+}
+
+#[test]
+fn test_a_sub_plan_pulled_into_its_parents_release_takes_its_children_with_it() {
+    let c = placed_in(&[
+        open_item("A1", "0.3.0", &[], None),
+        open_item("A2", "0.8.0", &["A1"], None),
+        open_item("T1", "0.8.0", &["A2"], None),
+    ]);
+    assert_in(&c, "A2", "0.3.0");
+    assert_in(&c, "T1", "0.3.0");
+    assert_eq!(c.grows, [s("A2"), s("T1")]);
+    let held = risky(&c, |k| matches!(k, Case::HeldPlan { .. }));
+    assert_eq!(held.len(), 2, "{:#?}", c.risky);
+}
+
+#[test]
+fn test_a_plan_pulled_in_as_a_dependency_takes_its_children_with_it() {
+    let c = placed_in(&[
+        open_item("T1", "0.3.0", &[], Some("A1")),
+        open_item("A1", "0.8.0", &[], None),
+        open_item("T2", "0.8.0", &["A1"], None),
+    ]);
+    assert_in(&c, "A1", "0.3.0");
+    assert_in(&c, "T2", "0.3.0");
+    assert_eq!(c.grows, [s("A1"), s("T2")]);
+}
+
+fn plan_with(fact: &str, themes: &[&str]) -> Changes {
+    let project = ProjectDump {
+        slug: s("o/p"),
+        keys: serde_json::json!([{"key": "T", "kind": "work"}]),
+        skills: serde_json::json!({ "releases": fact }),
+        ..ProjectDump::default()
+    };
+    let items: Vec<ItemDump> = themes
+        .iter()
+        .enumerate()
+        .map(|(n, t)| ItemDump {
+            project: s("o/p"),
+            id: format!("T{}", n + 1),
+            title: s("item"),
+            state: s("open"),
+            theme: Some(s(t)),
+            ..ItemDump::default()
+        })
+        .collect();
+    let rows = Rows {
+        project: &project,
+        items: items.iter().collect(),
+        events: Vec::new(),
+    };
+    plan(&rows, Rules::default())
+}
+
+#[test]
+fn test_a_releases_fact_out_of_version_order_is_risky_and_refuses_the_write() {
+    let c = plan_with("5.0.0 4.0.0", &[]);
+    let found = risky(&c, |k| matches!(k, Case::ReleaseOrder { .. }));
+    assert_eq!(found.len(), 1);
+    assert!(c.writable().is_err());
+}
+
+#[test]
+fn test_a_releases_fact_name_that_is_no_semantic_version_is_risky() {
+    let c = plan_with("4.0", &[]);
+    let found = risky(&c, |k| matches!(k, Case::ReleaseName { .. }));
+    assert_eq!(found.len(), 1);
+    assert!(found[0].line().contains("4.0"));
+    assert!(c.writable().is_err());
+}
+
+#[test]
+fn test_a_version_shaped_theme_that_is_no_semantic_version_is_a_label_not_a_release() {
+    let c = plan_with("4.0.0", &["v3.0"]);
+    assert_eq!(c.releases.len(), 1);
+    assert!(has(
+        &c,
+        &Change::Label {
+            id: s("T1"),
+            label: s("area:v3.0")
+        }
+    ));
+    assert!(writable_but_for_areas(&c), "{:#?}", c.risky);
+}
+
+#[test]
+fn test_a_semantic_theme_is_placed_in_version_order_among_the_facts_names() {
+    let c = plan_with("4.0.0 5.0.0", &["4.5.0"]);
+    let names: Vec<(&str, usize)> = c
+        .releases
+        .iter()
+        .map(|r| (r.name.as_str(), r.position))
+        .collect();
+    assert_eq!(names, [("4.0.0", 0), ("4.5.0", 1), ("5.0.0", 2)]);
+    assert!(writable_but_for_areas(&c), "{:#?}", c.risky);
+}
+
+fn crafts() -> (ProjectDump, Vec<ItemDump>, Vec<EventDump>) {
+    let project = ProjectDump {
+        slug: s("o/crafts"),
+        keys: serde_json::json!([
+            {"key": "T", "kind": "work"},
+            {"key": "A", "kind": "audit"},
+            {"key": "CON", "kind": "concept"},
+            {"key": "CID", "kind": "idea"},
+        ]),
+        skills: serde_json::json!({"releases": "0.1.0"}),
+        ..ProjectDump::default()
+    };
+    let item = |id: &str, title: &str, related: &[&str], parent: Option<&str>| ItemDump {
+        project: s("o/crafts"),
+        id: s(id),
+        title: s(title),
+        state: s("open"),
+        related: related.iter().map(|r| s(r)).collect(),
+        parent: parent.map(s),
+        opened_at: s("2026-02-01T00:00:00Z"),
+        ..ItemDump::default()
+    };
+    let mut lanterns = item("CON1", "Lanterns: paper and wire", &["A1"], None);
+    lanterns.body = s("Lamps for the night market.");
+    let mut glow = item("CID1", "Every stall glows", &[], None);
+    glow.body = s("Each stall lights its own lamp.\n");
+    let items = vec![
+        lanterns,
+        item("CON2", "Kites", &["T1"], None),
+        item("A1", "Light the market", &["CON1"], None),
+        item("T1", "Fold the frames", &["CON2"], Some("A1")),
+        item("T2", "Tie the tails", &["CON1", "CON2"], None),
+        item("T3", "Sweep the stalls", &["CID1"], None),
+        glow,
+        done_item("T4", "Count the coins"),
+        item("T5", "Hang the bunting", &[], None),
+    ];
+    let link = |at: &str, on: &str, to: &str| EventDump {
+        project: s("o/crafts"),
+        uid: format!("{at}-{on}"),
+        at: s(at),
+        host: s("h"),
+        kind: s("edited"),
+        note: Some(format!("link related {to}")),
+        item: Some(s(on)),
+        ..EventDump::default()
+    };
+    let events = vec![
+        link("2026-02-04T00:00:00Z", "T2", "CON1"),
+        link("2026-02-03T00:00:00Z", "CON2", "T2"),
+        placed(
+            "o/crafts",
+            "2026-02-05T00:00:00Z",
+            "T3",
+            r#"{"derived": "the stalls are where the kites are sold", "area": "kites"}"#,
+        ),
+    ];
+    (project, items, events)
+}
+
+fn done_item(id: &str, title: &str) -> ItemDump {
+    ItemDump {
+        project: s("o/crafts"),
+        id: s(id),
+        title: s(title),
+        state: s("done"),
+        opened_at: s("2026-02-01T00:00:00Z"),
+        ..ItemDump::default()
+    }
+}
+
+fn placed(project: &str, at: &str, on: &str, data: &str) -> EventDump {
+    EventDump {
+        project: s(project),
+        uid: format!("{at}-{on}-decided"),
+        at: s(at),
+        host: s("h"),
+        kind: s("decided"),
+        item: Some(s(on)),
+        data: Some(s(data)),
+        ..EventDump::default()
+    }
+}
+
+fn planned_crafts() -> Changes {
+    let (project, items, events) = crafts();
+    let rows = Rows {
+        project: &project,
+        items: items.iter().collect(),
+        events: events.iter().collect(),
+    };
+    plan(&rows, Rules::default())
+}
+
+fn area_of(c: &Changes, id: &str) -> Option<String> {
+    c.changes.iter().find_map(|ch| match ch {
+        Change::InArea { id: i, area } if i == id => Some(area.clone()),
+        _ => None,
+    })
+}
+
+#[test]
+fn test_each_concept_becomes_an_area_named_by_its_title_before_the_colon() {
+    let c = planned_crafts();
+    assert_eq!(
+        c.areas,
+        [
+            Area {
+                name: s("lanterns"),
+                description: s("Lanterns: paper and wire\n\nLamps for the night market."),
+                position: 0,
+                concept: Some(s("CON1")),
+                history: false,
+            },
+            Area {
+                name: s("kites"),
+                description: s("Kites"),
+                position: 1,
+                concept: Some(s("CON2")),
+                history: false,
+            },
+            Area {
+                name: s("unsorted"),
+                description: s("closed items no area claimed at the migration"),
+                position: 2,
+                concept: None,
+                history: true,
+            },
+        ]
+    );
+    for (id, area) in [("CON1", "lanterns"), ("CON2", "kites")] {
+        assert!(has(
+            &c,
+            &Change::BecomesArea {
+                id: s(id),
+                area: s(area)
+            }
+        ));
+    }
+    assert!(!c.changes.iter().any(|ch| matches!(
+        ch,
+        Change::BecomesLabel { id, .. } | Change::Label { id, .. } if id.starts_with("CON")
+    )));
+    assert!(!c.labels.contains_key("con1"), "{:?}", c.labels);
+    let text = c.lines().join("\n");
+    assert!(
+        text.contains("area lanterns at 0, from CON1, 3 items"),
+        "{text}"
+    );
+    assert!(
+        text.contains("CON1 is dropped: became area lanterns"),
+        "{text}"
+    );
+}
+
+#[test]
+fn test_an_item_takes_its_plans_area_over_its_own_concept_and_says_so() {
+    let c = planned_crafts();
+    assert_eq!(area_of(&c, "A1").as_deref(), Some("lanterns"));
+    assert_eq!(area_of(&c, "T1").as_deref(), Some("lanterns"));
+    let found = risky(&c, |k| matches!(k, Case::PlanArea { .. }));
+    assert_eq!(found.len(), 1, "{:#?}", c.risky);
+    assert_eq!(
+        found[0].case,
+        Case::PlanArea {
+            id: s("T1"),
+            plan: s("A1"),
+            area: s("lanterns"),
+            own: vec![s("kites")],
+        }
+    );
+    assert_eq!(found[0].waits, None);
+}
+
+#[test]
+fn test_an_item_under_no_plan_tied_to_several_concepts_takes_the_oldest_link() {
+    let c = planned_crafts();
+    assert_eq!(area_of(&c, "T2").as_deref(), Some("kites"));
+    let found = risky(&c, |k| matches!(k, Case::SeveralConcepts { .. }));
+    assert_eq!(found.len(), 1, "{:#?}", c.risky);
+    assert_eq!(
+        found[0].case,
+        Case::SeveralConcepts {
+            id: s("T2"),
+            area: s("kites"),
+            gave_up: vec![s("lanterns")],
+        }
+    );
+    assert_eq!(found[0].waits, None);
+}
+
+#[test]
+fn test_an_open_item_nothing_places_waits_on_an_agents_placement() {
+    let c = planned_crafts();
+    assert_eq!(area_of(&c, "T5"), None);
+    assert_eq!(area_of(&c, "CID1"), None);
+    assert!(has(
+        &c,
+        &Change::BecomesLabel {
+            id: s("CID1"),
+            label: s("goal:every-stall-glows")
+        }
+    ));
+    assert_eq!(
+        c.labels.get("goal:every-stall-glows").map(String::as_str),
+        Some("Each stall lights its own lamp.")
+    );
+    assert!(has(
+        &c,
+        &Change::Label {
+            id: s("T3"),
+            label: s("goal:every-stall-glows")
+        }
+    ));
+    let found = risky(&c, |k| matches!(k, Case::Unplaced { .. }));
+    assert_eq!(found.len(), 1, "{:#?}", c.risky);
+    assert_eq!(
+        found[0].case,
+        Case::Unplaced {
+            open: vec![s("T5")]
+        }
+    );
+    assert_eq!(found[0].waits, Some(Decision::Unplaced));
+    assert_eq!(
+        Decision::Unplaced.what(),
+        "an agent's placement (docket decide ID --area NAME)"
+    );
+    let refused = c.writable().unwrap_err().0;
+    assert!(refused.contains(Decision::Unplaced.what()), "{refused}");
+    assert!(refused.contains("T5"), "{refused}");
+    assert!(!refused.contains("T3"), "{refused}");
+}
+
+#[test]
+fn test_an_agents_placement_places_an_open_item_as_written() {
+    let c = planned_crafts();
+    assert_eq!(area_of(&c, "T3").as_deref(), Some("kites"));
+    assert!(has(
+        &c,
+        &Change::Placed {
+            id: s("T3"),
+            area: s("kites"),
+            basis: s("the stalls are where the kites are sold"),
+        }
+    ));
+    let text = c.lines().join("\n");
+    assert!(
+        text.contains("T3 placed in kites (derived: the stalls are where the kites are sold)"),
+        "{text}"
+    );
+    assert!(
+        c.areas
+            .iter()
+            .all(|a| a.name != "kites" || a.concept.is_some())
+    );
+}
+
+#[test]
+fn test_a_closed_item_nothing_places_goes_to_unsorted_marked_history_and_last() {
+    let c = planned_crafts();
+    assert_eq!(area_of(&c, "T4").as_deref(), Some("unsorted"));
+    assert_eq!(area_of(&c, "T5"), None);
+    let last = c.areas.last().unwrap();
+    assert_eq!(
+        last,
+        &Area {
+            name: s("unsorted"),
+            description: s("closed items no area claimed at the migration"),
+            position: 2,
+            concept: None,
+            history: true,
+        }
+    );
+    assert!(c.areas[..c.areas.len() - 1].iter().all(|a| !a.history));
+    let text = c.lines().join("\n");
+    assert!(
+        text.contains("areas: 2 from concepts, 0 from placements"),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "items: 1 by plan, 2 by concept, 1 by placement, 1 closed to unsorted, 1 open unplaced"
+        ),
+        "{text}"
+    );
+}
+
+#[test]
+fn test_a_placement_on_an_item_a_plan_or_concept_places_is_ignored_with_a_line() {
+    let (project, items, mut events) = crafts();
+    events.push(placed(
+        "o/crafts",
+        "2026-02-06T00:00:00Z",
+        "T1",
+        r#"{"derived": "frames are kite work", "area": "kites"}"#,
+    ));
+    let rows = Rows {
+        project: &project,
+        items: items.iter().collect(),
+        events: events.iter().collect(),
+    };
+    let c = plan(&rows, Rules::default());
+    assert_eq!(area_of(&c, "T1").as_deref(), Some("lanterns"));
+    let found = risky(&c, |k| matches!(k, Case::PlacementIgnored { .. }));
+    assert_eq!(found.len(), 1, "{:#?}", c.risky);
+    assert_eq!(
+        found[0].case,
+        Case::PlacementIgnored {
+            id: s("T1"),
+            placed: s("kites"),
+            area: s("lanterns"),
+        }
+    );
+    assert_eq!(found[0].waits, None);
+}
+
+fn spans() -> Changes {
+    let project = ProjectDump {
+        slug: s("o/spans"),
+        keys: serde_json::json!([{"key": "T", "kind": "work"}, {"key": "A", "kind": "audit"}]),
+        skills: serde_json::json!({"releases": "0.1.0"}),
+        ..ProjectDump::default()
+    };
+    let item = |id: &str, opened: &[&str]| ItemDump {
+        project: s("o/spans"),
+        id: s(id),
+        title: s(id),
+        state: s("open"),
+        opened: opened.iter().map(|o| s(o)).collect(),
+        ..ItemDump::default()
+    };
+    let items = [item("A1", &[]), item("T1", &["A1"])];
+    let events = [
+        placed(
+            "o/spans",
+            "2026-03-01T00:00:00Z",
+            "A1",
+            r#"{"derived": "an early guess", "area": "ropes"}"#,
+        ),
+        placed(
+            "o/spans",
+            "2026-03-02T00:00:00Z",
+            "A1",
+            r#"{"derived": "the plan builds crossings", "area": "bridges", "about": "rope and plank crossings"}"#,
+        ),
+        placed(
+            "o/spans",
+            "2026-03-03T00:00:00Z",
+            "A1",
+            r#"{"derived": "a decision with no area"}"#,
+        ),
+    ];
+    let rows = Rows {
+        project: &project,
+        items: items.iter().collect(),
+        events: events.iter().collect(),
+    };
+    plan(&rows, Rules::default())
+}
+
+#[test]
+fn test_a_project_with_no_concept_takes_its_areas_from_placements_and_a_plan_passes_its_down() {
+    let c = spans();
+    assert_eq!(
+        c.areas,
+        [Area {
+            name: s("bridges"),
+            description: s("rope and plank crossings"),
+            position: 0,
+            concept: None,
+            history: false,
+        }]
+    );
+    assert_eq!(area_of(&c, "A1").as_deref(), Some("bridges"));
+    assert_eq!(area_of(&c, "T1").as_deref(), Some("bridges"));
+    assert!(c.writable().is_ok(), "{:#?}", c.risky);
+    let text = c.lines().join("\n");
+    assert!(
+        text.contains("area bridges at 0, from a placement, 2 items"),
+        "{text}"
+    );
+    assert!(
+        text.contains("A1 placed in bridges (derived: the plan builds crossings)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("areas: 0 from concepts, 1 from placements"),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "items: 1 by plan, 0 by concept, 1 by placement, 0 closed to unsorted, 0 open unplaced"
+        ),
+        "{text}"
+    );
+}
+
+#[test]
+fn test_a_concept_named_like_an_area_the_project_has_joins_it_and_new_ones_follow() {
+    let (mut project, items, events) = crafts();
+    project.areas = vec![crate::area::Area {
+        name: s("Kites"),
+        position: 0,
+        ..crate::area::Area::default()
+    }];
+    let rows = Rows {
+        project: &project,
+        items: items.iter().collect(),
+        events: events.iter().collect(),
+    };
+    let c = plan(&rows, Rules::default());
+    let made: Vec<(&str, usize)> = c
+        .areas
+        .iter()
+        .map(|a| (a.name.as_str(), a.position))
+        .collect();
+    assert_eq!(made, [("lanterns", 1), ("unsorted", 2)]);
+    assert_eq!(area_of(&c, "T2").as_deref(), Some("Kites"));
+}
+
+#[test]
+fn test_items_under_a_projects_own_work_key_become_tasks_labelled_with_the_key() {
+    let project = ProjectDump {
+        slug: s("o/kilns"),
+        keys: serde_json::json!([
+            {"key": "T", "kind": "work"},
+            {"key": "ZQ", "kind": "work", "meaning": "loose ends"},
+            {"key": "ZD", "kind": "decision", "meaning": "forks"},
+        ]),
+        skills: serde_json::json!({"releases": "0.1.0"}),
+        ..ProjectDump::default()
+    };
+    let item = |id: &str, state: &str| ItemDump {
+        project: s("o/kilns"),
+        id: s(id),
+        title: s(id),
+        state: s(state),
+        opened_at: s("2026-02-01T00:00:00Z"),
+        ..ItemDump::default()
+    };
+    let items = [
+        item("T1", "open"),
+        item("ZQ1", "open"),
+        item("ZQ2", "done"),
+        item("ZD1", "open"),
+    ];
+    let rows = Rows {
+        project: &project,
+        items: items.iter().collect(),
+        events: Vec::new(),
+    };
+    let c = plan(&rows, Rules::default());
+    for (id, kind) in [("ZQ1", "task"), ("ZQ2", "task"), ("ZD1", "question")] {
+        assert!(
+            has(
+                &c,
+                &Change::Typed {
+                    id: s(id),
+                    kind: kind.into()
+                }
+            ),
+            "{id}"
+        );
+    }
+    assert!(
+        !c.changes
+            .iter()
+            .any(|ch| matches!(ch, Change::Typed { id, .. } if id == "T1"))
+    );
+    assert!(has(
+        &c,
+        &Change::Label {
+            id: s("ZQ2"),
+            label: s("key:zq")
+        }
+    ));
+    assert_eq!(
+        c.labels.get("key:zq").map(String::as_str),
+        Some("loose ends")
+    );
+    let own = risky(&c, |k| matches!(k, Case::OwnKey { key, .. } if key == "ZQ"));
+    assert_eq!(own.len(), 1);
+    assert_eq!(
+        own[0].case,
+        Case::OwnKey {
+            key: s("ZQ"),
+            meaning: s("loose ends"),
+            items: 2,
+            open: 1
+        }
+    );
+    assert!(own[0].line().contains("keeps its ids"));
 }

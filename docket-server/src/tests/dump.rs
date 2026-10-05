@@ -32,6 +32,10 @@ impl Dumped {
             "INSERT INTO projects (slug, keys, created_at, updated_at) VALUES ('{SLUG}', '{KEYS}', 'c', 'u')"
         ))
         .await;
+        db.seed(&format!(
+            "INSERT INTO areas (project, name, description, position, priority) VALUES ('{SLUG}', 'general', '', 1, NULL)"
+        ))
+        .await;
         let keys = Keys::parse("testbox owner ownerkey").unwrap();
         let mut d = Self {
             app: app(&db.db, keys),
@@ -101,6 +105,9 @@ impl Dumped {
     async fn write(&mut self, verb: &str, mut body: Value) -> String {
         body["project"] = json!(SLUG);
         body["branch"] = json!("audit/t-1");
+        if matches!(verb, "new" | "add") && body.get("parent").is_none() {
+            body["area"] = body.get("area").cloned().unwrap_or(json!("general"));
+        }
         let (status, out) = self
             .send(
                 Method::POST,
@@ -180,9 +187,7 @@ async fn test_dump_after_the_cursor_is_empty_until_a_write() {
 async fn run(d: &mut Dumped, steps: Vec<(&str, Value, &str)>) {
     for (verb, body, subject) in steps {
         assert_eq!(d.write(verb, body.clone()).await, subject, "{verb} {body}");
-        if verb != "key" {
-            d.named.extend(subject.split("; ").map(str::to_string));
-        }
+        d.named.extend(subject.split("; ").map(str::to_string));
     }
 }
 
@@ -314,7 +319,7 @@ async fn moves(d: &mut Dumped) {
         (
             "wait",
             json!({ "id": "B2", "until": "the fleet is quiet" }),
-            "Open B5; Wait B2",
+            "Open T1; Wait B2",
         ),
         ("resume", json!({ "id": "B2" }), "Resume B2"),
         (
@@ -328,12 +333,7 @@ async fn moves(d: &mut Dumped) {
             "Link B2",
         ),
         ("parent", json!({ "a": ["B3"] }), "Edit B3"),
-        (
-            "key",
-            json!({ "key": "I", "kind": "research", "meaning": "investigations" }),
-            "Key I",
-        ),
-        ("add", json!({ "title": "Seen on the way" }), "Open B6"),
+        ("add", json!({ "title": "Seen on the way" }), "Open B5"),
     ];
     run(d, steps).await;
 }

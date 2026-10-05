@@ -8,7 +8,7 @@ use sea_orm::{
 };
 use serde_json::{Map, Value, json};
 
-use docket_core::word::{Facts, Kind, PRIORITIES, priority, word};
+use docket_core::word::{ItemType, Kind, PRIORITIES, Standing, kind_of_type};
 
 use crate::entities::{item, project};
 
@@ -35,38 +35,9 @@ pub fn marks(n: usize) -> String {
     vec!["?"; n].join(",")
 }
 
-/// What each key of a project holds.
-pub struct Kinds(Vec<(String, Kind)>);
-
-impl Kinds {
-    pub fn of(project: &project::Model) -> Self {
-        let specs = project.keys.as_array().into_iter().flatten();
-        Self(
-            specs
-                .filter_map(|spec| {
-                    let key = spec["key"].as_str()?.to_string();
-                    let kind = serde_json::from_value(spec["kind"].clone()).ok()?;
-                    Some((key, kind))
-                })
-                .collect(),
-        )
-    }
-
-    pub fn kind(&self, key: &str) -> Kind {
-        self.0
-            .iter()
-            .find(|(k, _)| k == key)
-            .map_or(Kind::Work, |(_, kind)| *kind)
-    }
-
-    /// The keys holding one kind, in the project's order.
-    pub fn keys(&self, kind: Kind) -> Vec<String> {
-        self.0
-            .iter()
-            .filter(|(_, k)| *k == kind)
-            .map(|(key, _)| key.clone())
-            .collect()
-    }
+/// The keys holding questions: the one key questions are filed under.
+pub fn decision_keys() -> Vec<String> {
+    vec![ItemType::Question.key().to_string()]
 }
 
 /// A project by its slug.
@@ -110,58 +81,77 @@ pub async fn id_of<C: ConnectionTrait>(db: &C, rid: i64) -> Result<Option<String
     Ok(item::Entity::find_by_id(rid).one(db).await?.map(|i| i.id))
 }
 
+/// What a plan holds at any depth: its open items and its closed ones.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Members {
+    pub open: u64,
+    pub closed: u64,
+}
+
 #[derive(FromQueryResult)]
 struct Count {
     prid: i64,
-    n: i64,
+    open: i64,
+    closed: i64,
 }
 
-/// `{package rid: open members}` for every package of a project, in one query.
-pub async fn open_members<C: ConnectionTrait>(
+/// `{plan rid: its members, at any depth}` for every item that holds some, in one query.
+pub async fn member_counts<C: ConnectionTrait>(
     db: &C,
     slug: &str,
-) -> Result<HashMap<i64, u64>, DbErr> {
+) -> Result<HashMap<i64, Members>, DbErr> {
     let stmt = sql(
-        "SELECT i.parent_rid AS prid, COUNT(*) AS n FROM items i \
-         WHERE i.parent_rid IS NOT NULL AND i.state='open' AND i.project=? GROUP BY i.parent_rid",
+        "WITH RECURSIVE under(root, rid) AS ( \
+           SELECT parent_rid, rid FROM items WHERE parent_rid IS NOT NULL AND project=? \
+           UNION SELECT u.root, i.rid FROM under u JOIN items i ON i.parent_rid=u.rid) \
+         SELECT u.root AS prid, \
+                COUNT(*) FILTER (WHERE i.state='open') AS open, \
+                COUNT(*) FILTER (WHERE i.state<>'open') AS closed \
+         FROM under u JOIN items i ON i.rid=u.rid GROUP BY u.root",
         vec![slug.into()],
     );
     Ok(Count::find_by_statement(stmt)
         .all(db)
         .await?
         .into_iter()
-        .map(|c| (c.prid, c.n.unsigned_abs()))
+        .map(|c| {
+            (
+                c.prid,
+                Members {
+                    open: c.open.unsigned_abs(),
+                    closed: c.closed.unsigned_abs(),
+                },
+            )
+        })
         .collect())
 }
 
-pub fn facts(row: &item::Model, kind: Kind) -> Facts<'_> {
-    Facts {
-        state: &row.state,
-        kind,
-        claimed: row.claim_branch.is_some(),
-        waiting: row.wait_on.is_some(),
-        turn: row.turn.as_deref(),
-    }
+/// The status word of a row, the same on every surface.
+pub fn word_of(
+    state: &str,
+    claim_branch: Option<&str>,
+    wait_on: Option<&str>,
+    turn: Option<&str>,
+    kind: Kind,
+    members: Members,
+) -> &'static str {
+    Standing::of(state, claim_branch.is_some(), wait_on.is_some(), turn)
+        .holding(kind, members.open, members.closed)
+        .word()
 }
 
 /// A row as `--json` prints it: ids instead of rids, `group` not `group_name`, with its word and
-/// priority. Only a package's word reads `open_members`; `tier` overrides the priority its own tags name.
+/// priority. A plan's word reads its `members`; `tier` overrides the priority its own tags name.
 pub async fn public<C: ConnectionTrait>(
     db: &C,
     kind: Kind,
     row: item::Model,
-    open_members: u64,
+    members: Members,
     tier: Option<usize>,
 ) -> Result<Map<String, Value>, DbErr> {
-    let tags: Vec<String> = serde_json::from_value(row.tags.clone()).unwrap_or_default();
     let superseded_by = match row.superseded_by {
         Some(rid) => id_of(db, rid).await?,
         None => None,
-    };
-    let open = if kind == Kind::Package {
-        open_members
-    } else {
-        0
     };
     let release: Option<String> = match row.release_id {
         Some(id) => {
@@ -170,12 +160,30 @@ pub async fn public<C: ConnectionTrait>(
         }
         None => None,
     };
+    let area = crate::verbs::areas::name_of(db, row.area_id).await?;
     let mut out = Map::new();
-    out.insert("word".into(), json!(word(&facts(&row, kind), open)));
+    out.insert(
+        "word".into(),
+        json!(word_of(
+            &row.state,
+            row.claim_branch.as_deref(),
+            row.wait_on.as_deref(),
+            row.turn.as_deref(),
+            kind,
+            members
+        )),
+    );
     out.insert("release".into(), json!(release));
+    out.insert("area".into(), json!(area));
+    let labels: Vec<String> = crate::verbs::labels::carried(db, row.rid)
+        .await?
+        .into_iter()
+        .map(|l| l.name)
+        .collect();
+    out.insert("labels".into(), json!(labels));
     out.insert(
         "priority".into(),
-        json!(tier.map_or_else(|| priority(&tags), |t| PRIORITIES[t])),
+        json!(tier.map_or(row.priority.as_str(), |t| PRIORITIES[t])),
     );
     out.insert("group".into(), json!(row.group_name));
     out.insert("superseded_by".into(), json!(superseded_by));
@@ -195,14 +203,13 @@ pub async fn public_rows<C: ConnectionTrait>(
     project: &project::Model,
     rows: Vec<item::Model>,
 ) -> Result<Vec<Value>, Failure> {
-    let kinds = Kinds::of(project);
-    let counts = open_members(db, &project.slug)
+    let counts = member_counts(db, &project.slug)
         .await
         .map_err(|e| internal(&e))?;
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
-        let open = counts.get(&row.rid).copied().unwrap_or(0);
-        let kind = kinds.kind(&row.key);
+        let open = counts.get(&row.rid).copied().unwrap_or_default();
+        let kind = kind_of_type(&row.item_type);
         out.push(Value::Object(
             public(db, kind, row, open, None)
                 .await
@@ -277,6 +284,8 @@ struct StoredFields {
     complexity: Option<String>,
     theme: Option<String>,
     rank: Option<i64>,
+    #[serde(rename = "type")]
+    item_type: String,
     tags: Value,
     conflict: i64,
     opened_at: String,
@@ -311,6 +320,7 @@ impl From<item::Model> for StoredFields {
             complexity: r.complexity,
             theme: r.theme,
             rank: r.rank,
+            item_type: r.item_type,
             tags: r.tags,
             conflict: r.conflict,
             opened_at: r.opened_at,

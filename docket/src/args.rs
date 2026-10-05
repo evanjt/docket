@@ -4,18 +4,15 @@ use clap::{Args, CommandFactory, Parser, Subcommand};
 
 const COMPLEXITIES: [&str; 3] = ["high", "medium", "low"];
 const PRIORITIES: [&str; 4] = ["critical", "high", "normal", "low"];
-const TURNS: [&str; 2] = ["agent", "user"];
+const TURNS: [&str; 2] = docket_core::assignment::TURNS;
 const STATES: [&str; 4] = ["open", "done", "dropped", "any"];
-const RUNNERS: [&str; 3] = ["codex", "claude", "remote"];
-const ROLES: [&str; 5] = ["build", "rebase", "review", "plan", "audit"];
+const RUNNERS: [&str; 3] = docket_core::assignment::CLAIM_RUNNERS;
+const ROLES: [&str; 5] = docket_core::assignment::ROLES;
 const OUTCOMES: [&str; 5] = docket_core::assignment::OUTCOMES;
 const NEEDS: [&str; 4] = docket_core::queue::NEEDS;
 const WAITS: [&str; 2] = ["item", "condition"];
 const QUEUE_ROLES: [&str; 3] = ["plan", "work", "audit"];
 const JOB_ROLES: [&str; 3] = ["build", "audit", "plan"];
-const KINDS: [&str; 8] = [
-    "work", "decision", "research", "audit", "story", "concept", "idea", "package",
-];
 
 #[derive(Parser, Debug)]
 #[command(
@@ -50,6 +47,12 @@ pub struct Queue {
     /// only items carrying this theme
     #[arg(long)]
     pub theme: Option<String>,
+    /// only items in this area, by name
+    #[arg(long)]
+    pub area: Option<String>,
+    /// only items of this release, a name or current
+    #[arg(long)]
+    pub release: Option<String>,
     /// only items a plan opened, at any depth
     #[arg(long, value_name = "ID")]
     pub under: Option<String>,
@@ -72,6 +75,9 @@ pub struct OwnerQueue {
     /// only this theme
     #[arg(long)]
     pub theme: Option<String>,
+    /// only items in this area, by name
+    #[arg(long)]
+    pub area: Option<String>,
     /// only this key
     #[arg(long)]
     pub key: Option<String>,
@@ -126,6 +132,14 @@ pub enum Cmd {
     Done(Recent),
     /// recently dropped, newest first
     Dropped(Recent),
+    /// what a release closed, grouped by area
+    Changelog {
+        /// the release; the current one by default
+        release: Option<String>,
+        /// head each group of tickets with its plan's title
+        #[arg(long)]
+        plans: bool,
+    },
     /// items meant to be taken together
     Groups { name: Option<String> },
     /// one item in full
@@ -154,6 +168,12 @@ pub enum Cmd {
         release: Option<String>,
         #[arg(long)]
         group: Option<String>,
+        /// the area it is filed in; under a plan it is the plan's, and naming another is refused
+        #[arg(long, value_name = "AREA")]
+        area: Option<String>,
+        /// the plan it is filed under; without --release it takes the plan's release, and it may not name a later one
+        #[arg(long, value_name = "PLAN")]
+        parent: Option<String>,
     },
     /// file a side finding as a low-priority ticket
     Add {
@@ -170,6 +190,12 @@ pub enum Cmd {
         /// the release it is filed for: current or a release not shipped; none files it in the backlog; required in a job
         #[arg(long, value_name = "RELEASE")]
         release: Option<String>,
+        /// the area it is filed in; under a plan it is the plan's, and naming another is refused
+        #[arg(long, value_name = "AREA")]
+        area: Option<String>,
+        /// the plan it is filed under, which gives it the plan's area
+        #[arg(long, value_name = "PLAN")]
+        parent: Option<String>,
     },
     /// claim an item on this branch
     Start {
@@ -242,7 +268,13 @@ pub enum Cmd {
         force: bool,
     },
     /// a done or dropped item back to open, with a reason
-    Reopen { id: String, why: String },
+    Reopen {
+        id: String,
+        why: String,
+        /// the area it reopens in, needed when its own holds closed items only
+        #[arg(long)]
+        area: Option<String>,
+    },
     /// park an item behind another, or until a condition, which becomes a task for the owner
     #[command(alias = "block")]
     Wait {
@@ -257,13 +289,7 @@ pub enum Cmd {
         force: bool,
     },
     /// clear a wait by hand, and every dependency still holding the item
-    Resume {
-        id: String,
-        note: Option<String>,
-        /// open a plan's gate while items under it are still open
-        #[arg(long)]
-        force: bool,
-    },
+    Resume { id: String, note: Option<String> },
     /// what an item depends on: it waits until every dependency is satisfied
     Dep {
         #[command(subcommand)]
@@ -297,10 +323,17 @@ pub enum Cmd {
     /// record a choice made on an item by best practice, with its basis
     Decide {
         id: String,
-        choice: String,
+        #[arg(required_unless_present = "area")]
+        choice: Option<String>,
         /// the decision, central idea or practice it rests on
         #[arg(long, required = true)]
         basis: String,
+        /// place the item in this area, before areas exist; the choice defaults to "area NAME"
+        #[arg(long, value_name = "NAME")]
+        area: Option<String>,
+        /// what the area is about, with --area
+        #[arg(long, value_name = "TEXT", requires = "area")]
+        about: Option<String>,
     },
     /// set complexity
     Rate {
@@ -324,6 +357,12 @@ pub enum Cmd {
         /// the release it moves to: current, a release not shipped, or "" for the backlog
         #[arg(long, value_name = "RELEASE")]
         release: Option<String>,
+        /// with --release: move too what the move would leave out of order, dependants and plans later, dependencies and children earlier
+        #[arg(long)]
+        carry: bool,
+        /// the area it and every item under it move to; refused on an item under a plan, whose area is the plan's
+        #[arg(long, value_name = "AREA")]
+        area: Option<String>,
         #[arg(long, value_name = "TEXT")]
         append: Option<String>,
         #[arg(long, value_name = "FILE|-")]
@@ -352,6 +391,39 @@ pub enum Cmd {
         #[arg(long)]
         all: bool,
     },
+    /// a project's areas: list them, add one, edit one, move one to another place, or remove one
+    Areas {
+        /// list (the default), add, edit, move or rm
+        #[arg(value_parser = ["list", "add", "edit", "move", "rm"])]
+        action: Option<String>,
+        /// the area
+        name: Option<String>,
+        /// add and edit: what the area holds
+        #[arg(long, value_name = "TEXT")]
+        about: Option<String>,
+        /// edit: its new name
+        #[arg(long = "name", value_name = "NAME")]
+        rename: Option<String>,
+        /// add and edit: critical, high, normal or low; "" for none
+        #[arg(long, value_name = "WORD")]
+        priority: Option<String>,
+        /// move: the place it takes, the first being 1
+        #[arg(long, value_name = "PLACE")]
+        to: Option<i64>,
+    },
+    /// give an item a label, or take one from it; a plan's labels are read by every item under it
+    Label {
+        /// add or rm
+        #[arg(value_parser = ["add", "rm"])]
+        action: String,
+        id: String,
+        name: String,
+        /// add: what the label means; replaces the description it has
+        #[arg(long, value_name = "TEXT")]
+        about: Option<String>,
+    },
+    /// a project's labels with their descriptions and how many items were given each
+    Labels,
     /// A related B, or B the origin of A, what spawned it; several A at once
     Link {
         /// A... related|origin B
@@ -369,16 +441,16 @@ pub enum Cmd {
         #[arg(long)]
         none: bool,
     },
-    /// where a plan, story, package, concept, idea, group or theme stands
+    /// where a plan, story, package, idea, group, theme or area stands
     Audit {
         id: Option<String>,
         #[arg(long)]
         group: Option<String>,
         #[arg(long)]
         theme: Option<String>,
-        /// open items that belong to no concept
+        /// an area whole: its description, its priority and every item carrying it
         #[arg(long)]
-        orphans: bool,
+        area: Option<String>,
     },
     /// items, links and cited files, as JSON or Graphviz dot
     Graph {
@@ -387,16 +459,6 @@ pub enum Cmd {
         /// leave out the cited files
         #[arg(long)]
         no_files: bool,
-    },
-    /// add a key to the project's matrix, or change what it means
-    #[command(hide = true)]
-    Key {
-        key: String,
-        #[arg(value_parser = KINDS)]
-        kind: String,
-        meaning: String,
-        #[arg(long, value_parser = TURNS)]
-        turn: Option<String>,
     },
     /// full-text search, ranked, with a snippet
     Search {
@@ -440,10 +502,23 @@ pub enum Cmd {
     /// rebuild the search rows and citation links from every item's body
     #[command(hide = true)]
     Reindex,
+    /// build the published ref from the work ref's landings: print each proposed commit, or with
+    /// --messages write them; never touches the work ref and never pushes
+    Squash {
+        /// one commit message per proposed commit, a line each, oldest first
+        #[arg(long, value_name = "FILE")]
+        messages: Option<String>,
+        /// merge adjacent proposed commits until at most this many remain
+        #[arg(long, value_name = "N")]
+        cap: Option<usize>,
+    },
     /// citations that no longer resolve
     Stale {
         #[arg(long)]
         open_only: bool,
+        /// delete the job branches nothing needs that hold no commits the work ref lacks
+        #[arg(long)]
+        prune: bool,
     },
     /// the facts a project's skills read: show, KEY, KEY "value", get KEY, set KEY "value"
     Skills {
@@ -478,8 +553,6 @@ pub enum Cmd {
         #[arg(short = 'y', long)]
         yes: bool,
     },
-    /// give an item the loop parked or sent back a fresh start
-    Retry { id: String, note: Option<String> },
     /// a job under a lead on this machine: run one, list them, stop one, read its events
     #[command(hide = true)]
     Job {
@@ -622,14 +695,10 @@ pub enum AdminCmd {
         /// every project in the server's dump, not only this one
         #[arg(long)]
         all: bool,
-        /// a plan held by work in a later release: the later work leaves it, the plan moves to the
-        /// latest release, or the later work moves into the plan's; undecided when not given
-        #[arg(long, value_parser = ["detach", "move-plan", "pull-children"])]
-        held: Option<String>,
-        /// an item whose theme is not a release: to the current release, the backlog, or its
-        /// plan's release else the backlog, labelled with the theme each way; undecided when not given
-        #[arg(long, value_parser = ["current", "backlog", "plan"])]
-        areas: Option<String>,
+        /// an item whose theme is not a release: to its plan's release else the backlog (plan, the
+        /// default), or always the backlog, labelled with the theme each way
+        #[arg(long, value_parser = ["plan", "backlog"])]
+        themes: Option<String>,
     },
 }
 
@@ -698,6 +767,9 @@ pub enum JobCmd {
     },
     /// stop a job's whole process group
     Kill { job: String },
+    /// post a finished job's end to the server, from the job's own directory; its wrapper runs it
+    #[command(hide = true)]
+    Report { dir: std::path::PathBuf },
     /// the last lines of a job's event stream
     Log {
         job: String,
@@ -721,11 +793,14 @@ const GROUPS: [(&str, &[&str]); 3] = [
             "projects",
             "done",
             "dropped",
+            "changelog",
             "audit",
             "graph",
             "groups",
             "skills",
             "releases",
+            "areas",
+            "labels",
             "admin",
         ],
     ),
@@ -733,11 +808,12 @@ const GROUPS: [(&str, &[&str]); 3] = [
         "Agent",
         &[
             "next", "complex", "show", "log", "new", "add", "start", "unclaim", "close", "drop",
-            "reopen", "wait", "dep", "resume", "ask", "decide", "rate", "priority", "edit", "link",
-            "parent", "search", "similar", "deps", "files", "check", "stale",
+            "reopen", "wait", "dep", "resume", "ask", "decide", "rate", "priority", "edit",
+            "label", "link", "parent", "search", "similar", "deps", "files", "check", "stale",
+            "squash",
         ],
     ),
-    ("Lead", &["wip", "retry", "machines"]),
+    ("Lead", &["wip", "machines"]),
 ];
 
 /// The command with its verbs listed under Owner, Agent and Lead; plumbing stays out of the list.

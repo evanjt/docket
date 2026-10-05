@@ -1,10 +1,12 @@
 <script lang="ts">
-  import { releaseRow } from '../lib/releases';
+  import { inversionsOf, releaseRow } from '../lib/releases';
   import { api } from '../lib/api';
   import { project } from '../lib/context';
-  import { tally, verbWord } from '../lib/flow';
+  import { tally } from '../lib/flow';
   import { resource } from '../lib/live.svelte';
   import { render } from '../lib/markdown';
+  import { ITEM_KEYS, kindOfType } from '../lib/newitem';
+  import { href } from '../lib/route';
   import { ago, stamp } from '../lib/time';
   import type { Kind } from '../lib/types';
   import Actions from './Actions.svelte';
@@ -17,13 +19,12 @@
   const shown = resource(() => api.show(ctx.slug, id));
   const offers = resource(() => api.offers(ctx.slug, id));
   const deps = resource(() => api.deps(ctx.slug, id));
-  const context = resource(() => api.context(ctx.slug, id));
   const log = resource(() => api.log(ctx.slug, id));
 
   const item = $derived(shown.data?.id === id ? shown.data : undefined);
   const node = $derived(ctx.board?.nodes.get(id));
-  const kind = $derived<Kind>(node?.kind ?? ctx.row?.keys.find((k) => k.key === item?.key)?.kind ?? 'work');
-  const meaning = $derived(ctx.row?.keys.find((k) => k.key === item?.key)?.meaning);
+  const kind = $derived<Kind>(node?.kind ?? kindOfType(item?.type));
+  const meaning = $derived(ITEM_KEYS.find((t) => t.type === item?.type)?.meaning);
   const links = $derived({ known: (x: string) => !!ctx.board?.nodes.has(x), item: (x: string) => ctx.item(x) });
   const body = $derived(item ? render(item.body, links) : '');
   const parents = $derived(ctx.board?.parents.get(id) ?? []);
@@ -38,8 +39,9 @@
   const groupMates = $derived(dep?.group ?? []);
   const mentions = $derived(dep?.mentions ?? []);
   const sameFiles = $derived(dep?.same_files ?? []);
+  const check = resource(() => api.check(ctx.slug));
+  const inversions = $derived(inversionsOf(check.data ?? [], id));
   const rel = $derived(item ? releaseRow(item.release, ctx.releases) : null);
-  const concepts = $derived(context.data?.concepts ?? []);
   const host = (h: string | null | undefined) => (h ?? '').split('.')[0];
 </script>
 
@@ -68,7 +70,7 @@
       {#if rel}
         <div><dt>Release</dt><dd>{rel.name}{rel.current ? ' (current)' : ''}</dd></div>
       {/if}
-      {#if concepts.length}<div><dt>Concepts</dt><dd>{concepts.join(', ')}</dd></div>{/if}
+      {#if item.area}<div><dt>Area</dt><dd><a href={href(ctx.slug, 'work', { area: item.area })}>{item.area}</a></dd></div>{/if}
       {#if item.theme && !ctx.releases.includes(item.theme)}<div><dt>Theme</dt><dd>{item.theme}</dd></div>{/if}
       {#if item.claim_branch}
         <div><dt>Claimed</dt><dd><span class="id">{item.claim_branch}</span> on {host(item.claim_on ?? item.claim_host)}, {ago(item.claim_since)}{#if item.claim_job}, job <span class="id">{item.claim_job}</span>{/if}</dd></div>
@@ -77,17 +79,29 @@
     </dl>
 
     {#if item.wait_on || item.turn_note || item.decision || item.resolution}
-      <div class="standing" style="--c: var(--w-{item.word}, var(--accent))">
+      <div class="standing" style="--c: var(--w-{item.word.replace(/ /g, '-')}, var(--accent))">
         {#if item.wait_on}
           <p><strong>Waits {item.wait_on === 'item' ? 'on' : 'until'}</strong>
             {#if item.wait_on === 'item' && item.wait_ref}<a class="id ref" href={ctx.item(item.wait_ref)}>{item.wait_ref}</a>{:else}{item.wait_ref}{/if}
             {#if item.wait_since}<span class="faint">since {ago(item.wait_since)}</span>{/if}
           </p>
         {/if}
-        {#if item.turn_note}<p><strong>{item.word === 'parked' ? 'Asks you' : 'Note'}</strong> {item.turn_note}</p>{/if}
+        {#if item.turn_note}<p><strong>{item.word === 'waiting on owner' ? 'Asks you' : 'Note'}</strong> {item.turn_note}</p>{/if}
         {#if item.decision}<p><strong>Decided</strong> {item.decision} {#if item.decided_at}<span class="faint">{ago(item.decided_at)}</span>{/if}</p>{/if}
         {#if item.resolution}<p><strong>{item.state === 'dropped' ? 'Dropped' : 'Resolution'}</strong> {item.resolution}
           {#if item.superseded_by}, superseded by <a class="id ref" href={ctx.item(item.superseded_by)}>{item.superseded_by}</a>{/if}</p>{/if}
+      </div>
+    {/if}
+
+    {#if inversions.length}
+      <div class="standing inversion" style="--c: var(--w-blocked)">
+        {#each inversions as p (`${p.id}${p.by}`)}
+          <p>
+            <strong>Out of release order</strong>
+            <a class="id ref" href={ctx.item(p.id ?? '')}>{p.id}</a> in {p.release} is held by
+            <a class="id ref" href={ctx.item(p.by ?? '')}>{p.by}</a> in {p.later}.
+          </p>
+        {/each}
       </div>
     {/if}
 
@@ -160,7 +174,7 @@
           {#each [...log.data].reverse() as e (e.seq)}
             <li>
               <span class="when" title={e.at}>{stamp(e.at)}</span>
-              <span class="what" style="--c: var(--w-{verbWord(e.kind) ?? 'none'}, var(--ink))">{e.kind}</span>
+              <span class="what" >{e.kind}</span>
               <span class="note">{e.note ?? ''}</span>
               <span class="faint where">{host(e.host)}{e.branch ? ` ${e.branch}` : ''}</span>
             </li>

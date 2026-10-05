@@ -7,8 +7,6 @@
 use sea_orm::ConnectionTrait;
 use sea_orm_migration::prelude::*;
 
-use docket_core::rules::GATE;
-
 use crate::statement;
 
 /// Each open item waiting on a condition other than a plan's gate, in key and number order, with the
@@ -19,6 +17,9 @@ const WAITS: &str = "SELECT i.rid, i.project, i.title, i.theme, i.wait_ref, i.wa
     FROM items i JOIN projects j ON j.slug=i.project \
     WHERE i.state='open' AND i.wait_on='condition' AND i.wait_ref IS NOT NULL AND i.wait_ref <> ? \
     ORDER BY i.project, i.key, i.num";
+
+/// The words a plan's gate stored for the condition it held.
+const GATE: &str = "everything it opened is closed";
 
 #[derive(DeriveMigrationName)]
 pub struct Migration;

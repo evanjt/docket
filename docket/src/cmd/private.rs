@@ -54,10 +54,87 @@ pub fn private(ctx: &mut Ctx, what: &PrivateCmd) -> Result<i32> {
 }
 
 /// What a check looks for: the private names, the item keys and the item titles.
-struct Look {
+pub struct Look {
     terms: Vec<String>,
     keys: Vec<String>,
     titles: Titles,
+}
+
+impl Look {
+    /// What one line carries that a public repository must not: a private name, an item title, an
+    /// address or token, and in a commit message (`message`) an item id; with `cites`, in a code
+    /// comment, an item id.
+    fn line_hits(&self, at: &str, line: &str, message: bool, cites: bool) -> Vec<Hit> {
+        let hit = |found: String| Hit {
+            at: at.to_string(),
+            found,
+        };
+        let mut out: Vec<Hit> = hits(&self.terms, line)
+            .into_iter()
+            .map(|t| hit(t.to_string()))
+            .collect();
+        out.extend(
+            self.titles
+                .hits(line)
+                .into_iter()
+                .map(|t| hit(format!("\"{t}\" (a docket item's title)"))),
+        );
+        out.extend(
+            shapes(line)
+                .into_iter()
+                .map(|t| hit(format!("{t} (a private address or a token)"))),
+        );
+        if message {
+            out.extend(
+                message_ids(&self.keys, line)
+                    .into_iter()
+                    .map(|id| hit(format!("{id} (a docket item cited in a commit message)"))),
+            );
+        } else if cites {
+            out.extend(
+                ids(&self.keys, line)
+                    .into_iter()
+                    .map(|id| hit(format!("{id} (a docket item cited in a comment)"))),
+            );
+        }
+        out
+    }
+
+    /// The hits in the lines of a commit message, as `message N`.
+    pub fn message_hits(&self, name: &str, text: &str) -> Vec<String> {
+        text.lines()
+            .enumerate()
+            .flat_map(|(i, l)| self.line_hits(&format!("{name}:{}", i + 1), l, true, false))
+            .map(|h| format!("{}: {}", h.at, h.found))
+            .collect()
+    }
+
+    /// The hits in the lines a `-U0` diff adds, as `FILE:LINE`; a licence is not searched.
+    pub fn diff_hits(&self, diff: &str) -> Vec<String> {
+        let mut found = Vec::new();
+        let (mut file, mut n) = (String::new(), 0usize);
+        for line in diff.lines() {
+            if let Some(f) = line.strip_prefix("+++ ") {
+                file = f.strip_prefix("b/").unwrap_or(f).to_string();
+            } else if let Some(h) = line.strip_prefix("@@ ") {
+                n = h
+                    .split_whitespace()
+                    .find_map(|p| p.strip_prefix('+'))
+                    .and_then(|p| p.split(',').next())
+                    .and_then(|p| p.parse().ok())
+                    .unwrap_or(1);
+            } else if let Some(added) = line.strip_prefix('+') {
+                if !is_licence(&file) {
+                    found.extend(self.line_hits(&format!("{file}:{n}"), added, false, false));
+                }
+                n += 1;
+            }
+        }
+        found
+            .into_iter()
+            .map(|h| format!("{}: {}", h.at, h.found))
+            .collect()
+    }
 }
 
 /// The terms to look for and the item keys, from the server and this machine.
@@ -67,7 +144,7 @@ fn read_terms(ctx: &mut Ctx) -> Result<(Vec<String>, Vec<String>)> {
 
 /// The private names, keys and titles, from the server and this machine: its user name, its home,
 /// and the host aliases its ssh config names.
-fn read(ctx: &mut Ctx) -> Result<Look> {
+pub fn read(ctx: &mut Ctx) -> Result<Look> {
     let v = ctx.api.get("/private", &[])?;
     let private: Private =
         serde_json::from_value(v).map_err(|e| Fail::refused(format!("/private: {e}")))?;
@@ -160,40 +237,8 @@ fn check(ctx: &mut Ctx, scope: &Scope) -> Result<i32> {
     let want_ids = scope.ids;
     let scan =
         |name: &str, n: usize, line: &str, code: bool, message: bool, found: &mut Vec<Hit>| {
-            let at = format!("{name}:{n}");
-            for t in hits(&look.terms, line) {
-                found.push(Hit {
-                    at: at.clone(),
-                    found: t.to_string(),
-                });
-            }
-            for t in look.titles.hits(line) {
-                found.push(Hit {
-                    at: at.clone(),
-                    found: format!("\"{t}\" (a docket item's title)"),
-                });
-            }
-            for t in shapes(line) {
-                found.push(Hit {
-                    at: at.clone(),
-                    found: format!("{t} (a private address or a token)"),
-                });
-            }
-            if message {
-                for id in message_ids(&look.keys, line) {
-                    found.push(Hit {
-                        at: at.clone(),
-                        found: format!("{id} (a docket item cited in a commit message)"),
-                    });
-                }
-            } else if want_ids && code && is_comment(line) {
-                for id in ids(&look.keys, line) {
-                    found.push(Hit {
-                        at: at.clone(),
-                        found: format!("{id} (a docket item cited in a comment)"),
-                    });
-                }
-            }
+            let cites = !message && want_ids && code && is_comment(line);
+            found.extend(look.line_hits(&format!("{name}:{n}"), line, message, cites));
         };
     if let Some(range) = scope.range {
         let mut args = vec![

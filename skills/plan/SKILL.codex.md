@@ -38,14 +38,6 @@ A3` (an item has one parent, and it is a plan), `docket priority T14 high` where
 tickets. The queue reads release, then priority, then age; an item with no
 release is in the backlog, which ranks after every release.
 
-Every item filed names its release with `--release`, by what it is: a
-crash, hang, data loss, wrong numbers, upgrade safety, security, privacy or
-release work is `current` at high priority; a blocker or member of current
-work is `current`; otherwise a feature or polish goes to a later release, and
-tests, CI and hooks to the backlog (`--release ""`) under the theme the project keeps
-for them. The body's last line says
-which and why (`**Release.** current: ...`).
-
 ## An investigation
 
 Measure it with the source `docket skills measure` names, append the result

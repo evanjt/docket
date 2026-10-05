@@ -5,12 +5,12 @@ fn q(f: &Filter) -> Vec<(&'static str, String)> {
 }
 
 #[test]
-fn test_parse_maps_fields_to_the_servers_query_with_release_as_theme() {
+fn test_parse_maps_fields_to_the_servers_query_with_release() {
     let f = Filter::parse("release:7.2.0 priority:high key:B under:A7").unwrap();
     assert_eq!(
         q(&f),
         [
-            ("theme", "7.2.0".to_string()),
+            ("release", "7.2.0".to_string()),
             ("priority", "high".to_string()),
             ("key", "B".to_string()),
             ("under", "A7".to_string()),
@@ -33,7 +33,7 @@ fn test_parse_refuses_an_unknown_field_with_the_list_of_fields() {
     let e = Filter::parse("colour:red").unwrap_err();
     assert_eq!(
         e,
-        "unknown filter field colour; the fields are release, priority, key, complexity, under"
+        "unknown filter field colour; the fields are release, priority, key, complexity, under, area"
     );
 }
 
@@ -47,4 +47,12 @@ fn test_parse_refuses_a_word_without_a_value() {
 fn test_a_later_value_replaces_an_earlier_one() {
     let f = Filter::parse("key:B key:T").unwrap();
     assert_eq!(q(&f), [("key", "T".to_string())]);
+}
+
+#[test]
+fn test_area_is_kept_in_the_label_and_left_out_of_the_servers_query() {
+    let f = Filter::parse("area:kites key:T").unwrap();
+    assert_eq!(f.area.as_deref(), Some("kites"));
+    assert_eq!(q(&f), [("key", "T".to_string())]);
+    assert_eq!(f.label(), "key:T area:kites");
 }

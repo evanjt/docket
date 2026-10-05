@@ -5,7 +5,14 @@ use crate::page::HomeRow;
 use crate::style;
 
 /// The flow's words in the order the columns read.
-pub const WORDS: [&str; 6] = ["ready", "building", "checking", "blocked", "parked", "done"];
+pub const WORDS: [&str; 6] = [
+    "ready",
+    "in progress",
+    "building",
+    "audit due",
+    "blocked",
+    "done",
+];
 
 #[must_use]
 pub fn doc(rows: &[HomeRow], width: usize) -> Doc {
@@ -21,7 +28,11 @@ pub fn doc(rows: &[HomeRow], width: usize) -> Doc {
         format!("{:<name$}{:>6}{:>7}  ", "PROJECT", "OPEN", "YOURS"),
         style::bold(),
     )];
-    head.extend(WORDS.iter().map(|w| seg(format!("{w:>9}"), style::word(w))));
+    head.extend(
+        WORDS
+            .iter()
+            .map(|w| seg(format!("{w:>13}"), style::word(w))),
+    );
     d.line(head);
     for r in rows {
         d.line(row(r, name));
@@ -60,7 +71,7 @@ fn row(r: &HomeRow, name: usize) -> Vec<Seg> {
     for w in WORDS {
         let n = s.count(w);
         let tone = if n > 0 { style::word(w) } else { style::dim() };
-        segs.push(seg(format!("{n:>9}"), tone));
+        segs.push(seg(format!("{n:>13}"), tone));
     }
     segs
 }

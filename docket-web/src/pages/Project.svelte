@@ -13,6 +13,7 @@
   import Overview from './Overview.svelte';
   import Work from './Work.svelte';
   import Plans from './Plans.svelte';
+  import Areas from './Areas.svelte';
   import Yours from './Yours.svelte';
   import Activity from './Activity.svelte';
   import Settings from './Settings.svelte';
@@ -27,6 +28,11 @@
   const todo = resource(() => api.list('todo', slug));
   const questions = resource(() => api.list('questions', slug));
   const facts = resource(() => api.facts(slug));
+  const areaRows = resource(
+    () => api.areas(slug),
+    () => live.graph,
+  );
+  const areas = $derived(areaRows.data ?? []);
   const releases = $derived(facts.data?.project === slug ? releaseList(facts.data.skills) : []);
   const priorities = $derived(facts.data?.project === slug ? facts.data.priorities : []);
   const levels = $derived(facts.data?.project === slug ? facts.data.levels : []);
@@ -43,6 +49,9 @@
     },
     get board() {
       return b;
+    },
+    get areas() {
+      return areas;
     },
     get releases() {
       return releases;
@@ -64,6 +73,7 @@
     { tab: 'overview', label: 'Overview', key: 'o' },
     { tab: 'work', label: 'Work', key: 'w' },
     { tab: 'plans', label: 'Plans', key: 'p' },
+    { tab: 'areas', label: 'Areas', key: 'r' },
     { tab: 'yours', label: 'Yours', key: 'y' },
     { tab: 'activity', label: 'Activity', key: 'a' },
     { tab: 'settings', label: 'Settings', key: 's' },
@@ -112,6 +122,7 @@
       {#if tab === 'overview'}<Overview />
       {:else if tab === 'work'}<Work />
       {:else if tab === 'plans'}<Plans />
+      {:else if tab === 'areas'}<Areas />
       {:else if tab === 'yours'}<Yours />
       {:else if tab === 'activity'}<Activity />
       {:else if tab === 'settings'}<Settings />
@@ -201,7 +212,7 @@
     min-width: 18px;
     padding: 0 5px;
     border-radius: 9px;
-    background: var(--w-parked);
+    background: var(--w-waiting-on-owner);
     color: #fff;
     font-size: 11.5px;
     font-weight: 700;

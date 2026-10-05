@@ -4,7 +4,7 @@
   import { panel } from '../lib/here.svelte';
   import { act } from '../lib/session.svelte';
   import type { Kind, Offers, Shown } from '../lib/types';
-  import { WORDING, editRequest, filled, verbs, type Opened, type Verb } from '../lib/verbs';
+  import { WORDING, editRequest, filled, moveRequest, verbs, type Opened, type Verb } from '../lib/verbs';
 
   let { item, kind, offers, slug }: { item: Shown; kind: Kind; offers: Offers | undefined; slug: string } = $props();
 
@@ -68,7 +68,6 @@
       case 'close': return ['close', { ...common(held), id, resolution: given(text) }, 'Closed'];
       case 'release': return ['release', { ...common(held), id, note: given(text) }, 'Unclaimed'];
       case 'resume': return ['resume', { ...common(), id, note: given(text) }, 'Resumed'];
-      case 'retry': return ['retry', { ...common(), id, note: text.trim() }, 'Retried'];
       case 'ask': return ['ask', { ...common(held), id, note: text.trim() }, 'Parked for you'];
       case 'wait':
         return choice === 'on'
@@ -118,7 +117,7 @@
 
   async function setRelease(name: string) {
     if (name === release) return;
-    await act('edit', { ...common(), id: item.id, release: name }, `Moved to ${name}`);
+    await act('edit', moveRequest(item.id, name, common()), `Moved to ${name}`);
   }
 
   async function setLevel(level: string) {
@@ -131,7 +130,6 @@
     reply: { label: 'Reply', field: 'area', placeholder: 'What happened, for the agent that picks it up' },
     start: { label: 'Branch', field: 'line', placeholder: '' },
     close: { label: 'Resolution', field: 'line', placeholder: 'The sha the work landed as, or what closed it' },
-    retry: { label: 'Note', field: 'line', placeholder: 'What changed, for the agent that picks it up' },
     release: { label: 'Note', field: 'line', placeholder: 'Why it goes back (optional)' },
     resume: { label: 'Note', field: 'line', placeholder: 'What changed (optional)' },
     ask: { label: 'What only you can do', field: 'area', placeholder: 'The question or the step, written in full' },

@@ -1,22 +1,29 @@
 //! The rules of a docket, free of any database or transport.
 
 pub mod api;
+pub mod area;
 pub mod assignment;
 pub mod board;
+pub mod changelog;
+pub mod check;
 pub mod clock;
+pub mod cut;
 pub mod dump;
 pub mod fact;
 pub mod flow;
 pub mod item;
+pub mod label;
 pub mod lead;
 pub mod like;
 pub mod machine;
 pub mod member;
+pub mod metrics;
 pub mod migrate;
 pub mod offers;
 pub mod pace;
 pub mod private;
 pub mod project;
+pub mod publication;
 pub mod pyjson;
 pub mod queue;
 pub mod release;

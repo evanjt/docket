@@ -30,13 +30,6 @@ fix, not even a one-line gap.
    finding outside the plan's area is an observation too, unless critical or
    high: then it is linked `related` and left for planning. A choice only the owner can make is a
    question; it does not hold the audit.
-   Every item filed names its release with `--release`, by what it is: a
-   crash, hang, data loss, wrong numbers, upgrade safety, security, privacy or
-   release work is `current` at high priority; a blocker or member of current
-   work is `current`; otherwise a feature or polish goes to a later release, and
-   tests, CI and hooks to the backlog (`--release ""`) under the theme the project keeps
-   for them. The body's last line says
-   which and why (`**Release.** current: ...`).
 5. `docket close A3 "audited: principles 1-5 checked at <sha>; gaps T30, T31;
    observed: ..."`, or `clean` with no gaps. The gaps stay open as tickets.
 

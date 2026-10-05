@@ -9,9 +9,12 @@ use sea_orm::{
 };
 use serde_json::{Value as Json, json};
 
+use docket_core::area::Area;
 use docket_core::dump::{ItemDump, events_path, item_from, item_path, parse_item, project_path};
+use docket_core::label::Label;
 use docket_core::release::Release;
 use docket_core::text::{citations, split_id};
+use docket_core::word::{ItemType, Kind, PRIORITIES, priority, without_priority};
 use docket_migration::statement;
 
 use crate::tree;
@@ -168,6 +171,37 @@ async fn insert_project(tx: &DatabaseTransaction, slug: &str, doc: &Json) -> Res
         )
         .await?;
     }
+    let areas: Vec<Area> = doc
+        .get("areas")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    for a in areas {
+        exec(
+            tx,
+            "INSERT INTO areas (project, name, description, position, priority) \
+             VALUES (?, ?, ?, ?, ?)",
+            vec![
+                slug.into(),
+                a.name.into(),
+                a.description.into(),
+                a.position.into(),
+                a.priority.into(),
+            ],
+        )
+        .await?;
+    }
+    let labels: Vec<Label> = doc
+        .get("labels")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    for l in labels {
+        exec(
+            tx,
+            "INSERT INTO labels (project, name, description) VALUES (?, ?, ?)",
+            vec![slug.into(), l.name.into(), l.description.into()],
+        )
+        .await?;
+    }
     Ok(())
 }
 
@@ -178,6 +212,21 @@ fn read_item(repo: &Path, slug: &str, id: &str) -> Result<ItemDump, String> {
     item_from(slug, fields, body).map_err(|e| format!("{path}: {e}"))
 }
 
+/// The type, priority and labels an item file gives. A file written before the columns carries
+/// neither, and a restore reads them from the key and the priority word among its tags.
+fn column_values(i: &ItemDump, key: &str) -> (ItemType, String, Vec<String>) {
+    let item_type =
+        ItemType::parse(&i.item_type).unwrap_or_else(|| ItemType::of_stored(key, Kind::Work));
+    if PRIORITIES.contains(&i.priority.as_str()) {
+        return (item_type, i.priority.clone(), i.tags.clone());
+    }
+    (
+        item_type,
+        priority(&i.tags).to_string(),
+        without_priority(&i.tags),
+    )
+}
+
 /// The first pass: every plain column, the references left for when every row is in.
 async fn insert_item(tx: &DatabaseTransaction, i: &ItemDump) -> Result<i64, String> {
     let (key, num) = split_id(&i.id).map_err(|e| e.0)?;
@@ -185,6 +234,7 @@ async fn insert_item(tx: &DatabaseTransaction, i: &ItemDump) -> Result<i64, Stri
         .body
         .lines()
         .any(|l| l.starts_with("<<<<<<< ") || l.starts_with(">>>>>>> "));
+    let (item_type, priority, tags) = column_values(i, &key);
     let mut values: Vec<Value> = vec![
         i.project.clone().into(),
         key.into(),
@@ -213,23 +263,28 @@ async fn insert_item(tx: &DatabaseTransaction, i: &ItemDump) -> Result<i64, Stri
     }
     values.extend([
         i.rank.into(),
+        item_type.as_str().into(),
+        priority.into(),
         i.opened_at.clone().into(),
         i.updated_at.clone().into(),
         i.group.clone().into(),
         i.body.clone().into(),
-        json_value(json!(i.tags)),
+        json_value(json!(tags)),
         i64::from(conflict).into(),
         i.project.clone().into(),
         i.release.clone().into(),
+        i.project.clone().into(),
+        i.area.clone().into(),
     ]);
     scalar(
         tx,
         "INSERT INTO items (project, key, num, title, state, turn, turn_note, asked_at, claim_branch, \
          claim_host, claim_since, claim_runner, claim_job, claim_on, decision, decided_at, resolution, \
-         scope, complexity, theme, rank, opened_at, updated_at, group_name, body, tags, conflict, \
-         release_id) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
-         (SELECT id FROM releases WHERE project=? AND name=?)) \
+         scope, complexity, theme, rank, type, priority, opened_at, updated_at, group_name, body, tags, \
+         conflict, release_id, area_id) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
+         (SELECT id FROM releases WHERE project=? AND name=?), \
+         (SELECT id FROM areas WHERE project=? AND name=?)) \
          RETURNING rid",
         values,
     )
@@ -303,6 +358,21 @@ async fn restore_refs(tx: &DatabaseTransaction, rid: i64, i: &ItemDump) -> Resul
             tx,
             "INSERT INTO dependencies (rid, on_rid, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
             vec![rid.into(), to.into(), since.clone().into()],
+        )
+        .await?;
+    }
+    for name in i.labels.iter().flatten() {
+        let id = scalar(
+            tx,
+            "INSERT INTO labels (project, name) VALUES (?, ?) \
+             ON CONFLICT (project, lower(name)) DO UPDATE SET name=labels.name RETURNING id",
+            vec![i.project.clone().into(), name.clone().into()],
+        )
+        .await?;
+        exec(
+            tx,
+            "INSERT INTO item_labels (rid, label_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
+            vec![rid.into(), id.into()],
         )
         .await?;
     }

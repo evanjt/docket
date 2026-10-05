@@ -13,9 +13,10 @@ use docket_core::search::{any_of, fts_query, similar_terms};
 
 use crate::entities::{item, link, project};
 use crate::reads::public::{
-    Failure, Kinds, failure, internal, item_of, open_members, project_of, public, sql,
+    Failure, failure, internal, item_of, member_counts, project_of, public, sql,
 };
 use crate::reads::queue::under_cond;
+use docket_core::word::kind_of_type;
 
 const STATES: [&str; 4] = ["open", "done", "dropped", "any"];
 
@@ -123,14 +124,13 @@ async fn shaped(
     rows: Vec<(item::Model, f64, String)>,
     snippet: bool,
 ) -> Result<Json<Value>, Failure> {
-    let kinds = Kinds::of(project);
-    let counts = open_members(db, &project.slug)
+    let counts = member_counts(db, &project.slug)
         .await
         .map_err(|e| internal(&e))?;
     let mut out = Vec::with_capacity(rows.len());
     for (row, score, snip) in rows {
-        let open = counts.get(&row.rid).copied().unwrap_or(0);
-        let mut d = public(db, kinds.kind(&row.key), row, open, None)
+        let open = counts.get(&row.rid).copied().unwrap_or_default();
+        let mut d = public(db, kind_of_type(&row.item_type), row, open, None)
             .await
             .map_err(|e| internal(&e))?;
         d.insert("score".into(), json!(score));

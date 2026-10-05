@@ -61,16 +61,9 @@ reads:
 
 A defect is a `B` rather than a `T`.
 
-Every item filed names its release with `--release`, chosen by what it is,
-in this order. Its nature: a crash, a hang, data loss or wrong numbers,
-migration or upgrade safety, security or privacy, or release work is
-`--release current` at high priority. What it serves: a blocker or member of
-current-release work is `--release current`. Otherwise a feature or polish
-goes to a later release, and tests, CI and hooks to the backlog (`--release ""`)
-under the theme the project keeps for them (`docket skills releases` lists the
-releases, the current
-first). The body's last line says which and why: `**Release.** current: it
-loses the draft on resume.`
+Every item names its area, or files under its plan with `--parent`, beside its release:
+`docket new T "the change" --parent A3 --release current`. Without either the write is refused,
+and the refusal lists the project's areas. A plan names its area: `docket new A "the plan" --area NAME`.
 
 Then:
 
@@ -78,6 +71,7 @@ Then:
     docket priority T14 high            # critical, high, normal or low; normal is the default
     docket rate T14 medium              # complexity: high, medium or low
     docket edit T14 --set group=name    # tickets one session should take together
+    docket label add A3 slow-path --about "what the label means"   # a plan's labels are read by every item under it
     docket wait T15 --on T14            # T15 builds on T14, the owner ticket first
 
 The queue reads release, then priority, then age. An item with no release is in

@@ -18,7 +18,7 @@ use serde_json::Value;
 use docket_core::fact::DEFAULT_MODEL;
 
 /// The runners a job can be started on.
-pub const RUNNERS: [&str; 2] = ["claude", "codex"];
+pub const RUNNERS: [&str; 2] = docket_core::machine::RUNNERS;
 
 /// Each role's brief, with `{id}` and `{branch}` filled in when a job starts.
 pub const BRIEFS: [(&str, &str); 3] = [
@@ -30,11 +30,88 @@ pub const BRIEFS: [(&str, &str); 3] = [
 /// The verbs only the lead runs: a job asking for one is refused.
 pub const LEAD_VERBS: [&str; 6] = ["start", "unclaim", "release", "close", "drop", "reopen"];
 
-/// The shell that runs the session and records its exit code once it ends. `$1` is the job's
-/// directory, the rest the session's command.
-const WRAP: &str = r#"d=$1; shift
+/// The shell that runs the session, records its exit code once it ends, then has the reporter post
+/// the end to the server. `$1` is the job's directory, `$2` the reporter's path or nothing, the rest
+/// the session's command. A reporter that fails changes nothing: the exit file is already written.
+const WRAP: &str = r#"d=$1; r=$2; shift 2
 "$@" </dev/null >"$d/events.jsonl" 2>"$d/stderr"
-echo $? >"$d/exit.part" && mv "$d/exit.part" "$d/exit""#;
+echo $? >"$d/exit.part" && mv "$d/exit.part" "$d/exit"
+[ -z "$r" ] || "$r" job report "$d" </dev/null >/dev/null 2>&1
+true"#;
+
+/// The most processes a job may hold at once.
+pub const PROCESS_CAP: u32 = 2000;
+
+/// How a job's process count is capped, so a runaway job stops at the cap and not the machine.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cap {
+    /// A transient systemd scope of the user manager, limited in tasks.
+    Systemd(u32),
+    /// `RLIMIT_NPROC` set in the job's process before it runs, where no user manager is there.
+    Rlimit(u32),
+}
+
+impl Cap {
+    /// The cap for a machine: systemd's where `systemd-run` is on the path and a user manager runs.
+    #[must_use]
+    pub fn choose(has_systemd_run: bool, user_manager: bool, tasks: u32) -> Self {
+        if has_systemd_run && user_manager {
+            Self::Systemd(tasks)
+        } else {
+            Self::Rlimit(tasks)
+        }
+    }
+
+    /// The cap this machine can enforce.
+    #[must_use]
+    pub fn detect() -> Self {
+        let on_path = std::env::var_os("PATH")
+            .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("systemd-run").is_file()));
+        let manager = std::env::var_os("XDG_RUNTIME_DIR")
+            .is_some_and(|d| Path::new(&d).join("systemd/private").exists());
+        Self::choose(on_path, manager, PROCESS_CAP)
+    }
+
+    /// The program and arguments that start `argv` (a program and its arguments) under the cap.
+    #[must_use]
+    pub fn command(self, argv: &[String]) -> (String, Vec<String>) {
+        match self {
+            Self::Systemd(tasks) => {
+                let mut line: Vec<String> = [
+                    "--user".to_string(),
+                    "--scope".to_string(),
+                    "--quiet".to_string(),
+                    "-p".to_string(),
+                    format!("TasksMax={tasks}"),
+                    "--".to_string(),
+                ]
+                .to_vec();
+                line.extend_from_slice(argv);
+                ("systemd-run".to_string(), line)
+            }
+            Self::Rlimit(_) => (argv[0].clone(), argv[1..].to_vec()),
+        }
+    }
+}
+
+/// How a job is launched: who reports its end, and what caps its processes.
+#[derive(Clone, Debug)]
+pub struct Launch {
+    /// The program run as `job report DIR` once the session ends. None where nothing should run: a
+    /// reporter is never taken from the running executable by the library, since that is a test
+    /// binary under test.
+    pub reporter: Option<PathBuf>,
+    pub cap: Cap,
+}
+
+impl Default for Launch {
+    fn default() -> Self {
+        Self {
+            reporter: None,
+            cap: Cap::detect(),
+        }
+    }
+}
 
 /// What a job is started with, recorded as `meta.json`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -170,27 +247,54 @@ pub fn refusal(verb: &str, job: Option<&str>) -> Option<String> {
     })
 }
 
-/// Why a change to the releases is refused inside a job: they are the owner's plan. Listing is not.
+/// Why a change to the releases or the areas, `verb`, is refused inside a job: they are the owner's
+/// plan. Listing is not.
 #[must_use]
-pub fn releases_refusal(action: &str, job: Option<&str>) -> Option<String> {
+pub fn owner_plan_refusal(verb: &str, action: &str, job: Option<&str>) -> Option<String> {
     let job = job.filter(|j| !j.is_empty())?;
     (action != "list").then(|| {
         format!(
-            "docket releases {action} is refused inside the job {job}: the releases are the owner's \
+            "docket {verb} {action} is refused inside the job {job}: the {verb} are the owner's \
              plan. Name what should change in your report."
         )
     })
 }
 
-/// Why `new` or `add` is refused inside a job: every item a job files names its release, an empty
-/// one the backlog.
+/// Why installing instructions or skills, `what`, is refused inside a job: they are written outside
+/// its worktree. Showing the diff is not.
 #[must_use]
-pub fn unreleased(verb: &str, job: Option<&str>, release: Option<&str>) -> Option<String> {
+pub fn install_refusal(what: &str, job: Option<&str>) -> Option<String> {
     let job = job.filter(|j| !j.is_empty())?;
-    release.is_none().then(|| {
+    (what == "install").then(|| {
         format!(
+            "docket install is refused inside the job {job}: a job writes nothing outside its \
+             worktree, and the owner installs the instructions and skills. Name what should \
+             change in your report."
+        )
+    })
+}
+
+/// Why `new` or `add` is refused inside a job: every item a job files names its release, an empty
+/// one the backlog, and its area or the plan it files under.
+#[must_use]
+pub fn unfiled(
+    verb: &str,
+    job: Option<&str>,
+    release: Option<&str>,
+    area: Option<&str>,
+    parent: Option<&str>,
+) -> Option<String> {
+    let job = job.filter(|j| !j.is_empty())?;
+    if release.is_none() {
+        return Some(format!(
             "docket {verb} inside the job {job} needs --release: current, a later release, or \
              \"\" for the backlog, chosen by what the item is, as the brief's triage says."
+        ));
+    }
+    (area.is_none() && parent.is_none()).then(|| {
+        format!(
+            "docket {verb} inside the job {job} needs --area NAME, or --parent PLAN to file it \
+             under its plan and take the plan's area: every item names its area."
         )
     })
 }
@@ -609,6 +713,7 @@ pub struct Spec {
     pub role: String,
     /// A shell command run in the new worktree before the session starts.
     pub provision: Option<String>,
+    pub launch: Launch,
 }
 
 /// A job started: its name, its directory, and the process the caller may wait on or leave.
@@ -617,6 +722,41 @@ pub struct Started {
     pub dir: PathBuf,
     pub worktree: PathBuf,
     pub child: Child,
+}
+
+/// What a reusable worktree is named after the project: `<stem>-slot1`, `<stem>-slot2`.
+const SLOT: &str = "slot";
+
+/// A slot worktree of the checkout with no job on it: its head is detached. Reusing it keeps the
+/// build output and dependencies the ignored files hold, which a fresh worktree would rebuild.
+fn parked_slot(checkout: &Path, stem: &str) -> Result<Option<PathBuf>, String> {
+    let listing = git(checkout, &["worktree", "list", "--porcelain"])?;
+    let prefix = format!("{stem}-{SLOT}");
+    let mut found = None;
+    let mut path: Option<PathBuf> = None;
+    for line in listing.lines().chain(std::iter::once("")) {
+        if let Some(p) = line.strip_prefix("worktree ") {
+            path = Some(PathBuf::from(p));
+        } else if line == "detached" {
+            if let Some(p) = path.take().filter(|p| {
+                p.is_dir()
+                    && p.file_name()
+                        .is_some_and(|n| n.to_string_lossy().starts_with(&prefix))
+            }) {
+                found = found.or(Some(p));
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// Free a worktree for the next job: its head detached, its tracked changes and untracked files
+/// gone, its ignored files kept.
+fn park(worktree: &Path) -> Result<(), String> {
+    git(worktree, &["checkout", "--quiet", "--detach"])?;
+    git(worktree, &["reset", "--quiet", "--hard"])?;
+    git(worktree, &["clean", "--quiet", "-fd"])?;
+    Ok(())
 }
 
 fn git(checkout: &Path, args: &[&str]) -> Result<String, String> {
@@ -680,20 +820,28 @@ pub fn run(
     };
     let stem = spec.project.rsplit('/').next().unwrap_or(&spec.project);
     let parent = checkout.parent().unwrap_or(checkout);
-    let worktree = parent.join(format!("{stem}-{name}"));
-    if worktree.exists() {
-        return Err(format!("{} is already there", worktree.display()));
-    }
-    git(
-        checkout,
-        &[
-            "worktree",
-            "add",
-            &worktree.display().to_string(),
-            &spec.branch,
-        ],
-    )?;
-    provision(checkout, &worktree, spec.provision.as_deref())?;
+    let worktree = if let Some(slot) = parked_slot(checkout, stem)? {
+        git(&slot, &["checkout", "--quiet", &spec.branch])?;
+        slot
+    } else {
+        {
+            let worktree = (1..=u32::MAX)
+                .map(|n| parent.join(format!("{stem}-{SLOT}{n}")))
+                .find(|p| !p.exists())
+                .expect("an unbounded range");
+            git(
+                checkout,
+                &[
+                    "worktree",
+                    "add",
+                    &worktree.display().to_string(),
+                    &spec.branch,
+                ],
+            )?;
+            provision(checkout, &worktree, spec.provision.as_deref())?;
+            worktree
+        }
+    };
     let meta = Meta {
         name: name.clone(),
         project: spec.project.clone(),
@@ -707,7 +855,7 @@ pub fn run(
         started: now(),
         base: Some(base),
     };
-    begin(&dir, &meta, &text, program, env)
+    begin(&dir, &meta, &text, program, env, &spec.launch)
 }
 
 /// The record, the brief and the session of a job whose directory is `dir`, the session started
@@ -718,6 +866,7 @@ fn begin(
     text: &str,
     program: &str,
     env: &[(&str, &str)],
+    launch: &Launch,
 ) -> Result<Started, String> {
     fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let worktree = PathBuf::from(&meta.worktree);
@@ -737,7 +886,7 @@ fn begin(
         &worktree,
         &dir.join("final"),
     );
-    let child = spawn(dir, &worktree, program, &argv, env)
+    let child = spawn(dir, &worktree, program, &argv, env, launch)
         .map_err(|e| format!("cannot start {}: {e}", meta.runner))?;
     let pid = child.id().to_string();
     write("pid", &pid)?;
@@ -799,7 +948,7 @@ pub fn start_lead(
         started,
         base: Some(base),
     };
-    begin(&dir, &meta, LEAD_BRIEF, program, env)
+    begin(&dir, &meta, LEAD_BRIEF, program, env, &Launch::default())
 }
 
 /// The project's provision command, run in the worktree; when it fails the worktree is removed and
@@ -847,14 +996,25 @@ fn spawn(
     program: &str,
     argv: &[String],
     env: &[(&str, &str)],
+    launch: &Launch,
 ) -> io::Result<Child> {
-    let mut cmd = Command::new("sh");
-    cmd.arg("-c")
-        .arg(WRAP)
-        .arg("sh")
-        .arg(dir)
-        .arg(program)
-        .args(argv)
+    let mut wrapped: Vec<String> = vec![
+        "sh".into(),
+        "-c".into(),
+        WRAP.into(),
+        "sh".into(),
+        dir.display().to_string(),
+        launch
+            .reporter
+            .as_ref()
+            .map(|r| r.display().to_string())
+            .unwrap_or_default(),
+        program.to_string(),
+    ];
+    wrapped.extend_from_slice(argv);
+    let (exe, rest) = launch.cap.command(&wrapped);
+    let mut cmd = Command::new(exe);
+    cmd.args(rest)
         .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -862,11 +1022,30 @@ fn spawn(
     for (k, v) in env {
         cmd.env(k, v);
     }
-    // SAFETY: setsid is async-signal-safe and touches nothing the parent shares.
+    let nproc = match launch.cap {
+        Cap::Rlimit(n) => Some(libc::rlim_t::from(n)),
+        Cap::Systemd(_) => None,
+    };
+    // SAFETY: setsid and setrlimit are async-signal-safe and touch nothing the parent shares.
     unsafe {
-        cmd.pre_exec(|| {
+        cmd.pre_exec(move || {
             if libc::setsid() == -1 {
                 return Err(io::Error::last_os_error());
+            }
+            if let Some(n) = nproc {
+                let mut limit = libc::rlimit {
+                    rlim_cur: 0,
+                    rlim_max: 0,
+                };
+                if libc::getrlimit(libc::RLIMIT_NPROC, &raw mut limit) == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                // A hard limit may only be lowered, so the cap is the smaller of the two.
+                limit.rlim_cur = n.min(limit.rlim_max);
+                limit.rlim_max = limit.rlim_cur;
+                if libc::setrlimit(libc::RLIMIT_NPROC, &raw const limit) == -1 {
+                    return Err(io::Error::last_os_error());
+                }
             }
             Ok(())
         });
@@ -985,7 +1164,10 @@ pub fn change(dir: &Path, base: &str) -> Result<Change, String> {
 
 /// The submodules a listing of `git ls-files --stage -z` or `git ls-tree -z` names, as their path
 /// and pinned commit; `sha_at` is the field the commit is in.
-fn gitlinks(dir: &Path, args: &[&str], sha_at: usize) -> Result<Vec<(String, String)>, String> {
+///
+/// # Errors
+/// git fails.
+pub fn gitlinks(dir: &Path, args: &[&str], sha_at: usize) -> Result<Vec<(String, String)>, String> {
     let listed = git(dir, args)?;
     Ok(listed
         .split('\0')
@@ -1059,7 +1241,14 @@ pub fn remove(dir: &Path, keep_branch: bool) -> Result<(), String> {
         let checkout = Path::new(&common)
             .parent()
             .map_or_else(|| PathBuf::from(&common), Path::to_path_buf);
-        git(&checkout, &["worktree", "remove", "--force", &r.worktree])?;
+        let slot = worktree
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().contains(&format!("-{SLOT}")));
+        if slot {
+            park(worktree)?;
+        } else {
+            git(&checkout, &["worktree", "remove", "--force", &r.worktree])?;
+        }
         if !keep_branch {
             git(&checkout, &["branch", "-D", &r.branch])?;
         }

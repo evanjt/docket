@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api } from '../lib/api';
   import { project } from '../lib/context';
+  import { ITEM_KEYS } from '../lib/newitem';
   import { resource } from '../lib/live.svelte';
   import { act, reloadProjects } from '../lib/session.svelte';
   import type { FactSet } from '../lib/types';
@@ -80,8 +81,8 @@
       <table>
         <thead><tr><th>Key</th><th>Kind</th><th>Meaning</th><th>Starts on</th></tr></thead>
         <tbody>
-          {#each ctx.row.keys as k (k.key)}
-            <tr><td class="id">{k.key}</td><td>{k.kind}</td><td>{k.meaning ?? ''}</td><td>{k.turn === 'user' ? 'you' : (k.turn ?? 'agent')}</td></tr>
+          {#each ITEM_KEYS as k (k.key)}
+            <tr><td class="id">{k.key}</td><td>{k.kind}</td><td>{k.meaning}</td><td>{k.turn === 'user' ? 'you' : k.turn}</td></tr>
           {/each}
         </tbody>
       </table>

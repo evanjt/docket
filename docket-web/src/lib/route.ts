@@ -1,4 +1,4 @@
-export const TABS = ['overview', 'work', 'plans', 'yours', 'activity', 'settings'] as const;
+export const TABS = ['overview', 'work', 'plans', 'areas', 'yours', 'activity', 'settings'] as const;
 export type Tab = (typeof TABS)[number];
 
 export type Route =

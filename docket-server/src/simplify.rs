@@ -1,21 +1,19 @@
 //! The data moved onto the simple model, after an import: packages become plans, a review claim
-//! is given back, a plan that held its audit round closes, every plan is gated on what it opened, and
-//! the inbox, later and the release fold into priority. Ids and keys never change. A dry run makes the
+//! is given back, a plan that held its audit round closes, and the inbox, later and the release
+//! fold into priority. Ids and keys never change. A dry run makes the
 //! same writes inside a transaction it rolls back, so its report is the write's.
-
-use std::collections::BTreeSet;
 
 use sea_orm::DatabaseConnection;
 use serde_json::Value as Json;
 
 use docket_core::item::{Ctx, Field, Item};
-use docket_core::migrate::version;
-use docket_core::rules::{self, GATE, prioritise};
-use docket_core::word::{Kind, priority};
+use docket_core::rules::{self, prioritise};
+use docket_core::word::Kind;
 
+use crate::store::ProjectRow;
 use crate::store::{Tx, column, json, scalar};
 use crate::verbs::Failure;
-use crate::verbs::graph::{held_wait, keys_of, release_waiters, settle_audits};
+use crate::verbs::graph::{held_wait, release_waiters};
 
 /// The note on a package turned into a plan; it also marks a plan whose round audits are a package's.
 const BECAME_A_PLAN: &str = "a plan now: the simple model makes plans the one grouping, audited once when everything it opened is closed";
@@ -32,10 +30,6 @@ pub struct Change {
     pub released: Vec<String>,
     /// Plans that held their one audit round, closed.
     pub closed: Vec<String>,
-    /// Plans now waiting on what they opened.
-    pub gated: Vec<String>,
-    /// Plans that waited with nothing open under them, now due for their audit.
-    pub due: Vec<String>,
     /// Items taken out of the inbox or later.
     pub unscoped: Vec<String>,
     /// Items at normal priority moved to low: out of the inbox or later, or outside the release.
@@ -82,8 +76,6 @@ impl Change {
         for (n, v) in [
             ("review claims given back", &self.released),
             ("plans closed, their audit round held", &self.closed),
-            ("plans waiting on what they opened", &self.gated),
-            ("plans due for their audit", &self.due),
             ("items out of the inbox or later", &self.unscoped),
             ("items lowered to low priority", &self.lowered),
         ] {
@@ -134,6 +126,16 @@ pub async fn simplify(
     Ok(out)
 }
 
+/// The keys of the project's stored list whose kind is one of those given.
+fn keys_of(p: &ProjectRow, kinds: &[Kind]) -> Vec<String> {
+    p.rules
+        .keys
+        .iter()
+        .filter(|s| kinds.contains(&s.kind))
+        .map(|s| s.key.clone())
+        .collect()
+}
+
 async fn project(tx: &mut Tx, slug: &str) -> Result<Change, Failure> {
     let mut c = Change {
         project: slug.to_string(),
@@ -149,7 +151,6 @@ async fn project(tx: &mut Tx, slug: &str) -> Result<Change, Failure> {
         return Err(refused);
     }
     close_held_rounds(tx, slug, &plans_proper, &mut c).await?;
-    gate(tx, slug, &mut c).await?;
     fold_scopes(tx, slug, &mut c).await?;
     fold_release(tx, slug, &mut c).await?;
     Ok(c)
@@ -281,7 +282,7 @@ async fn close_held_rounds(
             format!("its audit round held, gaps {}", gaps.join(", "))
         };
         let resolution = format!("{held}: the simple model audits a plan once, in one round");
-        let cols = rules::close(&a, &forced, Some(&resolution), Kind::Audit)?;
+        let cols = rules::close(&a, &forced, Some(&resolution), Kind::Audit, &[])?;
         let row = tx.update(a.rid, &cols).await?;
         tx.event(slug, Some(a.rid), "closed", Some(&resolution), None, None)
             .await?;
@@ -292,30 +293,10 @@ async fn close_held_rounds(
     Ok(())
 }
 
-/// Every open plan settled: waiting while anything it opened is open, due when nothing is.
-async fn gate(tx: &mut Tx, slug: &str, c: &mut Change) -> Result<(), Failure> {
-    let p = tx.project(slug).await?;
-    let plans = open_of(tx, slug, &keys_of(&p, &[Kind::Audit])).await?;
-    let gated =
-        |r: &Item| r.wait_on.as_deref() == Some("condition") && r.wait_ref.as_deref() == Some(GATE);
-    let before: BTreeSet<i64> = plans.iter().filter(|r| gated(r)).map(|r| r.rid).collect();
-    let rids: Vec<i64> = plans.iter().map(|r| r.rid).collect();
-    settle_audits(tx, &p, &rids).await?;
-    for r in &plans {
-        let now = tx.fresh(r.rid).await?;
-        match (before.contains(&r.rid), gated(&now)) {
-            (false, true) => c.gated.push(r.id.clone()),
-            (true, false) => c.due.push(r.id.clone()),
-            _ => {}
-        }
-    }
-    Ok(())
-}
-
 /// The fields that lower an item at normal priority to low, none for any other tier.
 fn lowered(r: &Item) -> Result<Vec<Field>, Failure> {
-    if priority(&r.tags) == "normal" {
-        Ok(prioritise(&r.tags, "low")?)
+    if r.priority == "normal" {
+        Ok(prioritise("low")?)
     } else {
         Ok(Vec::new())
     }
@@ -393,6 +374,20 @@ async fn fold_release(tx: &mut Tx, slug: &str, c: &mut Change) -> Result<(), Fai
     Ok(())
 }
 
+/// A theme's version numbers when it names a version: digits joined by dots, at least two, with an
+/// optional leading `v`.
+fn loose_version(theme: &str) -> Option<Vec<u64>> {
+    let parts: Vec<&str> = theme
+        .strip_prefix('v')
+        .unwrap_or(theme)
+        .split('.')
+        .collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    parts.iter().map(|p| p.parse::<u64>().ok()).collect()
+}
+
 /// The releases in order: the current one, then each theme named as a version (`1.1`, `v2.0`),
 /// in version order, each once.
 #[must_use]
@@ -400,7 +395,7 @@ pub fn releases_of(current: &str, themes: &[&str]) -> Vec<String> {
     let mut later: Vec<(Vec<u64>, &str)> = themes
         .iter()
         .filter(|t| **t != current)
-        .filter_map(|t| version(t).map(|v| (v, *t)))
+        .filter_map(|t| loose_version(t).map(|v| (v, *t)))
         .collect();
     later.sort();
     later.dedup_by(|a, b| a.1 == b.1);

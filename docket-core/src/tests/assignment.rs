@@ -273,3 +273,43 @@ fn test_an_ask_keeps_the_need_its_event_names() {
     assert_eq!(rows[1].need.as_deref(), Some("access"));
     assert_eq!(rows[0].need, None);
 }
+
+#[test]
+fn test_the_failure_limit_assigns_the_item_at_the_count_not_before() {
+    assert!(!past_failure_limit(1, 2));
+    assert!(past_failure_limit(2, 2));
+}
+
+#[test]
+fn test_a_halt_needs_the_last_three_ended_attempts_all_failed() {
+    use Outcome::{Failed, Landed};
+    assert!(halt(&[Failed, Failed]).is_none());
+    assert!(halt(&[Failed, Failed, Landed]).is_none());
+    assert!(halt(&[Landed, Failed, Failed]).is_none());
+    assert!(halt(&[Failed, Failed, Failed, Landed]).is_some());
+}
+
+#[test]
+fn test_rebuild_keeps_a_job_reports_start_end_and_exit_on_the_open_claim() {
+    let mut report = event("job_reported", "2026-01-02T01:00:00Z", "build/t1-1", None);
+    report.data = Some(json!({
+        "start": "2026-01-02T00:10:00Z", "end": "2026-01-02T00:50:00Z", "exit": 2
+    }));
+    let rows = rebuild(&[
+        event("claimed", "2026-01-02T00:00:00Z", "build/t1-1", None),
+        report,
+    ]);
+    let a = &rows[0];
+    assert_eq!(
+        (
+            a.job_started_at.as_deref(),
+            a.job_ended_at.as_deref(),
+            a.job_exit
+        ),
+        (
+            Some("2026-01-02T00:10:00Z"),
+            Some("2026-01-02T00:50:00Z"),
+            Some(2)
+        )
+    );
+}

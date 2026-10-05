@@ -1,10 +1,12 @@
 //! A project's releases: rows with a name, a position, a target date and a shipped time. Order comes
 //! from the position, and every write that names a release names one that exists.
 
+use std::cmp::Ordering;
+
+use semver::Version;
 use serde::{Deserialize, Serialize};
 
 use crate::item::Refused;
-use crate::migrate::version;
 use crate::text::py_repr;
 
 /// The one alias a write may give for a release: the first not shipped.
@@ -94,26 +96,65 @@ pub fn check_name(name: &str) -> Result<(), Refused> {
             "{CURRENT} names the first release not shipped, so no release may take it"
         )));
     }
-    if version(name).is_none() {
-        return Err(Refused(format!(
-            "{name} is not a version: a release is named as numbers joined by dots, such as 1.0.0"
-        )));
+    semantic(name).map(|_| ())
+}
+
+/// A name read as a semantic version: `MAJOR.MINOR.PATCH`, with an optional prerelease and build.
+///
+/// # Errors
+/// The name is refused, with an example that parses.
+pub fn semantic(name: &str) -> Result<Version, Refused> {
+    Version::parse(name).map_err(|_| {
+        Refused(format!(
+            "{name} is not a semantic version: give MAJOR.MINOR.PATCH, as {}",
+            example(name)
+        ))
+    })
+}
+
+/// A name that parses once its numbers are padded to three parts, for the refusal's example.
+fn example(name: &str) -> String {
+    let numbers: Vec<&str> = name
+        .trim_start_matches('v')
+        .split('.')
+        .take_while(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+        .collect();
+    let mut parts: Vec<u64> = numbers
+        .iter()
+        .take(3)
+        .map(|p| p.parse().unwrap_or(0))
+        .collect();
+    if parts.is_empty() {
+        return "1.0.0".to_string();
     }
-    Ok(())
+    parts.resize(3, 0);
+    format!("{}.{}.{}", parts[0], parts[1], parts[2])
 }
 
 /// The position a new release takes among `all`: after every release with a lower version, the
-/// ones after it moved up one. Refuses a name already taken or one that is no version.
+/// ones after it moved up one. Refuses a name already taken, one of equal precedence to a release
+/// (`1.0.0+a` beside `1.0.0+b`), or one that is no semantic version.
 ///
 /// # Errors
 /// The name is refused or already a release.
 pub fn place(all: &[Release], name: &str) -> Result<i64, Refused> {
     check_name(name)?;
-    if all.iter().any(|r| r.name == name) {
+    let mine = semantic(name)?;
+    let precedence = |r: &Release| {
+        Version::parse(&r.name)
+            .ok()
+            .map(|v| v.cmp_precedence(&mine))
+    };
+    if all
+        .iter()
+        .any(|r| r.name == name || precedence(r) == Some(Ordering::Equal))
+    {
         return Err(Refused(format!("{name} is already a release")));
     }
-    let mine = version(name);
-    let before = all.iter().filter(|r| version(&r.name) < mine).count();
+    let before = all
+        .iter()
+        .filter(|r| precedence(r) == Some(Ordering::Less))
+        .count();
     Ok(i64::try_from(before).unwrap_or(i64::MAX))
 }
 

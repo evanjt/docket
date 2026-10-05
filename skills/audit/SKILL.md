@@ -67,17 +67,6 @@ but linked as related, not as an origin (`docket link T31 related A3`), and left
 planning. Stop at what matters: a second audit of the same plan files nothing
 the first passed over.
 
-Every item filed names its release with `--release`, chosen by what it is,
-in this order. Its nature: a crash, a hang, data loss or wrong numbers,
-migration or upgrade safety, security or privacy, or release work is
-`--release current` at high priority. What it serves: a blocker or member of
-current-release work is `--release current`. Otherwise a feature or polish
-goes to a later release, and tests, CI and hooks to the backlog (`--release ""`)
-under the theme the project keeps for them (`docket skills releases` lists the
-releases, the current
-first). The body's last line says which and why: `**Release.** current: it
-loses the draft on resume.`
-
 A choice only the owner can make is a question with every option and its
 evidence (`docket new Q ... --body -`); it does not hold the audit.
 

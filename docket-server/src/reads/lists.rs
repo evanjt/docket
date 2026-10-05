@@ -9,15 +9,15 @@ use std::collections::HashMap;
 
 use docket_core::flow::{DERIVED, derived_parts};
 use docket_core::queue::{OwnerFilter, OwnerRow, owner_queue};
-use docket_core::word::Kind;
-use docket_core::word::{PRIORITIES, priority};
+use docket_core::word::PRIORITIES;
 
 use crate::reads::public::{
-    Failure, Kinds, failure, internal, items_where, marks, one_of, open_members, project_of,
-    public, public_rows, sql,
+    Failure, decision_keys, failure, internal, items_where, marks, member_counts, one_of,
+    project_of, public, public_rows, sql,
 };
 use crate::reads::queue::under_cond;
 use crate::reads::search::{Narrow, similar_rows};
+use docket_core::word::kind_of_type;
 
 fn like(words: &str) -> sea_orm::Value {
     format!("%{words}%").into()
@@ -50,6 +50,7 @@ pub struct OwnerQuery {
     n: Option<usize>,
     key: Option<String>,
     theme: Option<String>,
+    area: Option<String>,
     priority: Option<String>,
 }
 
@@ -66,9 +67,8 @@ async fn owner_rows(
     limit: Option<usize>,
 ) -> Result<(Vec<Value>, usize), Failure> {
     one_of("priority", q.priority.as_deref(), &PRIORITIES)?;
-    let project = project_of(db, &q.project).await?;
-    let kinds = Kinds::of(&project);
-    let qkeys = kinds.keys(Kind::Decision);
+    project_of(db, &q.project).await?;
+    let qkeys = decision_keys();
     let mut values: Vec<sea_orm::Value> = qkeys.iter().map(|k| k.clone().into()).collect();
     values.push(format!("{DERIVED}%").into());
     let derived = if qkeys.is_empty() {
@@ -101,20 +101,18 @@ async fn owner_rows(
     .into_iter()
     .filter_map(|n| n.need.map(|need| (n.rid, need)))
     .collect();
-    let tags: Vec<Vec<String>> = items
-        .iter()
-        .map(|r| serde_json::from_value(r.tags.clone()).unwrap_or_default())
-        .collect();
     let listed = crate::verbs::releases::listed(db, &q.project)
+        .await
+        .map_err(|e| internal(&e))?;
+    let areas = crate::verbs::areas::listed(db, &q.project)
         .await
         .map_err(|e| internal(&e))?;
     let rows: Vec<OwnerRow> = items
         .iter()
-        .zip(&tags)
-        .map(|(r, tags)| OwnerRow {
+        .map(|r| OwnerRow {
             rid: r.rid,
             key: &r.key,
-            kind: kinds.kind(&r.key),
+            kind: kind_of_type(&r.item_type),
             waiting: r.wait_on.is_some(),
             derived: r
                 .decision
@@ -122,10 +120,11 @@ async fn owner_rows(
                 .is_some_and(|d| d.starts_with(DERIVED)),
             need: needs.get(&r.rid).map(String::as_str),
             theme: r.theme.as_deref(),
+            area: areas.name(r.area_id),
             release: listed.name(r.release_id),
             tier: PRIORITIES
                 .iter()
-                .position(|p| *p == priority(tags))
+                .position(|p| *p == r.priority)
                 .unwrap_or(2),
             asked_at: r.asked_at.as_deref().unwrap_or(&r.opened_at),
         })
@@ -139,12 +138,13 @@ async fn owner_rows(
             .and_then(|p| PRIORITIES.iter().position(|x| *x == p)),
         key: key.as_deref(),
         theme: q.theme.as_deref(),
+        area: q.area.as_deref(),
         releases: &releases,
         limit,
     };
     let queue = owner_queue(&rows, &filter);
     let mut by_rid: HashMap<i64, _> = items.iter().map(|r| (r.rid, r)).collect();
-    let counts = open_members(db, &q.project)
+    let counts = member_counts(db, &q.project)
         .await
         .map_err(|e| internal(&e))?;
     let mut out = Vec::with_capacity(queue.rows.len());
@@ -152,8 +152,8 @@ async fn owner_rows(
         let Some(row) = by_rid.remove(&rid) else {
             continue;
         };
-        let open = counts.get(&rid).copied().unwrap_or(0);
-        let mut view = public(db, kinds.kind(&row.key), row.clone(), open, None)
+        let open = counts.get(&rid).copied().unwrap_or_default();
+        let mut view = public(db, kind_of_type(&row.item_type), row.clone(), open, None)
             .await
             .map_err(|e| internal(&e))?;
         view.insert("owner_group".into(), json!(group));
@@ -313,8 +313,7 @@ pub async fn questions(
     Query(q): Query<ByTheme>,
 ) -> Result<Json<Value>, Failure> {
     let project = project_of(&db, &q.project).await?;
-    let kinds = Kinds::of(&project);
-    let qkeys = kinds.keys(Kind::Decision);
+    let qkeys = decision_keys();
     let decided_keys = qkeys.clone();
     if qkeys.is_empty() {
         return Ok(Json(json!([])));
@@ -333,7 +332,7 @@ pub async fn questions(
     values.extend(under);
     tail.push_str(" ORDER BY theme IS NULL, theme, rank IS NULL, rank, rid");
     let rows = items_where(&db, &q.project, &tail, values).await?;
-    let counts = open_members(&db, &q.project)
+    let counts = member_counts(&db, &q.project)
         .await
         .map_err(|e| internal(&e))?;
     let mut twins = Vec::with_capacity(rows.len());
@@ -346,9 +345,9 @@ pub async fn questions(
         let near = similar_rows(&db, &q.project, row, &narrow).await?;
         twins.push(match near.into_iter().next() {
             Some((twin, _, _)) => {
-                let open = counts.get(&twin.rid).copied().unwrap_or(0);
+                let open = counts.get(&twin.rid).copied().unwrap_or_default();
                 Value::Object(
-                    public(&db, kinds.kind(&twin.key), twin, open, None)
+                    public(&db, kind_of_type(&twin.item_type), twin, open, None)
                         .await
                         .map_err(|e| internal(&e))?,
                 )
@@ -371,8 +370,8 @@ pub async fn research(
     State(db): State<DatabaseConnection>,
     Query(q): Query<InProject>,
 ) -> Result<Json<Value>, Failure> {
-    let project = project_of(&db, &q.project).await?;
-    let qkeys = Kinds::of(&project).keys(Kind::Decision);
+    project_of(&db, &q.project).await?;
+    let qkeys = decision_keys();
     let tail = format!(
         "AND key IN ({}) AND state='open' AND decision IS NOT NULL ORDER BY decided_at, rid",
         marks(qkeys.len())
@@ -529,8 +528,8 @@ pub async fn derived(
     State(db): State<DatabaseConnection>,
     Query(q): Query<Newest>,
 ) -> Result<Json<Value>, Failure> {
-    let project = project_of(&db, &q.project).await?;
-    let qkeys = Kinds::of(&project).keys(Kind::Decision);
+    project_of(&db, &q.project).await?;
+    let qkeys = decision_keys();
     let (own, own_values) = match &q.release {
         Some(r) => in_release(&db, &q.project, r, "release_id").await?,
         None => (String::new(), vec![]),

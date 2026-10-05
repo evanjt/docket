@@ -1,24 +1,28 @@
 //! Each verb to its command.
 
 pub mod admin;
+pub mod areas;
 pub mod audit;
 pub mod dispatch;
 pub mod instructions;
 pub mod job;
+pub mod labels;
 pub mod lead;
 pub mod lists;
 pub mod machines;
 pub mod private;
+pub mod published;
 pub mod releases;
 pub mod show;
 pub mod skills;
+pub mod squash;
 pub mod status;
 pub mod write;
 
 use docket_core::api::{
-    AnswerRequest, AskRequest, DecideRequest, DepRequest, DropRequest, KeyRequest, PriorityRequest,
-    RateRequest, ReleaseRequest, ReopenRequest, ReplyRequest, ResumeRequest, RetryRequest,
-    StartRequest, WaitRequest,
+    AnswerRequest, AskRequest, DecideRequest, DepRequest, DropRequest, PriorityRequest,
+    RateRequest, ReleaseRequest, ReopenRequest, ReplyRequest, ResumeRequest, StartRequest,
+    WaitRequest,
 };
 
 use crate::args::{Cmd, DepCmd, Queue};
@@ -52,6 +56,7 @@ pub fn run(ctx: &mut Ctx, cmd: Option<&Cmd>) -> Result<i32> {
         Cmd::Research => lists::research(ctx),
         Cmd::Derived { n } => lists::derived(ctx, *n),
         Cmd::Done(r) => lists::recent(ctx, r, "done"),
+        Cmd::Changelog { release, plans } => lists::changelog(ctx, release.as_ref(), *plans),
         Cmd::Dropped(r) => lists::recent(ctx, r, "dropped"),
         Cmd::Groups { name } => lists::groups(ctx, name.as_ref()),
         Cmd::Show { id } => show::show(ctx, id),
@@ -83,18 +88,19 @@ pub fn run(ctx: &mut Ctx, cmd: Option<&Cmd>) -> Result<i32> {
             id,
             group,
             theme,
-            orphans,
+            area,
         } => audit::audit(
             ctx,
             &audit::Target {
                 id: id.as_ref(),
                 group: group.as_ref(),
                 theme: theme.as_ref(),
-                orphans: *orphans,
+                area: area.as_ref(),
             },
         ),
         Cmd::Check { deep } => status::check(ctx, *deep),
-        Cmd::Stale { open_only } => audit::stale(ctx, *open_only),
+        Cmd::Stale { open_only, prune } => audit::stale(ctx, *open_only, *prune),
+        Cmd::Squash { messages, cap } => squash::squash(ctx, messages.as_deref(), *cap),
         Cmd::Bind { slug, root } => write::bind(ctx, slug.as_ref(), root.as_ref()),
         Cmd::Skills {
             what,
@@ -202,6 +208,8 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             theme,
             release,
             group,
+            area,
+            parent,
         } => write::new(
             ctx,
             &write::New {
@@ -214,6 +222,8 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
                 theme: theme.as_ref(),
                 release: release.as_ref(),
                 group: group.as_ref(),
+                area: area.as_ref(),
+                parent: parent.as_ref(),
             },
         ),
         Cmd::Add {
@@ -222,13 +232,19 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             body,
             from,
             release,
+            area,
+            parent,
         } => write::add(
             ctx,
-            title,
-            key.as_ref(),
-            body.as_ref(),
-            from.as_ref(),
-            release.as_ref(),
+            &write::Add {
+                title,
+                key: key.as_ref(),
+                body: body.as_ref(),
+                from: from.as_ref(),
+                release: release.as_ref(),
+                area: area.as_ref(),
+                parent: parent.as_ref(),
+            },
         ),
         Cmd::Start {
             id,
@@ -305,11 +321,12 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             };
             write::drop(ctx, &req)
         }
-        Cmd::Reopen { id, why } => {
+        Cmd::Reopen { id, why, area } => {
             let req = ReopenRequest {
                 common: ctx.common(false)?,
                 id: id.clone(),
                 why: why.clone(),
+                area: area.clone(),
             };
             write::moved(ctx, "reopen", &req)
         }
@@ -327,9 +344,9 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             };
             write::moved(ctx, "wait", &req)
         }
-        Cmd::Resume { id, note, force } => {
+        Cmd::Resume { id, note } => {
             let req = ResumeRequest {
-                common: ctx.common(*force)?,
+                common: ctx.common(false)?,
                 id: id.clone(),
                 note: opt(note.as_ref()),
             };
@@ -385,12 +402,20 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             };
             write::answer(ctx, &req)
         }
-        Cmd::Decide { id, choice, basis } => {
+        Cmd::Decide {
+            id,
+            choice,
+            basis,
+            area,
+            about,
+        } => {
             let req = DecideRequest {
                 common: ctx.common(false)?,
                 id: id.clone(),
-                choice: choice.clone(),
+                choice: choice.clone().unwrap_or_default(),
                 basis: basis.clone(),
+                area: area.clone(),
+                about: about.clone(),
             };
             write::moved(ctx, "decide", &req)
         }
@@ -414,16 +439,47 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             id,
             set,
             release,
+            carry,
+            area,
             append,
             body,
         } => write::edit(
             ctx,
-            id,
-            set,
-            release.as_ref(),
-            append.as_ref(),
-            body.as_ref(),
+            &write::Edit {
+                id,
+                set,
+                release: release.as_ref(),
+                carry: *carry,
+                area: area.as_ref(),
+                append: append.as_ref(),
+                body: body.as_ref(),
+            },
         ),
+        Cmd::Areas {
+            action,
+            name,
+            about,
+            rename,
+            priority,
+            to,
+        } => areas::areas(
+            ctx,
+            &areas::Areas {
+                action: action.as_deref(),
+                name: name.as_deref(),
+                about: about.as_deref(),
+                rename: rename.as_deref(),
+                priority: priority.as_deref(),
+                to: *to,
+            },
+        ),
+        Cmd::Label {
+            action,
+            id,
+            name,
+            about,
+        } => labels::label(ctx, action, id, name, about.as_deref()),
+        Cmd::Labels => labels::list(ctx),
         Cmd::Releases {
             action,
             name,
@@ -446,30 +502,7 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
         ),
         Cmd::Link { words, remove } => write::link(ctx, words, *remove),
         Cmd::Parent { words, none } => write::parent(ctx, words, *none),
-        Cmd::Key {
-            key,
-            kind,
-            meaning,
-            turn,
-        } => {
-            let req = KeyRequest {
-                common: ctx.common(false)?,
-                key: key.clone(),
-                kind: kind.clone(),
-                meaning: meaning.clone(),
-                turn: opt(turn.as_ref()),
-            };
-            write::key(ctx, &req)
-        }
         Cmd::Reindex => write::reindex(ctx),
-        Cmd::Retry { id, note } => {
-            let req = RetryRequest {
-                common: ctx.common(false)?,
-                id: id.clone(),
-                note: opt(note.as_ref()),
-            };
-            write::moved(ctx, "retry", &req)
-        }
         _ => Ok(0),
     }
 }

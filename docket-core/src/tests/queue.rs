@@ -10,10 +10,13 @@ fn item(rid: i64, key: &'static str, kind: Kind) -> Candidate<'static> {
         claimed: false,
         waiting: false,
         conflict: false,
+        decided: true,
         complexity: None,
         theme: None,
         release: None,
         tier: 2,
+        area_tier: 2,
+        area: None,
         opened_at: "2026-01-01",
     }
 }
@@ -26,8 +29,8 @@ fn parent(rid: i64, to: i64) -> Vec<Tie> {
     }]
 }
 
-fn ids(rows: Vec<(i64, usize)>) -> Vec<i64> {
-    rows.into_iter().map(|(rid, _)| rid).collect()
+fn ids(rows: Vec<Ranked>) -> Vec<i64> {
+    rows.into_iter().map(|r| r.rid).collect()
 }
 
 #[test]
@@ -57,20 +60,18 @@ fn test_next_skips_what_nobody_can_take() {
 }
 
 #[test]
-fn test_next_never_lists_a_read_only_kind() {
+fn test_next_never_lists_a_retired_plan_kind() {
     let items = vec![
         item(1, "PK", Kind::Package),
-        item(2, "CON", Kind::Concept),
-        item(3, "CID", Kind::Idea),
         item(4, "STY", Kind::Story),
         item(5, "B", Kind::Work),
     ];
     assert_eq!(ids(next(&items, &[], &Filter::default(), 10)), vec![5]);
-    let concepts = Filter {
-        key: Some("CON"),
+    let packages = Filter {
+        key: Some("PK"),
         ..Filter::default()
     };
-    assert!(next(&items, &[], &concepts, 10).is_empty());
+    assert!(next(&items, &[], &packages, 10).is_empty());
 }
 
 #[test]
@@ -99,14 +100,14 @@ fn test_next_orders_by_priority_then_age() {
     ];
     assert_eq!(
         ids(next(&items, &[], &Filter::default(), 10)),
-        vec![4, 2, 3, 5, 6, 1]
+        vec![2, 4, 3, 5, 6, 1]
     );
-    assert_eq!(ids(next(&items, &[], &Filter::default(), 2)), vec![4, 2]);
+    assert_eq!(ids(next(&items, &[], &Filter::default(), 2)), vec![2, 4]);
     let high = Filter {
         priority: Some(1),
         ..Filter::default()
     };
-    assert_eq!(ids(next(&items, &[], &high, 10)), vec![4, 2]);
+    assert_eq!(ids(next(&items, &[], &high, 10)), vec![2, 4]);
 }
 
 #[test]
@@ -121,7 +122,10 @@ fn test_a_ticket_keeps_its_own_tier_inside_an_urgent_plan() {
         item(3, "B", Kind::Work),
     ];
     let rows = next(&items, &parent(3, 2), &Filter::default(), 10);
-    assert_eq!(rows, vec![(1, 2), (3, 2)]);
+    assert_eq!(
+        rows.iter().map(|r| (r.rid, r.tier)).collect::<Vec<_>>(),
+        vec![(1, 2), (3, 2)]
+    );
 }
 
 #[test]
@@ -353,7 +357,7 @@ fn test_bare_next_leaves_out_a_plan_with_an_open_member() {
         item(3, "A", Kind::Audit),
     ];
     let ties = parent(2, 1);
-    assert_eq!(ids(next(&items, &ties, &Filter::default(), 10)), vec![2, 3]);
+    assert_eq!(ids(next(&items, &ties, &Filter::default(), 10)), vec![3, 2]);
 }
 
 fn owed<'a>(rid: i64, key: &'static str, kind: Kind) -> OwnerRow<'a> {
@@ -367,6 +371,7 @@ fn owed<'a>(rid: i64, key: &'static str, kind: Kind) -> OwnerRow<'a> {
         theme: None,
         release: None,
         tier: 2,
+        area: None,
         asked_at: "2026-01-01",
     }
 }
@@ -500,4 +505,200 @@ fn test_the_owner_limit_refuses_the_ask_past_it() {
     let why = owner_limit_refusal(2, 2).expect("refused at the limit");
     assert!(why.contains("owner_limit"), "{why}");
     assert!(why.contains('2'), "{why}");
+}
+
+#[test]
+fn test_a_current_release_ticket_ranks_ahead_of_a_later_release_plan() {
+    let items = vec![
+        Candidate {
+            release: Some("1.1"),
+            tier: 0,
+            ..item(1, "I", Kind::Research)
+        },
+        Candidate {
+            release: Some("1.0"),
+            tier: 3,
+            ..item(2, "B", Kind::Work)
+        },
+    ];
+    let r = releases(&["1.0", "1.1"]);
+    let f = Filter {
+        releases: &r,
+        ..Filter::default()
+    };
+    assert_eq!(ids(next(&items, &[], &f, 10)), vec![2, 1]);
+}
+
+#[test]
+fn test_an_audit_due_plan_ranks_ahead_of_a_ticket_of_equal_priority() {
+    let items = vec![
+        item(1, "B", Kind::Work),
+        item(2, "A", Kind::Audit),
+        Candidate {
+            open: false,
+            ..item(3, "B", Kind::Work)
+        },
+        item(4, "A", Kind::Audit),
+    ];
+    let mut ties = parent(3, 2);
+    ties.extend(parent(1, 4));
+    let rows = next(&items, &ties, &Filter::default(), 10);
+    assert_eq!(ids(rows.clone()), vec![2, 1]);
+    assert_eq!(rows[0].role, Role::Audit);
+    assert_eq!(rows[1].role, Role::Work);
+}
+
+#[test]
+fn test_a_plan_with_nothing_under_it_is_a_plan_row() {
+    let items = vec![item(1, "A", Kind::Audit), item(2, "Q", Kind::Decision)];
+    let rows = next(&items, &[], &Filter::default(), 10);
+    assert_eq!(
+        rows.iter().map(|r| r.role).collect::<Vec<_>>(),
+        vec![Role::Plan, Role::Plan]
+    );
+}
+
+#[test]
+fn test_an_undecided_question_is_never_offered() {
+    let items = vec![
+        Candidate {
+            decided: false,
+            ..item(1, "Q", Kind::Decision)
+        },
+        item(2, "Q", Kind::Decision),
+    ];
+    assert_eq!(ids(next(&items, &[], &Filter::default(), 10)), vec![2]);
+}
+
+#[test]
+fn test_an_item_that_unblocks_three_ranks_ahead_of_one_that_unblocks_none() {
+    let items = vec![
+        item(1, "B", Kind::Work),
+        item(2, "B", Kind::Work),
+        Candidate {
+            waiting: true,
+            ..item(3, "B", Kind::Work)
+        },
+        Candidate {
+            waiting: true,
+            ..item(4, "B", Kind::Work)
+        },
+        Candidate {
+            waiting: true,
+            ..item(5, "B", Kind::Work)
+        },
+    ];
+    let deps = [(3, 2), (4, 3), (5, 2)];
+    let f = Filter {
+        dependencies: &deps,
+        ..Filter::default()
+    };
+    let rows = next(&items, &[], &f, 10);
+    assert_eq!(ids(rows.clone()), vec![2, 1]);
+    assert_eq!(rows[0].unblocks, 3);
+    assert_eq!(rows[1].unblocks, 0);
+}
+
+#[test]
+fn test_next_narrows_to_one_item_when_it_is_ready() {
+    let items = vec![
+        item(1, "B", Kind::Work),
+        item(2, "B", Kind::Work),
+        Candidate {
+            claimed: true,
+            ..item(3, "B", Kind::Work)
+        },
+    ];
+    let one = |rid| Filter {
+        rid: Some(rid),
+        ..Filter::default()
+    };
+    assert_eq!(ids(next(&items, &[], &one(2), 10)), vec![2]);
+    assert!(next(&items, &[], &one(3), 10).is_empty());
+}
+
+#[test]
+fn test_next_orders_equal_priority_by_area_then_ignores_area_for_priority() {
+    let releases = vec!["alder".to_string(), "birch".to_string()];
+    let filter = Filter {
+        releases: &releases,
+        ..Filter::default()
+    };
+    let at = |rid, key, tier, area_tier, stage| Candidate {
+        release: stage,
+        tier,
+        area_tier,
+        ..item(rid, key, Kind::Work)
+    };
+    let items = vec![
+        at(1, "T1", 1, 2, Some("alder")),
+        at(2, "T2", 1, 1, Some("alder")),
+        at(3, "T3", 2, 1, Some("alder")),
+        at(4, "T4", 1, 2, Some("alder")),
+        at(5, "T5", 0, 0, Some("birch")),
+    ];
+    assert_eq!(ids(next(&items, &[], &filter, 10)), vec![2, 1, 4, 3, 5]);
+}
+
+#[test]
+fn test_next_filters_by_the_items_release_not_its_theme() {
+    let items = vec![
+        Candidate {
+            release: Some("3.4.0"),
+            theme: None,
+            ..item(1, "B", Kind::Work)
+        },
+        Candidate {
+            release: Some("5.6.0"),
+            theme: Some("3.4.0"),
+            ..item(2, "B", Kind::Work)
+        },
+    ];
+    let r = releases(&["3.4.0", "5.6.0"]);
+    let f = Filter {
+        releases: &r,
+        release: Some("3.4.0"),
+        ..Filter::default()
+    };
+    assert_eq!(ids(next(&items, &[], &f, 10)), vec![1]);
+}
+
+#[test]
+fn test_next_narrows_to_one_area_ignoring_case() {
+    let items = vec![
+        Candidate {
+            area: Some("lanterns"),
+            ..item(1, "T", Kind::Work)
+        },
+        Candidate {
+            area: Some("kites"),
+            ..item(2, "T", Kind::Work)
+        },
+        item(3, "T", Kind::Work),
+    ];
+    let kites = Filter {
+        area: Some("Kites"),
+        ..Filter::default()
+    };
+    assert_eq!(ids(next(&items, &[], &kites, 10)), vec![2]);
+}
+
+#[test]
+fn test_owner_queue_narrows_to_one_area_ignoring_case() {
+    let rows = vec![
+        OwnerRow {
+            area: Some("lanterns"),
+            ..owed(1, "Q", Kind::Decision)
+        },
+        OwnerRow {
+            area: Some("kites"),
+            ..owed(2, "Q", Kind::Decision)
+        },
+    ];
+    let releases = releases(&["9.9.9"]);
+    let kites = OwnerFilter {
+        area: Some("KITES"),
+        ..OwnerFilter::of(&releases)
+    };
+    assert_eq!(owner_ids(&owner_queue(&rows, &kites)), vec![2]);
 }

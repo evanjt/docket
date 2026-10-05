@@ -4,7 +4,11 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
+use std::io::IsTerminal;
+
+use docket_core::changelog::{Section, render};
 use docket_core::rows::Row;
+use docket_core::word::ItemType;
 
 use crate::args::{OwnerQueue, Queue, Recent};
 use crate::ctx::{Ctx, id};
@@ -43,6 +47,8 @@ pub fn next(ctx: &mut Ctx, q: &Queue) -> Result<i32> {
             ("complexity", q.complexity.clone()),
             ("key", q.key.clone()),
             ("theme", q.theme.clone()),
+            ("area", q.area.clone()),
+            ("release", q.release.clone()),
             ("under", opt_id(q.under.as_ref())?),
             ("role", (!q.role.is_empty()).then(|| q.role.join(","))),
             ("priority", q.priority.clone()),
@@ -52,6 +58,16 @@ pub fn next(ctx: &mut Ctx, q: &Queue) -> Result<i32> {
             ),
         ],
     )?;
+    if !ctx.json
+        && let Some(why) = ctx.read("/next/halt", &[])?["halt"].as_str()
+    {
+        println!("Halt: {why}\n");
+    }
+    if !ctx.json
+        && let Some(line) = crate::cmd::published::offer(ctx)
+    {
+        println!("{line}\n");
+    }
     print_rows(ctx, &rows, "Nothing for an agent right now.");
     Ok(0)
 }
@@ -59,10 +75,12 @@ pub fn next(ctx: &mut Ctx, q: &Queue) -> Result<i32> {
 /// # Errors
 /// As `next`.
 pub fn todo(ctx: &mut Ctx, q: &OwnerQueue) -> Result<i32> {
+    crate::cmd::published::settle_push(ctx);
     let pairs = [
         ("n", q.n.map(|n| n.to_string())),
         ("key", q.key.clone()),
         ("theme", q.theme.clone()),
+        ("area", q.area.clone()),
         ("priority", q.priority.clone()),
     ];
     let rows = ctx.read("/todo", &pairs)?;
@@ -206,16 +224,10 @@ pub fn waiting(ctx: &mut Ctx, on: Option<&String>) -> Result<i32> {
     Ok(0)
 }
 
-/// The keys of a project row that hold one kind, in the project's order.
+/// The keys that hold questions: the one docket fixes for the type.
 #[must_use]
-pub fn keys_of(project: &Value, kind: &str) -> Vec<String> {
-    project["keys"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|k| k["kind"] == kind)
-        .filter_map(|k| k["key"].as_str().map(str::to_string))
-        .collect()
+pub fn question_keys() -> Vec<String> {
+    vec![ItemType::Question.key().to_string()]
 }
 
 /// Decided questions, open or done, closest to an undecided question: at most n.
@@ -266,11 +278,6 @@ pub fn print_decided_like(ctx: &mut Ctx, r: &Row, qkeys: &[String]) -> Result<()
 pub fn questions(ctx: &mut Ctx, theme: Option<&String>) -> Result<i32> {
     let slug = ctx.project()?;
     let project = ctx.project_row(&slug)?;
-    let qkeys = keys_of(&project, "decision");
-    if qkeys.is_empty() {
-        println!("{slug} has no decision key.");
-        return Ok(0);
-    }
     let rows = ctx.read("/questions", &[("theme", theme.cloned())])?;
     if ctx.json {
         print_rows(ctx, &rows, "Nothing.");
@@ -421,6 +428,31 @@ pub fn recent(ctx: &mut Ctx, r: &Recent, state: &str) -> Result<i32> {
         ],
     )?;
     print_rows(ctx, &rows, &format!("Nothing {state}."));
+    Ok(0)
+}
+
+/// # Errors
+/// As `next`.
+pub fn changelog(ctx: &mut Ctx, release: Option<&String>, plans: bool) -> Result<i32> {
+    let found = ctx.read(
+        "/changelog",
+        &[("release", release.cloned().filter(|r| !r.is_empty()))],
+    )?;
+    if ctx.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&found).unwrap_or_default()
+        );
+        return Ok(0);
+    }
+    let sections: Vec<Section> =
+        serde_json::from_value(found["sections"].clone()).unwrap_or_default();
+    if sections.is_empty() {
+        println!("Nothing closed.");
+        return Ok(0);
+    }
+    let colour = std::io::stdout().is_terminal();
+    print!("{}", render(&sections, plans, colour));
     Ok(0)
 }
 

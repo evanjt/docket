@@ -4,16 +4,11 @@ use sea_orm::{ConnectionTrait, DbErr};
 
 use docket_core::api::{Brief, Cite, ItemView};
 use docket_core::item::Item;
-use docket_core::rules::kind_of;
-use docket_core::word::{Facts, Kind, priority, word};
+use docket_core::word::Kind;
 
-use crate::store::{ProjectRow, column, id_of, sql};
-use crate::verbs::graph::{open_member_count, package_progress};
-
-/// The kind of a row's key, work when the project does not name it.
-pub fn kind(project: &ProjectRow, row: &Item) -> Kind {
-    kind_of(&project.rules, &row.key).unwrap_or(Kind::Work)
-}
+use crate::reads::public::{Members, word_of};
+use crate::store::{column, id_of, sql};
+use crate::verbs::graph::{member_count, package_progress};
 
 pub fn brief(row: &Item) -> Brief {
     Brief {
@@ -22,26 +17,17 @@ pub fn brief(row: &Item) -> Brief {
     }
 }
 
-pub async fn item_view<C: ConnectionTrait>(
-    c: &C,
-    project: &ProjectRow,
-    row: &Item,
-) -> Result<ItemView, DbErr> {
-    let kind = kind(project, row);
-    let (open_members, progress) = if kind == Kind::Package {
-        (
-            open_member_count(c, row.rid).await?,
-            Some(package_progress(c, row.rid).await?),
-        )
+pub async fn item_view<C: ConnectionTrait>(c: &C, row: &Item) -> Result<ItemView, DbErr> {
+    let kind = row.item_type.kind();
+    let members = if kind.is_plan() {
+        member_count(c, row.rid).await?
     } else {
-        (0, None)
+        Members::default()
     };
-    let facts = Facts {
-        state: &row.state,
-        kind,
-        claimed: row.claim_branch.is_some(),
-        waiting: row.wait_on.is_some(),
-        turn: row.turn.as_deref(),
+    let progress = if kind == Kind::Package {
+        Some(package_progress(c, row.rid).await?)
+    } else {
+        None
     };
     let superseded_by = match row.superseded_by {
         Some(rid) => id_of(c, rid).await?,
@@ -64,6 +50,7 @@ pub async fn item_view<C: ConnectionTrait>(
         }
         None => None,
     };
+    let area = crate::verbs::areas::name_of(c, row.area_id).await?;
     Ok(ItemView {
         project: row.project.clone(),
         key: row.key.clone(),
@@ -90,15 +77,30 @@ pub async fn item_view<C: ConnectionTrait>(
         complexity: row.complexity.clone(),
         theme: row.theme.clone(),
         release,
+        area,
         rank: row.rank,
         tags: row.tags.clone(),
+        labels: crate::verbs::labels::carried(c, row.rid)
+            .await?
+            .into_iter()
+            .map(|l| l.name)
+            .collect(),
         body: row.body.clone(),
         conflict: row.conflict,
         opened_at: row.opened_at.clone(),
         updated_at: row.updated_at.clone(),
         group: row.group_name.clone(),
-        word: word(&facts, open_members).to_string(),
-        priority: priority(&row.tags).to_string(),
+        word: word_of(
+            &row.state,
+            row.claim_branch.as_deref(),
+            row.wait_on.as_deref(),
+            row.turn.as_deref(),
+            kind,
+            members,
+        )
+        .to_string(),
+        priority: row.priority.clone(),
+        item_type: row.item_type.as_str().to_string(),
         superseded_by,
         related,
         parent,
@@ -110,14 +112,10 @@ pub async fn item_view<C: ConnectionTrait>(
 }
 
 /// The views of several rows, in their order.
-pub async fn item_views<C: ConnectionTrait>(
-    c: &C,
-    project: &ProjectRow,
-    rows: &[Item],
-) -> Result<Vec<ItemView>, DbErr> {
+pub async fn item_views<C: ConnectionTrait>(c: &C, rows: &[Item]) -> Result<Vec<ItemView>, DbErr> {
     let mut out = Vec::with_capacity(rows.len());
     for r in rows {
-        out.push(item_view(c, project, r).await?);
+        out.push(item_view(c, r).await?);
     }
     Ok(out)
 }

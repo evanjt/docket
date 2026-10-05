@@ -173,11 +173,8 @@ prior decision found with `docket similar` or `docket search`, a central idea,
 or ordinary practice that settles it, stated as derived so the owner can
 contradict it.
 
-Then handle the surplus, rather than burying it in the answer text. Every item
-filed names its release with `--release`, by what it is: data loss, a crash,
-a hang, wrong numbers, upgrade safety, security or privacy is `current` at high
-priority; a blocker or member of current work is `current`; a feature or polish
-goes to a later release (`docket skills releases` lists them):
+Then handle the surplus, rather than burying it in the answer text. Each item takes the
+`--release` the docket block gives (`docket skills releases` lists them):
 
 - A tangent that is really a defect or a cleanup: `docket new B "..." --body -
   --release <release>` or `docket new D ...`.

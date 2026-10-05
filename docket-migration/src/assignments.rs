@@ -61,11 +61,16 @@ pub async fn end<C: ConnectionTrait>(
 /// The database refuses.
 pub async fn report<C: ConnectionTrait>(c: &C, id: i64, u: &Usage) -> Result<(), DbErr> {
     c.execute_raw(statement(
-        "UPDATE assignments SET tokens_in=?, tokens_out=?, cost_reported=? WHERE id=?",
+        "UPDATE assignments SET tokens_in=COALESCE(?, tokens_in), tokens_out=COALESCE(?, tokens_out), \
+         cost_reported=COALESCE(?, cost_reported), job_started_at=COALESCE(?, job_started_at), \
+         job_ended_at=COALESCE(?, job_ended_at), job_exit=COALESCE(?, job_exit) WHERE id=?",
         vec![
             u.tokens_in.into(),
             u.tokens_out.into(),
             u.cost_reported.into(),
+            u.job_started_at.clone().into(),
+            u.job_ended_at.clone().into(),
+            u.job_exit.into(),
             id.into(),
         ],
     ))
@@ -78,12 +83,10 @@ pub async fn report<C: ConnectionTrait>(c: &C, id: i64, u: &Usage) -> Result<(),
 /// # Errors
 /// The database refuses, as it does a second open row for one item.
 pub async fn insert<C: ConnectionTrait>(c: &C, rid: i64, a: &Assignment) -> Result<(), DbErr> {
-    // The need column is added after the table is first rebuilt, so only a row that has one names it.
-    let (column, mark) = if a.need.is_some() {
-        (", need", ", ?")
-    } else {
-        ("", "")
-    };
+    // The need and job columns are added after the table is first rebuilt, so only a row that has
+    // one names it.
+    let mut columns = String::new();
+    let mut marks = String::new();
     let mut values: Vec<sea_orm::Value> = vec![
         rid.into(),
         a.assignee.clone().into(),
@@ -105,13 +108,26 @@ pub async fn insert<C: ConnectionTrait>(c: &C, rid: i64, a: &Assignment) -> Resu
         a.tokens_out.into(),
         a.cost_reported.into(),
     ];
-    values.extend(a.need.clone().map(sea_orm::Value::from));
+    let extra: [(&str, Option<sea_orm::Value>); 4] = [
+        ("need", a.need.clone().map(Into::into)),
+        ("job_started_at", a.job_started_at.clone().map(Into::into)),
+        ("job_ended_at", a.job_ended_at.clone().map(Into::into)),
+        ("job_exit", a.job_exit.map(Into::into)),
+    ];
+    for (name, value) in extra {
+        if let Some(v) = value {
+            columns.push_str(", ");
+            columns.push_str(name);
+            marks.push_str(", ?");
+            values.push(v);
+        }
+    }
     c.execute_raw(statement(
         &format!(
             "INSERT INTO assignments (rid, assignee, kind, started_at, ended_at, outcome, note, actor, \
              branch, host, machine, runner, model, effort, role, job, tokens_in, tokens_out, \
-             cost_reported{column}) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?{mark})"
+             cost_reported{columns}) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?{marks})"
         ),
         values,
     ))

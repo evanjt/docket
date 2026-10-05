@@ -2,7 +2,7 @@ import type { Offer, Offers } from './types';
 
 /** The verbs an item can take, as the server names them. */
 export type Verb =
-  | 'answer' | 'reply' | 'retry' | 'start' | 'close' | 'release' | 'resume' | 'ask' | 'wait' | 'reopen' | 'drop';
+  | 'answer' | 'reply' | 'start' | 'close' | 'release' | 'resume' | 'ask' | 'wait' | 'reopen' | 'drop';
 
 /** The verbs the server says an item takes now, the ones this page has a form for, in the server's order. */
 export function verbs(offers: Offers | undefined): Offer[] {
@@ -21,7 +21,6 @@ export const WORDING: Record<Verb, { label: string; done: string }> = {
   start: { label: 'Start', done: 'Started' },
   close: { label: 'Close', done: 'Closed' },
   release: { label: 'Unclaim', done: 'Unclaimed' },
-  retry: { label: 'Retry', done: 'Retried' },
   resume: { label: 'Resume', done: 'Resumed' },
   ask: { label: 'Park for me', done: 'Parked' },
   wait: { label: 'Wait', done: 'Waiting' },
@@ -52,4 +51,9 @@ export function editRequest(
   const changed = body !== opened.body;
   if (!set.length && !changed) return null;
   return { ...common, id, set, body: changed ? body : null, expect_updated_at: changed ? opened.updated_at : null };
+}
+
+/** The request that moves an item to a release, or to the backlog when the name is empty; the server refuses an order it would break. */
+export function moveRequest(id: string, release: string, common: { project: string; branch: string | null }): object {
+  return { ...common, id, release, set: [], carry: false };
 }

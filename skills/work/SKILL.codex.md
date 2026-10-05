@@ -73,15 +73,7 @@ account or store, an action from their machine, a judgement). The owner holds at
 `owner_limit` open asks; past it `ask` is refused: derive the choice, depend on an ask
 already open, or wait.
 
-Every item filed names its release with `--release`, by what it is: a
-crash, hang, data loss, wrong numbers, upgrade safety, security, privacy or
-release work is `current` at high priority; a blocker or member of current
-work is `current`; otherwise a feature or polish goes to a later release, and
-tests, CI and hooks to the backlog (`--release ""`) under the theme the project keeps
-for them. The body's last line says
-which and why (`**Release.** current: ...`).
-
-A side finding is filed only when it is critical or high, or the order above
+A side finding is filed only when it is critical or high, or the docket block
 puts it in the current release (`docket new B "..." --body - --release current
 --priority high --complexity medium`); anything else is an observation on the ticket: `docket edit
 T14 --append "Observed: ..."`. Never weaken a test to avoid a question. Cite `file:line` from the working tree, not

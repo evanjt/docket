@@ -14,8 +14,8 @@ Pages
 
   Home        every project: its open tickets, what waits on you (YOURS), its flow. Enter opens one.
   Project     a sidebar, above the rest on a narrow screen:
-              PROGRESS      closed of everything in the flow, the pace of closes and how long the
-                            open work takes at it, and the open counts
+              PROGRESS      closed of everything in the flow, the release's forecast dates as the
+                            server works them out, and the open counts
               CLAIMED NOW   every claim: its branch, the host it was claimed on, how long ago
               YOURS         what waits on you
               AUDITS DUE    plans whose tickets are all closed, for an /audit session to check
@@ -31,7 +31,7 @@ Pages
               is a hot spot; opening one lists that item and everything tied to it.
   Yours (o)   what waits on you, then the open questions, one at a time with its whole body:
               a answers a question, r replies to a parked item, R retries what the loop parked.
-  Plans (t)   plans, stories, packages, concepts and central ideas with their progress. Space opens
+  Plans (t)   plans, stories, packages and central ideas with their progress, then the areas. Space opens
               one's children, and the side shows what comes next under the selected one.
   Settings (S) every fact of the project, its value and what it means. Tab or j/k picks a fact,
               Enter edits it in place, and an empty value unsets it. A value the server refuses is
@@ -39,17 +39,18 @@ Pages
 
 State words, each in its colour
 
-  ready      waiting for someone to take it
-  building   someone is working on it now
-  checking   a package under its review, from before plans were the one grouping
-  done       closed, with the commit that fixed it
-  blocked    waiting on another item or a condition
-  parked     waiting on you: something only you can do
-  dropped    closed without doing
-  standing   a concept or central idea, open for good
+  ready            waiting for someone to take it
+  in progress      someone is working on it now
+  building         a plan whose tickets are open
+  audit due        a plan whose tickets are all closed
+  blocked          held by a dependency that is not yet satisfied
+  waiting on owner waiting on you: something only you can do
+  parked           set aside, in no queue
+  done             closed, with the commit that fixed it
+  dropped          closed without doing
 
-  A verb in MOVES takes the colour of the word it leads to: claimed is the yellow of building,
-  closed the dim of done, decided the cyan of checking.
+  A verb in MOVES takes the colour of the word it leads to: claimed is the yellow of in progress,
+  closed the dim of done.
 
 Keys
 
@@ -58,7 +59,7 @@ Keys
   Enter, l               open the one selected
   Esc, h, Left           back                         f, Right   forward again
   /                      search, the list following each key; Enter keeps it, Esc cancels
-  F                      filter the queue: release:7.2.0 priority:high key:B complexity:low under:A7
+  F                      filter the queue: release:7.2.0 priority:high key:B complexity:low under:A7 area:kites
   Space                  open or close a row's children in the plans; in the other lists, as x
   PgUp / PgDn            scroll
   m                      on a project, every move of the last day or the last five
@@ -81,7 +82,6 @@ Writing
   X                      clear the marks
   a                      answer the question; on one an agent decided, answering again overturns it
   r                      reply to a parked item: back to the agents with what happened
-  R                      retry: a fresh start for what the loop parked or sent back
   !                      priority: then c critical, h high, n normal, l low
   c                      complexity: then h high, m medium, l low
   L                      link: then related ID, origin ID or parent PLAN
@@ -110,7 +110,15 @@ pub fn doc() -> Doc {
         let mut segs = Vec::new();
         let mut rest = line;
         for w in [
-            "ready", "building", "checking", "done", "blocked", "parked", "dropped", "standing",
+            "ready",
+            "waiting on owner",
+            "in progress",
+            "building",
+            "audit due",
+            "done",
+            "blocked",
+            "parked",
+            "dropped",
         ] {
             if let Some(tail) = line.strip_prefix(&format!("  {w} ")) {
                 segs.push(seg("  ", tone));

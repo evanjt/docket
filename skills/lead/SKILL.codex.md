@@ -50,10 +50,14 @@ The claim lapses after `lead_lapse` minutes, so renew at least that often.
 
     docket skills mode
     docket jobs
-    docket next 40 --role audit,plan,work
+    docket next 40
 
 `mode` pause: dispatch nothing and stop once nothing runs. drain: dispatch
 nothing, see the running jobs through, then stop. run: carry on.
+
+Each row carries the role it is taken in. A `Halt:` line above the rows means the
+last three ended attempts all failed: dispatch nothing more and stop after the
+running jobs.
 
 `docket jobs` shows every machine's jobs; `docket machines` their slots.
 
@@ -65,14 +69,14 @@ always a job that is running. When several end together, land them as one
 batch with one gate run rather than one gate run each.
 
 Take the one list in the order `next` gives it: earliest release first, then
-audits, plans and investigations, then tickets, then most urgent. A later
+most urgent, then audits, plans and investigations, then tickets, then the item
+that unblocks the most, then the oldest. A later
 release never goes ahead of a current-release ticket. To hold the fleet to the current release
-even when it has nothing ready, add `--current-release` to each `next`. Send each with its role:
-an audit-due plan as `--role audit`, a plan or investigation as `--role plan`,
-a ticket with none:
+even when it has nothing ready, add `--current-release` to each `next`. To work one area whole, add `--area NAME` to each `next`. `dispatch` takes each item's role from its row
+in `next`, so name none:
 
-    docket dispatch A3 --role audit
-    docket dispatch I2 --role plan
+    docket dispatch A3
+    docket dispatch I2
     docket dispatch T14
 
 `dispatch` claims the item on a fresh branch, pushes your branch's head to the
@@ -85,11 +89,10 @@ Read each answer:
 - `is held by`: another session has it. Take the next.
 - `no machine has ... a free slot`: stop dispatching until a job ends.
 - `dispatch ... failed, the claim given back`: the reason is in the line.
-  Note it, take the next, and count it as a failure.
+  Note it and take the next: the server counts it.
 
-An audit runs on a different runner from the one that built most of the plan,
-when the machines have both: `--runner` and `--model` from the `models` fact's
-other entries.
+An audit runs on the `models` entry for audits, or on another runner's when
+the audit's runner holds the most assignments under the plan; `dispatch` chooses.
 
 ### 4. Wait for a job to end
 
@@ -144,6 +147,9 @@ delete the merged branches and the worktree:
     git branch -d <the job's branch> lead/batch
     git worktree remove ../merge-batch
 
+`docket stale` lists the job branches whose item is closed or that no claim or job names, and
+whether each holds commits the work ref lacks; `docket stale --prune` removes those with none.
+
 Check content, not reachability: `git show HEAD:<a file it touched>`.
 
 **DONE, for an audit.** Close the plan with the job's note:
@@ -172,14 +178,14 @@ item and clear the job:
 **FAILED, or lost, or no report.** Read why (`docket jobs`, and the job's log
 on its machine with `docket job log NAME`). Clear it with `docket collect T14
 --discard`, give the claim back with the reason, and
-dispatch it once more on the other runner. A second failure hands it to the
-owner:
+dispatch it once more. The server counts the failed attempts: at the project's
+`failure_limit` (2 by default) the unclaim assigns the item to the owner.
 
     docket --branch <branch> unclaim T14 --outcome failed "failed on <runner>: <why>"
-    docket ask T14 "two jobs failed: <why, in one line>"
 
-Three failed jobs in a row, of any items, mean something is wrong with a
-machine or the setup: dispatch nothing more and stop after the running jobs.
+When the last three ended attempts of the project all failed, `next` prints a
+`Halt:` line: something is wrong with a machine or the setup, so dispatch
+nothing more and stop after the running jobs.
 
 ### 5. Again
 
@@ -194,6 +200,7 @@ every item left is blocked, parked on the owner or held by another session.
 - Every claim is a running job. A finished build is landed or given back in
   the same pass, never held while more jobs run.
 - Never push. Never `--force` a claim, and never unclaim one you did not make.
+- The work ref is never rewritten and never pushed: `docket squash` builds the published ref from it.
 - Never kill a running job unless it outruns `job_timeout` minutes: `docket
   job kill NAME` on its machine, then as FAILED.
 - A question is never yours to answer: it waits for the owner.

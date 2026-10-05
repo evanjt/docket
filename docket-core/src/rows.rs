@@ -29,8 +29,6 @@ pub struct Theme {
 pub struct ProjectRow {
     pub slug: String,
     #[serde(default)]
-    pub keys: Vec<KeySpec>,
-    #[serde(default)]
     pub themes: Vec<Theme>,
     #[serde(default)]
     pub skills: BTreeMap<String, String>,
@@ -39,27 +37,9 @@ pub struct ProjectRow {
     /// The releases, filled from `/releases` by a reader that orders by them.
     #[serde(default, skip_serializing)]
     pub releases: crate::release::Listed,
-}
-
-impl ProjectRow {
-    /// What a key holds, work when the project does not name it.
-    #[must_use]
-    pub fn kind(&self, key: &str) -> Kind {
-        self.keys
-            .iter()
-            .find(|k| k.key == key)
-            .map_or(Kind::Work, |k| k.kind)
-    }
-
-    /// The keys holding one kind, in the project's order.
-    #[must_use]
-    pub fn keys_of(&self, kind: Kind) -> Vec<String> {
-        self.keys
-            .iter()
-            .filter(|k| k.kind == kind)
-            .map(|k| k.key.clone())
-            .collect()
-    }
+    /// The areas, filled from `/areas` by a reader that names or counts by them.
+    #[serde(default, skip_serializing)]
+    pub areas: crate::area::Listed,
 }
 
 /// An item as stored, as `/items` lists it: no body, rids rather than ids.
@@ -107,9 +87,14 @@ pub struct ItemRow {
     #[serde(default)]
     pub release_id: Option<i64>,
     #[serde(default)]
+    pub area_id: Option<i64>,
+    #[serde(default)]
     pub rank: Option<i64>,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// What the item is: task, bug, question, investigation or plan.
+    #[serde(default, rename = "type")]
+    pub item_type: String,
     #[serde(default)]
     pub opened_at: String,
     #[serde(default)]
@@ -127,6 +112,9 @@ pub struct Row {
     pub state: String,
     pub word: String,
     pub priority: String,
+    /// What the item is: task, bug, question, investigation or plan.
+    #[serde(default, rename = "type")]
+    pub item_type: String,
     #[serde(default)]
     pub group: Option<String>,
     #[serde(default)]
@@ -170,6 +158,9 @@ pub struct Row {
     /// The release it is in; none is the backlog.
     #[serde(default)]
     pub release: Option<String>,
+    /// The area it is in.
+    #[serde(default)]
+    pub area: Option<String>,
     #[serde(default)]
     pub rank: Option<i64>,
     #[serde(default)]
@@ -238,12 +229,12 @@ impl Status {
         self.by_word.get(word).copied().unwrap_or(0)
     }
 
-    /// Tickets still open: every word but done, dropped and standing.
+    /// Tickets still open: every word but done and dropped.
     #[must_use]
     pub fn open(&self) -> u64 {
         self.by_word
             .iter()
-            .filter(|(w, _)| !matches!(w.as_str(), "done" | "dropped" | "standing"))
+            .filter(|(w, _)| !matches!(w.as_str(), "done" | "dropped"))
             .map(|(_, n)| n)
             .sum()
     }

@@ -46,7 +46,7 @@ struct Spec {
 
 const RUN: [(&str, &str); 2] = [("--runner", "runner"), ("--model", "model")];
 
-const SPECS: [Spec; 21] = [
+const SPECS: [Spec; 20] = [
     Spec {
         names: &["new"],
         route: "new",
@@ -181,12 +181,6 @@ const SPECS: [Spec; 21] = [
         names: &["reindex"],
         route: "reindex",
         slots: &[],
-        flags: &[],
-    },
-    Spec {
-        names: &["retry"],
-        route: "retry",
-        slots: &[Id("id"), MaybeRest("note")],
         flags: &[],
     },
     Spec {

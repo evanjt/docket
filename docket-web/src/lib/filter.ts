@@ -19,8 +19,10 @@ export interface Filter {
   priority: string;
   complexity: string;
   release: string;
-  /** The plan, story or concept whose items are wanted. */
+  /** The plan or story whose items are wanted. */
   under: string;
+  /** The area's name; the routes do not take it, so rows are cut by it. */
+  area: string;
   state: string;
   sort: string;
 }
@@ -41,6 +43,7 @@ export function parseFilter(params: URLSearchParams, scale: Scale): Filter {
     complexity: choice(params.get('complexity'), scale.levels),
     release: params.get('release') ?? '',
     under: params.get('under') ?? '',
+    area: params.get('area') ?? '',
     state: choice(params.get('state'), STATES),
     sort: choice(params.get('sort'), SORTS.map((s) => s.name)),
   };
@@ -56,7 +59,7 @@ export function nextParams(f: Filter) {
   return { key: f.key || undefined, priority: f.priority || undefined, complexity: f.complexity || undefined, under: f.under || undefined };
 }
 
-/** What the stored lists take of a filter: the release, which `/done`, `/dropped` and `/derived` apply before the page is cut, and the plan, story or concept the rows lie under. */
+/** What the stored lists take of a filter: the release, which `/done`, `/dropped` and `/derived` apply before the page is cut, and the plan or story the rows lie under. */
 export function pagedParams(f: Filter) {
   return { release: f.release || undefined, under: f.under || undefined };
 }
@@ -72,6 +75,7 @@ export interface Filterable {
   complexity?: string | null;
   state?: string;
   release?: string | null;
+  area?: string | null;
 }
 
 /** Whether a row passes every field of the filter, for the routes that do not take them all. */
@@ -80,6 +84,7 @@ export function applies(r: Filterable, f: Filter, releases: string[], priorities
   if (f.priority && r.priority !== undefined && priorities.indexOf(r.priority) > priorities.indexOf(f.priority)) return false;
   if (f.complexity && r.complexity !== f.complexity) return false;
   if (f.state && r.state !== undefined && r.state !== f.state) return false;
+  if (f.area && r.area?.toLowerCase() !== f.area.toLowerCase()) return false;
   if (f.release && releaseOf(r.release, releases) !== f.release) return false;
   return true;
 }
@@ -95,7 +100,7 @@ export function sortRows<T extends { id: string; priority?: string; updated_at?:
   return rows;
 }
 
-/** The work page listing what is left to do under a plan, story or concept. */
+/** The work page listing what is left to do under a plan or story. */
 export function remainingHref(slug: string, under: string): string {
   const path = slug.split('/').map(encodeURIComponent).join('/');
   return `${ROOT}${path}/work?list=next&under=${encodeURIComponent(under)}`;

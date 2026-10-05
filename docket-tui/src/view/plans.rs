@@ -1,4 +1,4 @@
-//! Plans, stories, packages, concepts and central ideas as a tree with progress, the selected one beside
+//! Plans, stories, packages and central ideas as a tree, then the areas, with progress, the selected one beside
 //! it with what comes next under it.
 
 use ratatui::Frame;
@@ -79,7 +79,7 @@ pub fn draw<S: Source>(app: &mut App<S>, f: &mut Frame, area: Rect) {
     let width = usize::from(left.width.saturating_sub(1));
     let block = Block::default()
         .borders(Borders::RIGHT)
-        .title(Span::styled(" plans, packages and concepts", style::bold()));
+        .title(Span::styled(" plans, packages and areas", style::bold()));
     let inner = block.inner(left);
     app.map.panes.push((left, Pane::List));
     app.map.list_rows = height;
@@ -108,10 +108,7 @@ pub fn draw<S: Source>(app: &mut App<S>, f: &mut Frame, area: Rect) {
 pub fn doc(board: Option<&Board>, p: &Plans, width: usize) -> Doc {
     let mut d = Doc::default();
     let Some(r) = p.rows.get(p.sel).filter(|r| r.heading.is_none()) else {
-        d.plain(
-            "nothing open here: no plan, story, package or concept",
-            style::dim(),
-        );
+        d.plain("nothing open here: no plan, story or package", style::dim());
         return d;
     };
     let title: String = r

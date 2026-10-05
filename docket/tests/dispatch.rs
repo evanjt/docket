@@ -29,14 +29,16 @@ INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, compl
   (7, 'o/p', 'T', 6, 'Write six', 'open', 'agent', '[]', '', 'medium', '2026-01-01T00:00:00Z', 'u'),
   (8, 'o/p', 'A', 2, 'A finished plan', 'open', 'agent', '[]', '', NULL, '2026-01-01T00:00:00Z', 'u'),
   (9, 'o/p', 'T', 7, 'Written', 'open', 'agent', '[]', '', 'low', '2026-01-01T00:00:00Z', 'u');
-UPDATE items SET parent_rid = 8 WHERE rid = 9;
+UPDATE items SET parent_rid = 8, state = 'done', turn = NULL, resolution = 'abc1234' WHERE rid = 9;
 UPDATE items SET group_name = 'streams' WHERE rid IN (1, 2);
+UPDATE items SET type = 'plan' WHERE key = 'A';
 "#;
 
 /// The stand-in for ssh: options skipped, the host's home put in place, the command run here.
 const SSH: &str = r#"#!/bin/sh
 while [ "${1#-}" != "$1" ]; do shift 2; done
 host=$1; shift
+echo "$host $*" >> "$MACHINES/ssh.log"
 home="$MACHINES/$host"
 [ -d "$home" ] || { echo "ssh: no host $host" >&2; exit 255; }
 export HOME="$home" XDG_CONFIG_HOME="$home/.config" XDG_STATE_HOME="$home/.state"
@@ -228,6 +230,16 @@ fn text(out: &Output) -> String {
     )
 }
 
+/// A collected job leaves its worktree parked on a detached head for the next job to reuse.
+fn assert_parked(machine: &Path) {
+    let list = sh(machine, "git worktree list");
+    assert_eq!(list.lines().count(), 2, "{list}");
+    assert!(
+        list.lines().nth(1).unwrap().ends_with("(detached HEAD)"),
+        "{list}"
+    );
+}
+
 #[test]
 fn test_a_lead_dispatches_to_another_machine_and_collects_the_branch() {
     let w = World::new();
@@ -272,13 +284,64 @@ fn test_a_lead_dispatches_to_another_machine_and_collects_the_branch() {
         "Write the job marker"
     );
     let beta = w.home("beta").join("src/p");
-    assert_eq!(sh(&beta, "git worktree list").lines().count(), 1);
+    assert_parked(&beta);
     assert_eq!(sh(&beta, &format!("git branch --list {branch}")), "");
     assert_eq!(
         sh(&beta, "git log --all --format=%s"),
         "start",
         "nothing was committed on the job's machine"
     );
+}
+
+/// The commands sent over ssh that read a machine's jobs.
+fn status_reads(w: &World) -> usize {
+    fs::read_to_string(w.machines.join("ssh.log"))
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| l.contains("job status"))
+        .count()
+}
+
+#[test]
+fn test_a_job_reports_its_end_and_jobs_wait_follows_it_without_reading_a_machine() {
+    let mut w = World::new();
+    w.does = "sleep 3".into();
+    let out = w.lead(&["dispatch", "T1", "--on", "beta"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(status_reads(&w), 0, "dispatch reads no machine");
+
+    let jobs = w.lead(&["jobs", "--wait", "--every", "1"]);
+    assert!(jobs.status.success(), "{}", text(&jobs));
+    assert!(text(&jobs).contains("done"), "{}", text(&jobs));
+    assert_eq!(
+        status_reads(&w),
+        1,
+        "only the table at the end reads a machine over ssh, beta, alpha being this one"
+    );
+
+    let log = w.lead(&["--json", "log", "T1"]);
+    let log: serde_json::Value = serde_json::from_slice(&log.stdout).unwrap();
+    let reported = log
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["kind"] == "job_reported")
+        .unwrap_or_else(|| panic!("{log}"));
+    assert_eq!(reported["data"]["exit"], 0);
+    assert!(reported["data"]["end"].is_string(), "{reported}");
+    assert_eq!(reported["data"]["report"], "DONE");
+
+    let collected = w.lead(&["collect", "T1"]);
+    assert!(collected.status.success(), "{}", text(&collected));
+    let log = w.lead(&["--json", "log", "T1"]);
+    let log: serde_json::Value = serde_json::from_slice(&log.stdout).unwrap();
+    let reports = log
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "job_reported")
+        .count();
+    assert_eq!(reports, 1, "collect does not write the end a second time");
 }
 
 #[test]
@@ -300,7 +363,7 @@ fn test_a_lead_runs_a_job_on_its_own_machine_by_the_models_fact() {
         sh(&alpha, &format!("git log -1 --format=%s {branch}")),
         "Write the job marker"
     );
-    assert_eq!(sh(&alpha, "git worktree list").lines().count(), 1);
+    assert_parked(&alpha);
 }
 
 #[test]
@@ -357,7 +420,7 @@ fn test_a_discarded_job_is_cleared_and_nothing_is_committed() {
     let alpha = w.home("alpha").join("src/p");
     assert_eq!(sh(&alpha, &format!("git branch --list {branch}")), "");
     let beta = w.home("beta").join("src/p");
-    assert_eq!(sh(&beta, "git worktree list").lines().count(), 1);
+    assert_parked(&beta);
 }
 
 #[test]
@@ -458,7 +521,7 @@ fn test_collect_commits_a_change_inside_a_submodule_in_the_leads_submodule() {
         "nothing was pushed"
     );
     let beta = w.home("beta").join("src/p");
-    assert_eq!(sh(&beta, "git worktree list").lines().count(), 1);
+    assert_parked(&beta);
 }
 
 #[test]
@@ -487,7 +550,7 @@ fn test_a_change_that_cannot_be_committed_here_keeps_the_job() {
     let again = w.lead(&["collect", "T1"]);
     assert!(again.status.success(), "{}", text(&again));
     assert_eq!(sh(&alpha, &format!("git show {branch}:made-by-job")), name);
-    assert_eq!(sh(&beta, "git worktree list").lines().count(), 1);
+    assert_parked(&beta);
 }
 
 #[test]
@@ -541,7 +604,7 @@ fn test_a_second_member_of_a_group_is_refused_while_one_runs() {
 }
 
 #[test]
-fn test_a_dispatch_names_the_machine_it_could_not_read_and_why() {
+fn test_a_dispatch_to_a_machine_that_cannot_be_reached_says_why_and_holds_no_claim() {
     let w = World::new();
     let add = w.lead(&[
         "machine",
@@ -558,21 +621,8 @@ fn test_a_dispatch_names_the_machine_it_could_not_read_and_why() {
     let out = w.lead(&["dispatch", "T1", "--on", "gamma"]);
     assert!(!out.status.success());
     let said = text(&out);
-    assert!(said.contains("gamma cannot be read"), "{said}");
     assert!(said.contains("no host gamma"), "{said}");
     assert!(w.show("T1")["claim_branch"].is_null());
-
-    for name in ["alpha", "beta"] {
-        let set = w.lead(&["machine", "set", name, "--runners", "codex"]);
-        assert!(set.status.success(), "{}", text(&set));
-    }
-    let set = w.lead(&["machine", "set", "gamma", "--runners", "claude"]);
-    assert!(set.status.success(), "{}", text(&set));
-    let out = w.lead(&["dispatch", "T1"]);
-    assert!(!out.status.success());
-    let said = text(&out);
-    assert!(said.contains("gamma cannot be read"), "{said}");
-    assert!(said.contains("no host gamma"), "{said}");
 }
 
 #[test]

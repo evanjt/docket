@@ -26,6 +26,8 @@ async fn served() -> (Router, Scratch) {
            '[{"key": "T", "kind": "work", "meaning": "tasks", "turn": "agent"}]', 'c', 'u')"#,
     )
     .await;
+    s.seed("INSERT INTO areas (project, name, description, position, priority) VALUES ('o/p', 'general', '', 1, NULL)")
+        .await;
     (
         app(&s.db, Keys::parse("testbox owner ownerkey").unwrap()),
         s,
@@ -66,7 +68,7 @@ async fn test_concurrent_claims_one_wins() {
     let (status, _) = post(
         app.clone(),
         "new",
-        json!({"project": "o/p", "key": "T", "title": "Contested"}),
+        json!({"project": "o/p", "key": "T", "title": "Contested", "area": "general"}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -91,7 +93,7 @@ async fn test_concurrent_new_items_get_distinct_ids() {
     let results = race(
         &app,
         "new",
-        |n| json!({"project": "o/p", "key": "T", "title": format!("Item {n}")}),
+        |n| json!({"project": "o/p", "key": "T", "title": format!("Item {n}"), "area": "general"}),
     )
     .await;
     let ids: HashSet<String> = results

@@ -11,9 +11,6 @@ fn private() -> Private {
         hosts: vec!["gamma.example.org".into()],
         keys: vec!["T".into(), "A".into(), "PK".into()],
         titles: vec![],
-        themes: vec!["Lanterns".into()],
-        groups: vec!["harbour-lights".into()],
-        releases: vec!["2.4".into(), "saffron".into()],
     }
 }
 
@@ -138,9 +135,9 @@ fn test_ssh_hosts_are_every_alias_but_patterns() {
 }
 
 #[test]
-fn test_terms_take_themes_groups_and_releases() {
-    let t = terms(&private(), &[], &[]);
-    for want in ["Lanterns", "harbour-lights", "2.4", "saffron"] {
-        assert!(t.iter().any(|x| x == want), "{want} missing from {t:?}");
-    }
+fn test_theme_group_and_release_names_are_not_terms() {
+    let sent = r#"{"projects":[],"owners":[],"machines":[],"hosts":[],"keys":[],
+        "themes":["Lanterns"],"groups":["harbour-lights"],"releases":["2.4","saffron"]}"#;
+    let p: Private = serde_json::from_str(sent).unwrap();
+    assert!(terms(&p, &[], &[]).is_empty());
 }

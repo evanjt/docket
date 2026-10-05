@@ -1,13 +1,14 @@
 //! Rows read by a raw query, shaped as `--json` prints them, with any extra columns the query selects.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use sea_orm::{ConnectionTrait, DbErr, FromQueryResult};
 use serde_json::{Map, Value};
 
 use crate::entities::{item, project};
-use crate::reads::public::{Kinds, open_members, public, sql};
+use crate::reads::public::{Members, member_counts, public, sql};
 use crate::verbs::Failure;
+use docket_core::word::kind_of_type;
 
 /// A stored row and the extra columns its query selected.
 pub type Extra = (item::Model, Map<String, Value>);
@@ -75,21 +76,18 @@ pub async fn shaped<C: ConnectionTrait>(
     project: &project::Model,
     rows: Vec<Extra>,
 ) -> Result<Vec<Value>, Failure> {
-    let mut kinds: HashMap<String, Kinds> = HashMap::new();
-    let mut counts: HashMap<i64, u64> = HashMap::new();
-    kinds.insert(project.slug.clone(), Kinds::of(project));
-    counts.extend(open_members(db, &project.slug).await?);
+    let mut counts: HashMap<i64, Members> = HashMap::new();
+    counts.extend(member_counts(db, &project.slug).await?);
+    let mut counted = HashSet::from([project.slug.clone()]);
     for (row, _) in &rows {
-        if !kinds.contains_key(&row.project) {
-            let other = project_model(db, &row.project).await?;
-            kinds.insert(row.project.clone(), Kinds::of(&other));
-            counts.extend(open_members(db, &row.project).await?);
+        if counted.insert(row.project.clone()) {
+            counts.extend(member_counts(db, &row.project).await?);
         }
     }
     let mut out = Vec::with_capacity(rows.len());
     for (row, extra) in rows {
-        let open = counts.get(&row.rid).copied().unwrap_or(0);
-        let kind = kinds[&row.project].kind(&row.key);
+        let open = counts.get(&row.rid).copied().unwrap_or_default();
+        let kind = kind_of_type(&row.item_type);
         let mut d = public(db, kind, row, open, None).await?;
         d.extend(extra);
         out.push(Value::Object(d));

@@ -171,10 +171,10 @@ fn test_project_page_shows_progress_next_plans_and_moves() {
         let mut a = app();
         project(&mut a, "o/p");
         let s = tall(&mut a, w, 80);
-        assert!(s.contains("2 of 8 closed"), "{s}");
-        assert!(s.contains("ready 2  building 1"), "{s}");
+        assert!(s.contains("2 of 9 closed"), "{s}");
+        assert!(s.contains("ready 1  in progress 1  building 2"), "{s}");
         assert!(s.contains(" T3 "), "{s}");
-        assert!(s.contains("PLANS  2 under way"), "{s}");
+        assert!(s.contains("PLANS  3 under way"), "{s}");
         assert!(s.contains("A2     ##########    1/1"), "{s}");
         assert!(s.contains("claimed: T2"), "{s}");
     }
@@ -204,7 +204,7 @@ fn test_plans_space_opens_a_row_s_children() {
     press(&mut a, KeyCode::Char('j'));
     press(&mut a, KeyCode::Char(' '));
     let s = screen(&mut a, 160);
-    assert!(s.contains("T2     building"), "{s}");
+    assert!(s.contains("T2     in progress"), "{s}");
 }
 
 #[test]
@@ -243,12 +243,12 @@ fn test_help_explains_pages_words_and_keys() {
         let s = tall(&mut a, w, 80);
         assert!(s.contains("What this screen shows"), "{s}");
         assert!(s.contains("Settings (S)"), "{s}");
-        assert!(s.contains("  parked     waiting on you"), "{s}");
+        assert!(s.contains("  waiting on owner waiting on you"), "{s}");
     }
     let mut a = app();
     press(&mut a, KeyCode::Char('?'));
     assert_eq!(
-        colour_of(&mut a, 80, "parked     waiting"),
+        colour_of(&mut a, 80, "waiting on owner waiting"),
         Some(Color::Magenta)
     );
 }
@@ -274,9 +274,9 @@ fn test_a_change_reads_again_and_keeps_the_selection() {
 fn test_words_and_verbs_take_their_colours() {
     let mut a = app();
     project(&mut a, "o/p");
-    assert_eq!(colour_of(&mut a, 160, "ready 2"), Some(Color::Green));
-    assert_eq!(colour_of(&mut a, 160, "building 1"), Some(Color::Yellow));
-    // claimed leads to building, so it takes building's yellow.
+    assert_eq!(colour_of(&mut a, 160, "ready 1"), Some(Color::Green));
+    assert_eq!(colour_of(&mut a, 160, "building 2"), Some(Color::Yellow));
+    // claimed leads to in progress, so it takes in progress's yellow.
     assert_eq!(colour_of(&mut a, 160, "claimed:"), Some(Color::Yellow));
 }
 
@@ -305,4 +305,72 @@ fn test_a_group_name_in_the_detail_opens_the_group() {
         s.contains("[group loaves]") && s.contains("group loaves 1"),
         "{s}"
     );
+}
+
+#[test]
+fn test_project_page_prints_the_forecast_of_the_metrics_body() {
+    let mut a = app();
+    a.source.releases.lock().unwrap()[0].forecast = docket_core::metrics::Forecast {
+        open: 12,
+        burn: 1.5,
+        converging: true,
+        p50: Some("2026-10-20".into()),
+        p85: Some("2026-11-02".into()),
+        ..Default::default()
+    };
+    project(&mut a, "o/p");
+    let s = tall(&mut a, 160, 80);
+    assert!(s.contains("clear by P50 2026-10-20"), "{s}");
+}
+
+#[test]
+fn test_project_page_says_not_converging_for_a_zero_burn() {
+    let mut a = app();
+    a.source.releases.lock().unwrap()[0].forecast = docket_core::metrics::Forecast {
+        open: 12,
+        ..Default::default()
+    };
+    project(&mut a, "o/p");
+    let s = tall(&mut a, 160, 80);
+    assert!(s.contains("not converging"), "{s}");
+}
+
+#[test]
+fn test_project_page_shows_each_release_s_progress_and_the_check_problems() {
+    let mut a = app();
+    project(&mut a, "o/p");
+    let s = tall(&mut a, 160, 80);
+    assert!(s.contains("RELEASES"), "{s}");
+    assert!(
+        s.contains("4.2.0") && s.contains("1 of 3 closed") && s.contains("ready 1  held later 1"),
+        "{s}"
+    );
+    assert!(s.contains("4.3.0") && s.contains("1 of 1 closed"), "{s}");
+    assert!(s.contains("CHECKS") && s.contains("1 cycle"), "{s}");
+}
+
+#[test]
+fn test_a_browser_row_shows_its_release() {
+    let mut a = app();
+    browse(&mut a, Listing::Word("done".into()));
+    let s = screen(&mut a, 160);
+    assert!(s.contains("4.2.0"), "{s}");
+}
+
+#[test]
+fn test_browser_rows_show_their_area_and_an_area_filter_keeps_only_its_rows() {
+    let mut a = app();
+    browse(&mut a, Listing::Word("blocked".into()));
+    assert!(screen(&mut a, 120).contains("lanterns"));
+
+    let ids = |a: &mut App<Fixture>, area: &str| -> Vec<String> {
+        let filter = crate::filter::Filter::parse(&format!("area:{area}")).unwrap();
+        browse(a, Listing::Next(Box::new(filter)));
+        let Page::Browser(b) = &a.page else {
+            panic!("not a browser");
+        };
+        b.entries.iter().map(|e| e.id.clone()).collect()
+    };
+    assert_eq!(ids(&mut a, "Lanterns"), ["T3"]);
+    assert!(ids(&mut a, "kites").is_empty());
 }

@@ -1,28 +1,19 @@
-use super::{Board, GateProblem};
+use super::Board;
 use crate::member::{Edge, Tie};
-use crate::rows::{ItemRow, KeySpec, Progress, ProjectRow};
-use crate::rules::GATE;
-use crate::word::Kind;
+use crate::rows::{ItemRow, Progress, ProjectRow};
+use crate::word::ItemType;
 
+/// A project whose stored key list is empty: every item is read by its type.
 fn project() -> ProjectRow {
-    let keys = [("T", Kind::Work), ("A", Kind::Audit)]
-        .into_iter()
-        .map(|(key, kind)| KeySpec {
-            key: key.into(),
-            kind,
-            meaning: None,
-            turn: None,
-        })
-        .collect();
     ProjectRow {
         slug: "o/p".into(),
-        keys,
         ..ProjectRow::default()
     }
 }
 
 fn item(rid: i64, id: &str, state: &str) -> ItemRow {
     let key: String = id.chars().take_while(char::is_ascii_alphabetic).collect();
+    let item_type = ItemType::filed_under(&key).unwrap_or_default().as_str();
     ItemRow {
         rid,
         project: "o/p".into(),
@@ -31,6 +22,7 @@ fn item(rid: i64, id: &str, state: &str) -> ItemRow {
         id: id.into(),
         state: state.into(),
         turn: Some("agent".into()),
+        item_type: item_type.into(),
         ..ItemRow::default()
     }
 }
@@ -87,72 +79,57 @@ fn test_a_claimed_plan_is_not_due() {
     assert!(!b.due(b.get("A1").unwrap()));
 }
 
-fn gated(b: &mut Board, idx: usize) {
-    b.items[idx].wait_on = Some("condition".into());
-    b.items[idx].wait_ref = Some(GATE.into());
-}
-
 #[test]
-fn test_a_gated_plan_with_everything_closed_is_a_held_gate() {
-    let mut b = plan_with_grandchild("done");
-    gated(&mut b, 0);
-    assert_eq!(
-        b.gate_problems(),
-        vec![GateProblem::HeldGate { id: "A1".into() }]
-    );
-}
-
-#[test]
-fn test_an_ungated_plan_with_open_members_at_depth_two_is_an_open_audit() {
-    let items = vec![
-        item(1, "A1", "open"),
-        item(2, "T1", "done"),
-        item(3, "A2", "done"),
-        item(4, "T3", "open"),
-        item(5, "T4", "open"),
+fn test_area_progress_counts_open_and_closed_items_per_area_in_position_order() {
+    use crate::area::{Area, Listed};
+    let area = |name: &str, position: i64, priority: Option<&str>| Area {
+        name: name.into(),
+        description: Some(format!("{name} work")),
+        position,
+        priority: priority.map(String::from),
+        history: false,
+    };
+    let mut p = project();
+    p.areas = Listed {
+        rows: vec![
+            (1, area("lanterns", 2, Some("high"))),
+            (2, area("kites", 1, None)),
+            (3, area("sails", 3, None)),
+        ],
+    };
+    let mut items = vec![
+        item(1, "T1", "done"),
+        item(2, "T2", "open"),
+        item(3, "T3", "dropped"),
+        item(4, "T4", "open"),
+        item(5, "T5", "open"),
     ];
-    let ties = vec![parent(2, 1), parent(3, 1), parent(4, 3), parent(5, 3)];
-    let b = Board::new(project(), items, ties);
+    for (i, area) in items.iter_mut().zip([1, 1, 1, 2, 2]) {
+        i.area_id = Some(area);
+    }
+    items[4].claim_branch = Some("b".into());
+    let b = Board::new(p, items, Vec::new());
+    let got: Vec<(String, Option<String>, u64, u64, u64)> = b
+        .area_progress()
+        .into_iter()
+        .map(|a| (a.name, a.priority, a.open, a.done, a.live))
+        .collect();
     assert_eq!(
-        b.gate_problems(),
-        vec![GateProblem::OpenAudit {
-            id: "A1".into(),
-            n: 2
-        }]
-    );
-}
-
-#[test]
-fn test_a_gated_plan_with_open_members_and_a_claimed_plan_are_not_problems() {
-    let mut b = plan_with_grandchild("open");
-    gated(&mut b, 0);
-    assert!(b.gate_problems().is_empty());
-    b.items[0].wait_on = None;
-    b.items[0].wait_ref = None;
-    b.items[0].claim_branch = Some("audit/a1".into());
-    assert!(b.gate_problems().is_empty());
-}
-
-#[test]
-fn test_a_plan_under_a_plan_is_reported_once_each() {
-    let items = vec![
-        item(1, "A1", "open"),
-        item(2, "A2", "open"),
-        item(3, "T1", "open"),
-    ];
-    let ties = vec![parent(2, 1), parent(3, 2)];
-    let b = Board::new(project(), items, ties);
-    assert_eq!(
-        b.gate_problems(),
-        vec![
-            GateProblem::OpenAudit {
-                id: "A1".into(),
-                n: 2
-            },
-            GateProblem::OpenAudit {
-                id: "A2".into(),
-                n: 1
-            },
+        got,
+        [
+            ("kites".into(), None, 2, 0, 1),
+            ("lanterns".into(), Some("high".into()), 1, 1, 0),
+            ("sails".into(), None, 0, 0, 0),
         ]
     );
+}
+
+#[test]
+fn test_a_plan_with_open_members_reads_building_without_a_wait() {
+    let b = plan_with_grandchild("open");
+    let a1 = b.get("A1").unwrap();
+    assert!(a1.wait_on.is_none());
+    assert_eq!(b.word(a1), "building");
+    let done = plan_with_grandchild("done");
+    assert_eq!(done.word(done.get("A1").unwrap()), "audit due");
 }

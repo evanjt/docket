@@ -27,14 +27,12 @@ fn test_bar_rounds_half_to_even_and_handles_nothing() {
 fn test_problem_lines_word_each_kind() {
     let problems = json!([
         {"kind": "undefined_key", "key": "X", "n": 1},
-        {"kind": "open_audit", "id": "A1", "n": 2},
         {"kind": "stale_wait", "id": "T3", "since": "2026-01-01T00:00:00Z", "until": "rain"},
     ]);
     assert_eq!(
         problem_lines(&problems),
         [
             "1 item is filed under X, which the project does not define",
-            "A1 is open for audit while 2 items under it are open",
             "T3 has waited since 2026-01-01T00:00:00Z until: rain",
         ]
     );
@@ -50,16 +48,17 @@ fn read() -> Read {
         ],
         summary: json!({
             "skills": {"mode": "pause", "pool": "local=2"},
-            "pace": {"closed": 0, "working": 0},
             "claims": [{"id": "T2", "title": "Second member", "branch": "audit/t2-1",
                         "host": "devbox", "since": 1000, "flag": "no event for 3h"}],
             "plans": [{"id": "A1", "title": "Loaves stay put", "done": 1, "total": 4, "live": 1}],
             "due": [{"id": "A2", "title": "Orders print at the till"}],
             "problems": [],
         }),
+        metrics: Value::Null,
         yours: json!([{"id": "Q1", "title": "Which shelf holds the loaves"}]),
         next: json!([{"id": "T3", "title": "Fix the loaf count", "complexity": "low"}]),
         now: 1000 + 3 * 3600,
+        squash: None,
     }
 }
 
@@ -114,16 +113,36 @@ fn test_status_text_says_when_nothing_is_claimed_waiting_or_due() {
 }
 
 #[test]
-fn test_status_text_nets_the_hours_tickets_and_names_the_idle_research() {
+fn test_status_text_prints_the_forecast_of_the_metrics_body() {
     let mut r = read();
-    r.summary["net"] = json!({"closed": 2, "opened": 9, "idle": 3});
+    r.metrics = json!({
+        "forecast": {
+            "open": 12, "burn": 1.5, "converging": true,
+            "p50": "2026-10-20", "p85": "2026-11-02", "target": null, "late": null
+        }
+    });
     let lines = render("o/p", &r);
+    assert_eq!(lines[1], "12 open, clear by P50 2026-10-20, P85 2026-11-02");
+}
+
+#[test]
+fn test_status_text_says_not_converging_for_a_zero_burn() {
+    let mut r = read();
+    r.metrics = json!({
+        "forecast": {
+            "open": 12, "burn": 0.0, "converging": false,
+            "p50": null, "p85": null, "target": null, "late": null
+        }
+    });
     assert_eq!(
-        lines[1],
-        "the last hour: current-release tickets 2 closed, 9 opened, net +7; 3 research closes opened nothing"
+        render("o/p", &r)[1],
+        "12 open, not converging: closes do not outrun opens"
     );
-    r.summary["net"] = json!({"closed": 0, "opened": 0, "idle": 0});
-    assert!(render("o/p", &r)[1].starts_with("ready "));
+}
+
+#[test]
+fn test_status_text_prints_no_forecast_line_without_one() {
+    assert!(render("o/p", &read())[1].starts_with("ready "));
 }
 
 #[test]
@@ -156,7 +175,7 @@ fn test_many_problems_print_as_one_line_of_counts() {
 #[test]
 fn test_status_json_carries_every_section_of_the_text() {
     let json = json_status(&read());
-    for key in ["yours", "next", "plans", "problems", "pace"] {
+    for key in ["yours", "next", "plans", "problems", "metrics"] {
         assert!(json.get(key).is_some(), "{key}: {json}");
     }
     assert_eq!(json["yours"][0]["id"], "Q1");

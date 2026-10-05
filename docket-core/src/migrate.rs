@@ -1,18 +1,19 @@
 //! The move of a project's rows onto the core: releases as rows, dependencies, one parent plan, an
-//! origin link, labels, a priority column and assignment rows. `plan` is the one place the mapping
+//! origin link, areas, labels, a priority column and assignment rows. `plan` is the one place the mapping
 //! is written; it reads the rows the dump carries and returns every change with the cases that need
 //! a person's eye. A case whose repair turns on an undecided rule waits on it, and nothing is
 //! written while one does.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use semver::Version;
 use serde::Serialize;
 
+use crate::area::Placement;
 use crate::assignment;
 use crate::dump::{DumpPage, EventDump, ItemDump, ProjectDump};
 use crate::item::Refused;
 use crate::rows::{KeySpec, Theme};
-use crate::rules::GATE;
 use crate::word::{Kind, PRIORITIES, priority};
 
 /// One project's rows as the dump carries them: items with their links by id, and events.
@@ -45,49 +46,36 @@ impl<'a> Rows<'a> {
     }
 }
 
-/// What happens to a plan held by a child in a later release.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Held {
-    /// The later child leaves the plan and keeps an origin link to it.
-    Detach,
-    /// The plan moves to its latest child's release.
-    MovePlan,
-    /// The later children move into the plan's release.
-    PullChildren,
-}
-
 /// Where an item goes whose theme is not a release. It carries the theme as a label either way.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum Areas {
-    Current,
+pub enum Themes {
     Backlog,
     /// Its parent plan's release when that plan is in one, else the backlog.
+    #[default]
     Plan,
 }
 
-/// The rules the cases turn on; `None` is a rule not decided yet.
+/// The rules the cases turn on.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Rules {
-    pub held: Option<Held>,
-    pub areas: Option<Areas>,
+    pub themes: Themes,
 }
 
 /// A decision a risky case waits on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Decision {
-    Held,
-    Areas,
+    Themes,
+    Unplaced,
 }
 
 impl Decision {
     #[must_use]
     pub fn what(self) -> &'static str {
         match self {
-            Decision::Held => "what happens to a plan held by work in a later release",
-            Decision::Areas => "where an item goes whose theme is not a release",
+            Decision::Themes => "where an item goes whose theme is not a release",
+            Decision::Unplaced => "an agent's placement (docket decide ID --area NAME)",
         }
     }
 }
@@ -98,6 +86,37 @@ pub struct Release {
     pub name: String,
     pub position: usize,
     pub from_fact: bool,
+}
+
+/// An area row the move makes, after the project's areas: one from each concept item in concept id
+/// order, its title and body the description; then one for each area an agent's placement names, in
+/// the order first placed, its `about` the description; then `unsorted`, for the closed items nothing
+/// places, marked `history`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Area {
+    pub name: String,
+    pub description: String,
+    pub position: usize,
+    /// The concept item it is made from; none for an area a placement names, and for `unsorted`.
+    pub concept: Option<String>,
+    /// The area holds closed items only, and no open item is placed in it.
+    pub history: bool,
+}
+
+/// The area the closed items nothing places go to, and what it says it holds.
+pub const UNSORTED: &str = "unsorted";
+const UNSORTED_ABOUT: &str = "closed items no area claimed at the migration";
+
+/// How the items of one project came by their areas, for the dry run.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct Placed {
+    pub by_plan: usize,
+    pub by_concept: usize,
+    pub by_placement: usize,
+    /// Closed items nothing places, sent to `unsorted`.
+    pub unsorted: usize,
+    /// Open items nothing places, left with no area.
+    pub unplaced: usize,
 }
 
 /// One attempt at an item, a claim or an ask, as `assignment::rebuild` gives it. No end is the
@@ -126,6 +145,11 @@ pub enum Change {
     Plan {
         id: String,
     },
+    /// The item's type becomes `kind`, for an item under a key the project made.
+    Typed {
+        id: String,
+        kind: String,
+    },
     Priority {
         id: String,
         priority: String,
@@ -138,6 +162,21 @@ pub enum Change {
     BecomesLabel {
         id: String,
         label: String,
+    },
+    /// A concept item dropped, the area it became standing in for it.
+    BecomesArea {
+        id: String,
+        area: String,
+    },
+    InArea {
+        id: String,
+        area: String,
+    },
+    /// The area an agent placed an item in with `decide --area`, applied as written, and the basis.
+    Placed {
+        id: String,
+        area: String,
+        basis: String,
     },
     DependsOn {
         id: String,
@@ -181,9 +220,15 @@ impl Change {
                 None => format!("{id} in the backlog"),
             },
             Change::Plan { id } => format!("{id} is a plan"),
+            Change::Typed { id, kind } => format!("{id} is a {kind}"),
             Change::Priority { id, priority } => format!("{id} at priority {priority}"),
             Change::Label { id, label } => format!("{id} labelled {label}"),
             Change::BecomesLabel { id, label } => format!("{id} becomes the label {label}"),
+            Change::BecomesArea { id, area } => format!("{id} is dropped: became area {area}"),
+            Change::InArea { id, area } => format!("{id} in area {area}"),
+            Change::Placed { id, area, basis } => {
+                format!("{id} placed in {area} (derived: {basis})")
+            }
             Change::DependsOn { id, on } => format!("{id} depends on {on}"),
             Change::GateRemoved { id } => {
                 format!("{id} stops waiting on its gate: its children hold it")
@@ -245,10 +290,42 @@ pub enum Case {
     },
     /// A theme that is not a release, and the open items carrying it.
     FoldedTheme { theme: String, open: usize },
+    /// A key the project made: its items keep their ids and take a type and a label for the key.
+    OwnKey {
+        key: String,
+        meaning: String,
+        items: usize,
+        open: usize,
+    },
     /// The project names no release, so every item goes to the backlog.
     NoRelease { open: usize },
     /// The item files docket-dump writes change shape.
     DumpFormat { files: usize },
+    /// Names in the releases fact that are no semantic version.
+    ReleaseName { names: Vec<String> },
+    /// The releases fact is not in strictly rising version order.
+    ReleaseOrder { names: Vec<String> },
+    /// An item tied to concepts other than the area its plan gives it.
+    PlanArea {
+        id: String,
+        plan: String,
+        area: String,
+        own: Vec<String>,
+    },
+    /// An item under no plan with an area, tied to several concepts: it keeps the oldest tie.
+    SeveralConcepts {
+        id: String,
+        area: String,
+        gave_up: Vec<String>,
+    },
+    /// The open items no plan, concept or placement places.
+    Unplaced { open: Vec<String> },
+    /// An agent's placement of an item a plan or a concept places already.
+    PlacementIgnored {
+        id: String,
+        placed: String,
+        area: String,
+    },
 }
 
 impl Case {
@@ -283,13 +360,56 @@ impl Case {
             Case::FoldedTheme { theme, open } => {
                 format!("theme {theme} is not a release, on {open} open items")
             }
+            Case::OwnKey {
+                key,
+                meaning,
+                items,
+                open,
+            } => format!("key {key} ({meaning}) holds {items} items, {open} open"),
             Case::NoRelease { open } => {
                 format!("the project names no release, with {open} open items")
             }
             Case::DumpFormat { files } => {
                 format!("docket-dump's item files change shape, {files} files")
             }
+            Case::ReleaseName { names } => {
+                format!(
+                    "the releases fact names no semantic version: {}",
+                    names.join(", ")
+                )
+            }
+            Case::ReleaseOrder { names } => {
+                format!(
+                    "the releases fact is out of version order: {}",
+                    names.join(", ")
+                )
+            }
+            Case::PlanArea {
+                id,
+                plan,
+                area,
+                own,
+            } => format!(
+                "{id} is tied to {} and under plan {plan} in {area}",
+                own.join(", ")
+            ),
+            Case::SeveralConcepts { id, area, gave_up } => format!(
+                "{id} is tied to {area} and {} with no plan to settle it",
+                gave_up.join(", ")
+            ),
+            Case::Unplaced { open } => format!(
+                "{} open items have no area from a plan, a concept or a placement",
+                open.len()
+            ),
+            Case::PlacementIgnored { id, placed, area } => format!(
+                "{id} is placed in {placed} by an agent and in {area} by its plan or concept"
+            ),
         }
+    }
+
+    /// Whether the case stops the write until the data is corrected.
+    fn blocks(&self) -> bool {
+        matches!(self, Case::ReleaseName { .. } | Case::ReleaseOrder { .. })
     }
 
     /// What a waiting case is named by in a refusal.
@@ -297,10 +417,18 @@ impl Case {
         match self {
             Case::HeldPlan { plan, .. } => plan.clone(),
             Case::FoldedTheme { theme, .. } => theme.clone(),
-            Case::Cycle { id, .. } | Case::TwoPlans { id, .. } | Case::Inversion { id, .. } => {
-                id.clone()
-            }
-            Case::NoRelease { .. } | Case::DumpFormat { .. } => String::new(),
+            Case::Cycle { id, .. }
+            | Case::TwoPlans { id, .. }
+            | Case::Inversion { id, .. }
+            | Case::PlanArea { id, .. }
+            | Case::SeveralConcepts { id, .. }
+            | Case::PlacementIgnored { id, .. } => id.clone(),
+            Case::OwnKey { key, .. } => key.clone(),
+            Case::Unplaced { open } => open.join(", "),
+            Case::NoRelease { .. }
+            | Case::DumpFormat { .. }
+            | Case::ReleaseName { .. }
+            | Case::ReleaseOrder { .. } => String::new(),
         }
     }
 }
@@ -333,6 +461,9 @@ impl Risky {
 pub struct Changes {
     pub project: String,
     pub releases: Vec<Release>,
+    /// The areas the move makes from concept items, placements and the closed items left over.
+    pub areas: Vec<Area>,
+    pub placed: Placed,
     /// Every label the move makes, with its description when the rows give one.
     pub labels: BTreeMap<String, String>,
     /// Every change, item by item in key and number order.
@@ -352,6 +483,19 @@ impl Changes {
                 waiting.entry(d.what()).or_default().push(r.case.subject());
             }
         }
+        let bad: Vec<String> = self
+            .risky
+            .iter()
+            .filter(|r| r.case.blocks())
+            .map(|r| r.case.text())
+            .collect();
+        if !bad.is_empty() {
+            return Err(Refused(format!(
+                "{}: nothing is written while the releases fact stands: {}",
+                self.project,
+                bad.join("; ")
+            )));
+        }
         if waiting.is_empty() {
             return Ok(());
         }
@@ -366,7 +510,8 @@ impl Changes {
         )))
     }
 
-    /// The releases, labels, every change and every risky case, a line each.
+    /// The releases, the areas with their member counts, labels, every change and every risky case,
+    /// a line each.
     #[must_use]
     pub fn lines(&self) -> Vec<String> {
         let mut out = vec![format!("{}:", self.project)];
@@ -381,6 +526,36 @@ impl Changes {
                 r.name, r.position
             ));
         }
+        for a in &self.areas {
+            let members = self
+                .changes
+                .iter()
+                .filter(|c| matches!(c, Change::InArea { area, .. } if *area == a.name))
+                .count();
+            let from = match (&a.concept, a.history) {
+                (Some(c), _) => c.as_str(),
+                (None, true) => "closed items only",
+                (None, false) => "a placement",
+            };
+            out.push(format!(
+                "  area {} at {}, from {from}, {members} items",
+                a.name, a.position
+            ));
+        }
+        let concepts = self.areas.iter().filter(|a| a.concept.is_some()).count();
+        let placements = self
+            .areas
+            .iter()
+            .filter(|a| a.concept.is_none() && !a.history)
+            .count();
+        out.push(format!(
+            "  areas: {concepts} from concepts, {placements} from placements"
+        ));
+        let n = &self.placed;
+        out.push(format!(
+            "  items: {} by plan, {} by concept, {} by placement, {} closed to {UNSORTED}, {} open unplaced",
+            n.by_plan, n.by_concept, n.by_placement, n.unsorted, n.unplaced
+        ));
         for (name, about) in &self.labels {
             if about.is_empty() {
                 out.push(format!("  label {name}"));
@@ -402,22 +577,16 @@ impl Changes {
     }
 }
 
-/// A theme's version numbers when it names a version: digits joined by dots, at least two, with an
-/// optional leading `v`.
+/// A theme's semantic version, or `None` when it is not one (`1.1` and `v2.0` are not).
 #[must_use]
-pub fn version(theme: &str) -> Option<Vec<u64>> {
-    let parts: Vec<&str> = theme
-        .strip_prefix('v')
-        .unwrap_or(theme)
-        .split('.')
-        .collect();
-    if parts.len() < 2 {
-        return None;
-    }
-    parts.iter().map(|p| p.parse::<u64>().ok()).collect()
+pub fn version(theme: &str) -> Option<Version> {
+    crate::release::semantic(theme).ok()
 }
 
 /// The fields an item file loses and gains, named in the dump case.
+/// The wait text the old store gave a plan holding its audit until everything it opened closed.
+const STORE_GATE: &str = "everything it opened is closed";
+
 const DUMP_SHAPE: &str = "the theme, group, tags, rank, turn, wait and claim fields give way to release, priority, labels, parent, origin, dependencies and assignments; a full dump pass follows the copy";
 
 /// Where an item sits: a release's position, or the backlog after every release.
@@ -433,11 +602,17 @@ fn key_num(id: &str) -> (&str, u64) {
     (&id[..split], id[split..].parse().unwrap_or(0))
 }
 
+/// The keys every project has: the types' own and the story, concept, idea and package keys the
+/// move already maps. Any other key is the project's.
+const FIXED_KEYS: [&str; 10] = ["T", "B", "Q", "R", "I", "A", "STY", "CON", "CID", "PK"];
+
 struct Project<'a> {
     rules: Rules,
     items: Vec<&'a ItemDump>,
     by_id: BTreeMap<&'a str, &'a ItemDump>,
     kinds: BTreeMap<String, Kind>,
+    /// The meaning of each key the project made.
+    meanings: BTreeMap<String, String>,
     releases: Vec<Release>,
     place: BTreeMap<String, Place>,
     out: Changes,
@@ -449,6 +624,8 @@ struct Project<'a> {
     deps: Vec<(String, String)>,
     /// Items whose theme is no release, placed by their plan once the parents are known.
     by_plan: Vec<String>,
+    /// Each item whose theme is not a release, with the theme.
+    theme_of: Vec<(String, String)>,
 }
 
 impl<'a> Project<'a> {
@@ -457,12 +634,18 @@ impl<'a> Project<'a> {
         items.sort_by_key(|i| key_num(&i.id));
         let keys: Vec<KeySpec> =
             serde_json::from_value(rows.project.keys.clone()).unwrap_or_default();
+        let meanings = keys
+            .iter()
+            .filter(|k| !FIXED_KEYS.contains(&k.key.as_str()))
+            .map(|k| (k.key.clone(), k.meaning.clone().unwrap_or_default()))
+            .collect();
         let kinds = keys.into_iter().map(|k| (k.key, k.kind)).collect();
         Project {
             rules,
             by_id: items.iter().map(|i| (i.id.as_str(), *i)).collect(),
             items,
             kinds,
+            meanings,
             releases: Vec::new(),
             place: BTreeMap::new(),
             out: Changes {
@@ -474,6 +657,7 @@ impl<'a> Project<'a> {
             parent: BTreeMap::new(),
             deps: Vec::new(),
             by_plan: Vec::new(),
+            theme_of: Vec::new(),
         }
     }
 
@@ -499,7 +683,8 @@ impl<'a> Project<'a> {
         self.place.get(id).copied().flatten()
     }
 
-    /// The releases fact, then the version themes it does not name, in version order.
+    /// The releases fact, with the semantic version themes it does not name placed among its names
+    /// in version order. A fact name that is no semantic version, or a fact out of order, is risky.
     fn releases(&mut self, skills: &serde_json::Value) {
         let listed: Vec<String> = skills
             .get("releases")
@@ -508,21 +693,68 @@ impl<'a> Project<'a> {
             .split_whitespace()
             .map(str::to_string)
             .collect();
-        let mut themes: Vec<(Vec<u64>, &str)> = self
+        let parsed: Vec<Option<Version>> = listed.iter().map(|n| version(n)).collect();
+        let bad: Vec<String> = listed
+            .iter()
+            .zip(&parsed)
+            .filter(|(_, v)| v.is_none())
+            .map(|(n, _)| n.clone())
+            .collect();
+        let mut ordered = bad.is_empty();
+        if !bad.is_empty() {
+            self.out.risky.push(Risky {
+                case: Case::ReleaseName { names: bad },
+                action: "nothing is written until the fact names semantic versions".to_string(),
+                waits: None,
+            });
+        } else if !parsed
+            .windows(2)
+            .all(|w| matches!((&w[0], &w[1]), (Some(a), Some(b)) if a.cmp_precedence(b).is_lt()))
+        {
+            ordered = false;
+            self.out.risky.push(Risky {
+                case: Case::ReleaseOrder {
+                    names: listed.clone(),
+                },
+                action: "nothing is written until the fact is in version order".to_string(),
+                waits: None,
+            });
+        }
+        let mut rows: Vec<(String, Option<Version>, bool)> = listed
+            .iter()
+            .cloned()
+            .zip(parsed)
+            .map(|(n, v)| (n, v, true))
+            .collect();
+        let mut themes: Vec<(Version, &str)> = self
             .items
             .iter()
             .filter_map(|i| i.theme.as_deref())
             .filter(|t| !listed.iter().any(|r| r == t))
             .filter_map(|t| version(t).map(|v| (v, t)))
             .collect();
-        themes.sort_unstable();
-        themes.dedup();
-        let named = listed.iter().map(|n| (n.clone(), true));
-        let found = themes.into_iter().map(|(_, t)| (t.to_string(), false));
-        self.releases = named
-            .chain(found)
+        themes.sort_by(|a, b| a.0.cmp_precedence(&b.0).then(a.1.cmp(b.1)));
+        themes.dedup_by(|a, b| a.0.cmp_precedence(&b.0).is_eq());
+        for (v, t) in themes {
+            let at = if ordered {
+                let taken = rows
+                    .iter()
+                    .any(|r| r.1.as_ref().is_some_and(|rv| rv.cmp_precedence(&v).is_eq()));
+                if taken {
+                    continue;
+                }
+                rows.iter()
+                    .position(|r| r.1.as_ref().is_some_and(|rv| rv.cmp_precedence(&v).is_gt()))
+                    .unwrap_or(rows.len())
+            } else {
+                rows.len()
+            };
+            rows.insert(at, (t.to_string(), Some(v), false));
+        }
+        self.releases = rows
+            .into_iter()
             .enumerate()
-            .map(|(position, (name, from_fact))| Release {
+            .map(|(position, (name, _, from_fact))| Release {
                 name,
                 position,
                 from_fact,
@@ -530,10 +762,9 @@ impl<'a> Project<'a> {
             .collect();
     }
 
-    /// Each item's release and labels: tags, group, an area theme, a story, a standing kind.
+    /// Each item's release and labels: tags, group, a theme that is not a release, a story, an idea.
     fn places_and_labels(&mut self, notes: &[Theme]) {
         let current: Place = (!self.releases.is_empty()).then_some(0);
-        let mut areas: BTreeMap<String, usize> = BTreeMap::new();
         let items = self.items.clone();
         for i in &items {
             let release = i
@@ -544,30 +775,12 @@ impl<'a> Project<'a> {
                 None => current,
                 Some((_, Some(p))) => Some(p),
                 Some((t, None)) => {
-                    *areas.entry(t.to_string()).or_default() += usize::from(i.state == "open");
-                    self.area(i, t, notes, current)
+                    self.theme(i, t, notes);
+                    None
                 }
             };
             self.place.insert(i.id.clone(), place);
             self.labels_of(i);
-        }
-        for (theme, open) in areas.into_iter().filter(|(_, n)| *n > 0) {
-            let action = match self.rules.areas {
-                Some(Areas::Backlog) => "to the backlog with the label".to_string(),
-                Some(Areas::Plan) => {
-                    "to its plan's release, else the backlog, with the label".to_string()
-                }
-                Some(Areas::Current) => {
-                    "folded into the current release with the label".to_string()
-                }
-                None => "folded into the current release with the label until the rule is decided"
-                    .to_string(),
-            };
-            self.out.risky.push(Risky {
-                case: Case::FoldedTheme { theme, open },
-                action,
-                waits: self.rules.areas.is_none().then_some(Decision::Areas),
-            });
         }
         let open = self.items.iter().filter(|i| i.state == "open").count();
         if current.is_none() && open > 0 {
@@ -579,8 +792,8 @@ impl<'a> Project<'a> {
         }
     }
 
-    /// An item whose theme is not a release: labelled with it, and placed by the rule.
-    fn area(&mut self, i: &ItemDump, theme: &str, notes: &[Theme], current: Place) -> Place {
+    /// An item whose theme is not a release: labelled with it, and left unplaced for `theme_places`.
+    fn theme(&mut self, i: &ItemDump, theme: &str, notes: &[Theme]) {
         let label = format!("area:{theme}");
         let about = notes
             .iter()
@@ -596,18 +809,74 @@ impl<'a> Project<'a> {
                 label,
             },
         );
-        match self.rules.areas {
-            Some(Areas::Backlog) => None,
-            Some(Areas::Plan) => {
-                self.by_plan.push(i.id.clone());
-                None
-            }
-            Some(Areas::Current) | None => current,
+        self.theme_of.push((i.id.clone(), theme.to_string()));
+        if self.rules.themes == Themes::Plan {
+            self.by_plan.push(i.id.clone());
         }
     }
 
-    /// Each item waiting on its plan for a release takes the plan's, up the chain of plans.
-    fn area_places(&mut self) {
+    /// Each item waiting on its plan for a release takes the plan's, up the chain of plans; then
+    /// each theme that is not a release is listed with where its open items went.
+    fn theme_places(&mut self) {
+        self.chain_themes();
+        let mut themes: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
+        for (id, theme) in &self.theme_of {
+            if self.items.iter().any(|i| i.id == *id && i.state == "open") {
+                let n = themes.entry(theme).or_default();
+                if self.place_of(id).is_some() {
+                    n.0 += 1;
+                } else {
+                    n.1 += 1;
+                }
+            }
+        }
+        let folded: Vec<Risky> = themes
+            .into_iter()
+            .map(|(theme, (plan, backlog))| Risky {
+                case: Case::FoldedTheme {
+                    theme: theme.to_string(),
+                    open: plan + backlog,
+                },
+                action: format!("{plan} to their plan's release, {backlog} to the backlog"),
+                waits: None,
+            })
+            .collect();
+        self.out.risky.extend(folded);
+    }
+
+    /// Each key the project made that holds items, with its counts.
+    fn own_keys(&mut self) {
+        let mut counts: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
+        for i in &self.items {
+            let key = key_num(&i.id).0;
+            if self.meanings.contains_key(key)
+                && matches!(
+                    self.kind(&i.id),
+                    Kind::Work | Kind::Decision | Kind::Research
+                )
+            {
+                let n = counts.entry(key).or_default();
+                n.0 += 1;
+                n.1 += usize::from(i.state == "open");
+            }
+        }
+        let own: Vec<Risky> = counts
+            .into_iter()
+            .map(|(key, (items, open))| Risky {
+                case: Case::OwnKey {
+                    key: key.to_string(),
+                    meaning: self.meanings[key].clone(),
+                    items,
+                    open,
+                },
+                action: "keeps its ids; new items file under T with the label".to_string(),
+                waits: None,
+            })
+            .collect();
+        self.out.risky.extend(own);
+    }
+
+    fn chain_themes(&mut self) {
         let waiting = std::mem::take(&mut self.by_plan);
         for _ in 0..waiting.len() {
             let mut moved = false;
@@ -646,15 +915,42 @@ impl<'a> Project<'a> {
             labels.push(format!("group:{g}"));
         }
         let kind = self.kind(&id);
+        let key = key_num(&id).0;
+        if self.meanings.contains_key(key) {
+            let own = match kind {
+                Kind::Work => Some("task"),
+                Kind::Decision => Some("question"),
+                Kind::Research => Some("investigation"),
+                _ => None,
+            };
+            if let Some(own) = own {
+                self.each
+                    .entry(id.clone())
+                    .or_default()
+                    .extend([Change::Typed {
+                        id: id.clone(),
+                        kind: own.to_string(),
+                    }]);
+                let label = format!("key:{}", key.to_lowercase());
+                self.out
+                    .labels
+                    .insert(label.clone(), self.meanings[key].clone());
+                labels.extend([label]);
+            }
+        }
         if matches!(kind, Kind::Story | Kind::Package) {
             self.push(&id, Change::Plan { id: id.clone() });
         }
         if kind == Kind::Story {
             labels.push("story".to_string());
         }
-        if kind.is_standing() {
-            let label = id.to_lowercase();
-            self.out.labels.insert(label.clone(), i.title.clone());
+        if kind == Kind::Idea {
+            let label = goal_label(i);
+            let about = i.body.trim();
+            self.out.labels.insert(
+                label.clone(),
+                if about.is_empty() { &i.title } else { about }.to_string(),
+            );
             self.push(
                 &id,
                 Change::BecomesLabel {
@@ -666,10 +962,10 @@ impl<'a> Project<'a> {
         let standing: Vec<String> = self
             .items
             .iter()
-            .filter(|o| self.kind(&o.id).is_standing())
-            .filter(|o| i.related.contains(&o.id) || o.related.contains(&i.id))
+            .filter(|o| self.kind(&o.id) == Kind::Idea)
+            .filter(|o| tied(i, o))
             .filter(|o| o.id != i.id)
-            .map(|o| o.id.to_lowercase())
+            .map(|o| goal_label(o))
             .collect();
         labels.extend(standing);
         for label in labels {
@@ -682,6 +978,246 @@ impl<'a> Project<'a> {
                 },
             );
         }
+    }
+
+    /// Each concept item, in id order, as an area: one of the project's areas when it has the name,
+    /// else a new row after them. A name two concepts share takes the second's id.
+    fn concept_areas(&mut self, existing: &[crate::area::Area]) -> BTreeMap<String, String> {
+        let mut named = BTreeMap::new();
+        let concepts: Vec<&ItemDump> = self
+            .items
+            .iter()
+            .copied()
+            .filter(|i| self.kind(&i.id) == Kind::Concept)
+            .collect();
+        for c in concepts {
+            let mut name = area_name(&c.title);
+            if name.is_empty() {
+                name = c.id.to_lowercase();
+            }
+            let same = |a: &str| a.to_lowercase() == name.to_lowercase();
+            if let Some(a) = existing.iter().find(|a| same(&a.name)) {
+                named.insert(c.id.clone(), a.name.clone());
+                continue;
+            }
+            if self.out.areas.iter().any(|a| same(&a.name)) {
+                name = format!("{name}-{}", c.id.to_lowercase());
+            }
+            let description = if c.body.trim().is_empty() {
+                c.title.clone()
+            } else {
+                format!("{}\n\n{}", c.title, c.body.trim())
+            };
+            self.out.areas.push(Area {
+                name: name.clone(),
+                description,
+                position: existing.len() + self.out.areas.len(),
+                concept: Some(c.id.clone()),
+                history: false,
+            });
+            named.insert(c.id.clone(), name);
+        }
+        named
+    }
+
+    /// Each concept item becomes an area, then each item takes the area of its nearest plan up the
+    /// parent edges that has one, else its own concept, the oldest tie when it has several, else the
+    /// area of its latest placement by an agent, as written. A plan is placed before its children, so
+    /// it passes its area down. A closed item nothing places goes to `unsorted`, made only when one
+    /// does and never passed down; an open one waits on a placement. Ideas stay labels.
+    fn areas(&mut self, existing: &[crate::area::Area], events: &[&EventDump]) {
+        let named = self.concept_areas(existing);
+        let concepts: Vec<&ItemDump> = self
+            .items
+            .iter()
+            .copied()
+            .filter(|i| named.contains_key(&i.id))
+            .collect();
+        let ages = tie_ages(events);
+        let placements = placements(events);
+        let mut items: Vec<&ItemDump> = self
+            .items
+            .iter()
+            .copied()
+            .filter(|i| !matches!(self.kind(&i.id), Kind::Concept | Kind::Idea))
+            .collect();
+        items.sort_by_cached_key(|i| self.depth(&i.id));
+        let mut placed: BTreeMap<String, String> = BTreeMap::new();
+        let (mut open, mut closed) = (Vec::new(), Vec::new());
+        for i in items {
+            let own = own_areas(i, &concepts, &named, &ages);
+            let plan = self
+                .parent
+                .get(&i.id)
+                .and_then(|p| placed.get(p).map(|a| (p.clone(), a.clone())));
+            let area = match (self.rule_area(i, plan, own), placements.get(&i.id)) {
+                (Some(area), Some((p, _))) => {
+                    self.out.risky.push(Risky {
+                        case: Case::PlacementIgnored {
+                            id: i.id.clone(),
+                            placed: p.area.clone(),
+                            area: area.clone(),
+                        },
+                        action: "the agent's placement is ignored".to_string(),
+                        waits: None,
+                    });
+                    area
+                }
+                (Some(area), None) => area,
+                (None, Some((p, basis))) => {
+                    let area = self.placement_area(existing, p);
+                    self.push(
+                        &i.id,
+                        Change::Placed {
+                            id: i.id.clone(),
+                            area: area.clone(),
+                            basis: basis.clone(),
+                        },
+                    );
+                    self.out.placed.by_placement += 1;
+                    area
+                }
+                (None, None) => {
+                    if i.state == "open" {
+                        open.push(i.id.clone());
+                    } else {
+                        closed.push(i.id.clone());
+                    }
+                    continue;
+                }
+            };
+            placed.insert(i.id.clone(), area);
+        }
+        if !closed.is_empty() {
+            let area = self.unsorted(existing);
+            self.out.placed.unsorted = closed.len();
+            for id in closed {
+                placed.insert(id, area.clone());
+            }
+        }
+        for c in &concepts {
+            let area = named[&c.id].clone();
+            placed.insert(c.id.clone(), area.clone());
+            self.push(
+                &c.id,
+                Change::BecomesArea {
+                    id: c.id.clone(),
+                    area,
+                },
+            );
+        }
+        for (id, area) in placed {
+            self.push(
+                &id,
+                Change::InArea {
+                    id: id.clone(),
+                    area,
+                },
+            );
+        }
+        if !open.is_empty() {
+            open.sort_by(|a, b| key_num(a).cmp(&key_num(b)));
+            self.out.placed.unplaced = open.len();
+            self.out.risky.push(Risky {
+                case: Case::Unplaced { open },
+                action: "they are left with no area".to_string(),
+                waits: Some(Decision::Unplaced),
+            });
+        }
+    }
+
+    /// The area of an item's nearest plan with one, else its oldest tie to a concept, each choice
+    /// that gives up another tie listed for an open item.
+    fn rule_area(
+        &mut self,
+        i: &ItemDump,
+        plan: Option<(String, String)>,
+        mut own: Vec<String>,
+    ) -> Option<String> {
+        if let Some((plan, area)) = plan {
+            own.retain(|a| *a != area);
+            if !own.is_empty() && i.state == "open" {
+                self.out.risky.push(Risky {
+                    case: Case::PlanArea {
+                        id: i.id.clone(),
+                        plan,
+                        area: area.clone(),
+                        own,
+                    },
+                    action: format!("it takes its plan's area {area}"),
+                    waits: None,
+                });
+            }
+            self.out.placed.by_plan += 1;
+            return Some(area);
+        }
+        if own.is_empty() {
+            return None;
+        }
+        let gave_up = own.split_off(1);
+        let area = own.remove(0);
+        if !gave_up.is_empty() && i.state == "open" {
+            self.out.risky.push(Risky {
+                case: Case::SeveralConcepts {
+                    id: i.id.clone(),
+                    area: area.clone(),
+                    gave_up,
+                },
+                action: format!("it takes {area}, its oldest tie"),
+                waits: None,
+            });
+        }
+        self.out.placed.by_concept += 1;
+        Some(area)
+    }
+
+    /// The area a placement names: one the project has or the move makes, by name in any case, else
+    /// a new row after those, its `about` the description.
+    fn placement_area(&mut self, existing: &[crate::area::Area], p: &Placement) -> String {
+        let same = |a: &str| a.to_lowercase() == p.area.to_lowercase();
+        if let Some(a) = existing.iter().find(|a| same(&a.name)) {
+            return a.name.clone();
+        }
+        if let Some(a) = self.out.areas.iter().find(|a| same(&a.name)) {
+            return a.name.clone();
+        }
+        self.out.areas.push(Area {
+            name: p.area.clone(),
+            description: p.about.clone().unwrap_or_default(),
+            position: existing.len() + self.out.areas.len(),
+            concept: None,
+            history: false,
+        });
+        p.area.clone()
+    }
+
+    /// The `unsorted` area, made last when the project has none by that name.
+    fn unsorted(&mut self, existing: &[crate::area::Area]) -> String {
+        let same = |a: &str| a.to_lowercase() == UNSORTED;
+        if let Some(a) = existing.iter().find(|a| same(&a.name)) {
+            return a.name.clone();
+        }
+        self.out.areas.push(Area {
+            name: UNSORTED.to_string(),
+            description: UNSORTED_ABOUT.to_string(),
+            position: existing.len() + self.out.areas.len(),
+            concept: None,
+            history: true,
+        });
+        UNSORTED.to_string()
+    }
+
+    /// How many parent edges lie above an item.
+    fn depth(&self, id: &str) -> usize {
+        let mut seen = BTreeSet::from([id]);
+        let mut at = id;
+        while let Some(p) = self.parent.get(at) {
+            if !seen.insert(p) {
+                break;
+            }
+            at = p;
+        }
+        seen.len()
     }
 
     /// The plans nearest up each chain of openers from `from`, stopping at the first plan on each.
@@ -799,7 +1335,7 @@ impl<'a> Project<'a> {
             let id = i.id.clone();
             match i.wait_on.as_deref() {
                 Some("item") if self.by_id.contains_key(on.as_str()) => self.deps.push((id, on)),
-                Some("condition") if on == GATE => {
+                Some("condition") if on == STORE_GATE => {
                     self.push(&id, Change::GateRemoved { id: id.clone() });
                 }
                 Some(_) => self.push(
@@ -863,91 +1399,35 @@ impl<'a> Project<'a> {
         }
     }
 
-    /// Open plans with open children in later releases, repaired by the rule when it is decided.
-    fn held_plans(&mut self) {
-        let mut by_plan: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        for (child, plan) in &self.parent {
-            if self.open(child)
-                && self.open(plan)
-                && later(self.place_of(child), self.place_of(plan))
-            {
-                by_plan.entry(plan.clone()).or_default().push(child.clone());
-            }
-        }
-        let mut plans: Vec<(String, Vec<String>)> = by_plan.into_iter().collect();
-        plans.sort_by(|a, b| key_num(&a.0).cmp(&key_num(&b.0)));
-        for (plan, mut children) in plans {
-            children.sort_by(|a, b| key_num(a).cmp(&key_num(b)));
-            let at = self.place_of(&plan);
-            let named: Vec<(String, String)> = children
-                .iter()
-                .map(|c| (c.clone(), self.release_name(self.place_of(c))))
-                .collect();
-            let action = match self.rules.held {
-                None => format!(
-                    "{plan} stays in {} with them until the rule is decided",
-                    self.release_name(at)
-                ),
-                Some(Held::Detach) => {
-                    for c in &children {
-                        self.parent.remove(c);
-                        self.push(
-                            c,
-                            Change::Origin {
-                                id: c.clone(),
-                                from: plan.clone(),
-                            },
-                        );
-                    }
-                    format!(
-                        "{} leave {plan} and keep an origin link to it",
-                        children.join(", ")
-                    )
-                }
-                Some(Held::MovePlan) => {
-                    let latest = children
-                        .iter()
-                        .map(|c| self.place_of(c))
-                        .max_by_key(|p| p.unwrap_or(usize::MAX))
-                        .flatten();
-                    self.place.insert(plan.clone(), latest);
-                    format!("{plan} moves to {}", self.release_name(latest))
-                }
-                Some(Held::PullChildren) => {
-                    for c in &children {
-                        self.pull(c, at);
-                    }
-                    format!(
-                        "{} move into {}",
-                        children.join(", "),
-                        self.release_name(at)
-                    )
-                }
-            };
-            self.out.risky.push(Risky {
-                case: Case::HeldPlan {
-                    plan: plan.clone(),
-                    release: self.release_name(at),
-                    later: named,
-                },
-                action,
-                waits: self.rules.held.is_none().then_some(Decision::Held),
-            });
-        }
-    }
-
-    fn pull(&mut self, id: &str, to: Place) {
-        if to == Some(0) && self.place_of(id) != Some(0) && !self.out.grows.iter().any(|g| g == id)
-        {
-            self.out.grows.push(id.to_string());
-        }
-        self.place.insert(id.to_string(), to);
-    }
-
-    /// Each dependency in a later release than its dependant is pulled into the dependant's release,
-    /// until none is.
-    fn inversions(&mut self) {
+    /// Repairs release order until it holds: an open child in a later release than its open plan is
+    /// pulled into the plan's release, and an open dependency in a later release than its open
+    /// dependant into the dependant's. A pulled plan is looked at again, so its children and its
+    /// dependencies follow it.
+    fn repair_release_order(&mut self) {
+        let mut held: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
         loop {
+            let mut kids: Vec<(&String, &String)> = self
+                .parent
+                .iter()
+                .filter(|(child, plan)| {
+                    self.open(child)
+                        && self.open(plan)
+                        && later(self.place_of(child), self.place_of(plan))
+                })
+                .collect();
+            kids.sort_by(|a, b| {
+                key_num(a.1)
+                    .cmp(&key_num(b.1))
+                    .then(key_num(a.0).cmp(&key_num(b.0)))
+            });
+            if let Some((child, plan)) = kids.first().map(|(c, p)| ((*c).clone(), (*p).clone())) {
+                let (at, was) = (self.place_of(&plan), self.place_of(&child));
+                held.entry(plan)
+                    .or_default()
+                    .push((child.clone(), self.release_name(was)));
+                self.pull(&child, at);
+                continue;
+            }
             let found = self.deps.iter().find(|(id, on)| {
                 self.open(id) && self.open(on) && later(self.place_of(on), self.place_of(id))
             });
@@ -967,7 +1447,42 @@ impl<'a> Project<'a> {
                 waits: None,
             });
         }
+        let mut plans: Vec<(String, Vec<(String, String)>)> = held.into_iter().collect();
+        plans.sort_by(|a, b| key_num(&a.0).cmp(&key_num(&b.0)));
+        for (plan, pulled) in plans {
+            let mut named: Vec<(String, String)> = Vec::new();
+            for (child, was) in pulled {
+                if !named.iter().any(|(c, _)| *c == child) {
+                    named.push((child, was));
+                }
+            }
+            named.sort_by(|a, b| key_num(&a.0).cmp(&key_num(&b.0)));
+            let at = self.place_of(&plan);
+            let children: Vec<&str> = named.iter().map(|(c, _)| c.as_str()).collect();
+            let action = format!(
+                "{} move into {}",
+                children.join(", "),
+                self.release_name(at)
+            );
+            self.out.risky.push(Risky {
+                case: Case::HeldPlan {
+                    plan: plan.clone(),
+                    release: self.release_name(at),
+                    later: named,
+                },
+                action,
+                waits: None,
+            });
+        }
         self.out.grows.sort_by(|a, b| key_num(a).cmp(&key_num(b)));
+    }
+
+    fn pull(&mut self, id: &str, to: Place) {
+        if to == Some(0) && self.place_of(id) != Some(0) && !self.out.grows.iter().any(|g| g == id)
+        {
+            self.out.grows.push(id.to_string());
+        }
+        self.place.insert(id.to_string(), to);
     }
 
     /// Past attempts rebuilt from the events, made to agree with the claim and the ask held now.
@@ -1042,6 +1557,111 @@ impl<'a> Project<'a> {
     }
 }
 
+/// An area's name from a concept's title: the part before the first colon, or the whole title, in
+/// lower case with spaces as hyphens.
+#[must_use]
+pub fn area_name(title: &str) -> String {
+    let head = title.split(':').next().unwrap_or(title);
+    head.split_whitespace()
+        .collect::<Vec<_>>()
+        .join("-")
+        .to_lowercase()
+}
+
+/// The label a central idea becomes: `goal:` and its title's words before the first colon, the id when
+/// the title gives none.
+fn goal_label(i: &ItemDump) -> String {
+    let slug = area_name(&i.title);
+    format!(
+        "goal:{}",
+        if slug.is_empty() {
+            i.id.to_lowercase()
+        } else {
+            slug
+        }
+    )
+}
+
+/// The areas of the concepts an item is tied to, its oldest tie first, then in id order.
+fn own_areas(
+    i: &ItemDump,
+    concepts: &[&ItemDump],
+    named: &BTreeMap<String, String>,
+    ages: &BTreeMap<(String, String), String>,
+) -> Vec<String> {
+    let age = |c: &ItemDump| {
+        ages.get(&pair(&i.id, &c.id))
+            .cloned()
+            .unwrap_or_else(|| i.opened_at.clone().max(c.opened_at.clone()))
+    };
+    let mut own: Vec<&ItemDump> = concepts.iter().copied().filter(|c| tied(i, c)).collect();
+    own.sort_by_cached_key(|c| (age(c), key_num(&c.id)));
+    let mut seen = BTreeSet::new();
+    own.iter()
+        .map(|c| named[&c.id].clone())
+        .filter(|a| seen.insert(a.clone()))
+        .collect()
+}
+
+/// Each item's latest `decided` event that carries a placement, with the basis it was derived on.
+fn placements(events: &[&EventDump]) -> BTreeMap<String, (Placement, String)> {
+    let mut ordered: Vec<&&EventDump> = events.iter().filter(|e| e.kind == "decided").collect();
+    ordered.sort_by(|a, b| a.at.cmp(&b.at).then(a.uid.cmp(&b.uid)));
+    let mut out = BTreeMap::new();
+    for e in ordered {
+        let (Some(item), Some(data)) = (&e.item, &e.data) else {
+            continue;
+        };
+        let Some(p) = Placement::of(data) else {
+            continue;
+        };
+        let basis = serde_json::from_str::<serde_json::Value>(data)
+            .ok()
+            .and_then(|v| v["derived"].as_str().map(str::to_string))
+            .unwrap_or_default();
+        out.insert(item.clone(), (p, basis));
+    }
+    out
+}
+
+/// Whether two items are tied by a `related` link, either way.
+fn tied(a: &ItemDump, b: &ItemDump) -> bool {
+    a.id != b.id && (a.related.contains(&b.id) || b.related.contains(&a.id))
+}
+
+fn pair(a: &str, b: &str) -> (String, String) {
+    if a <= b {
+        (a.to_string(), b.to_string())
+    } else {
+        (b.to_string(), a.to_string())
+    }
+}
+
+/// When each `related` tie standing now was made, by the events that link and unlink it: the link
+/// after the last unlink. A tie no event records is as old as the later of its two items.
+fn tie_ages(events: &[&EventDump]) -> BTreeMap<(String, String), String> {
+    let mut ordered: Vec<&&EventDump> = events.iter().filter(|e| e.kind == "edited").collect();
+    ordered.sort_by(|a, b| a.at.cmp(&b.at).then(a.uid.cmp(&b.uid)));
+    let mut since: BTreeMap<(String, String), Option<String>> = BTreeMap::new();
+    for e in ordered {
+        let (Some(item), Some(note)) = (&e.item, &e.note) else {
+            continue;
+        };
+        if let Some(to) = note.strip_prefix("link related ") {
+            let at = since.entry(pair(item, to.trim())).or_default();
+            if at.is_none() {
+                *at = Some(e.at.clone());
+            }
+        } else if let Some(to) = note.strip_prefix("unlink related ") {
+            since.insert(pair(item, to.trim()), None);
+        }
+    }
+    since
+        .into_iter()
+        .filter_map(|(k, v)| v.map(|v| (k, v)))
+        .collect()
+}
+
 /// The path of holds from `from` to `to`, both ends included, when there is one.
 fn path(holds: &BTreeMap<String, Vec<String>>, from: &str, to: &str) -> Option<Vec<String>> {
     let mut back: BTreeMap<&str, &str> = BTreeMap::new();
@@ -1079,9 +1699,10 @@ pub fn plan(rows: &Rows, rules: Rules) -> Changes {
     p.waits();
     p.cycles();
     p.parents();
-    p.area_places();
-    p.held_plans();
-    p.inversions();
+    p.areas(&rows.project.areas, &rows.events);
+    p.theme_places();
+    p.own_keys();
+    p.repair_release_order();
     p.assignments(&rows.events);
     p.finish()
 }

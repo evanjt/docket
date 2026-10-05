@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ASIDE, FLOW, MEANING } from '../lib/flow';
+  import { ASIDE, FLOW, MEANING, wordVar } from '../lib/flow';
   import { href } from '../lib/route';
   import type { Status } from '../lib/types';
 
@@ -20,7 +20,7 @@
         class:empty={s.n === 0}
         class:after={i === flow.length}
         href={href(slug, 'work', { word: s.w })}
-        style="--c: var(--w-{s.w}); flex-grow: {Math.max(s.n, open ? open * 0.06 : 1)}"
+        style="--c: {wordVar(s.w)}; flex-grow: {Math.max(s.n, open ? open * 0.06 : 1)}"
         title="{s.n} {s.w}: {MEANING[s.w]}"
       >
         <span class="n">{s.n}</span>

@@ -18,13 +18,13 @@ fn waiting(project: &str, waits: Option<Decision>) -> Changes {
 }
 
 #[test]
-fn test_the_flags_decide_the_rules_and_an_absent_flag_leaves_one_open() {
-    assert_eq!(rules(None, None), Rules::default());
+fn test_the_flags_decide_the_rules_and_an_absent_flag_takes_the_plan_rule() {
+    assert_eq!(rules(None), Rules::default());
+    assert_eq!(rules(Some("plan")), Rules::default());
     assert_eq!(
-        rules(Some("pull-children"), Some("backlog")),
+        rules(Some("backlog")),
         Rules {
-            held: Some(Held::PullChildren),
-            areas: Some(Areas::Backlog),
+            themes: Themes::Backlog,
         }
     );
 }
@@ -32,7 +32,7 @@ fn test_the_flags_decide_the_rules_and_an_absent_flag_leaves_one_open() {
 #[test]
 fn test_a_write_is_refused_naming_each_project_whose_cases_wait() {
     let text = refusal(&[
-        waiting("orchard", Some(Decision::Areas)),
+        waiting("orchard", Some(Decision::Themes)),
         waiting("cellar", None),
     ]);
     assert!(text.contains("orchard"), "{text}");

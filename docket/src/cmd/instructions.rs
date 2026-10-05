@@ -11,6 +11,7 @@ use crate::templates;
 /// # Errors
 /// The project has no root on this machine, nobody can be asked, or a file cannot be written.
 pub fn instructions(ctx: &mut Ctx, what: &str, yes: bool) -> Result<i32> {
+    crate::cmd::write::refuse_install_in_job(what)?;
     let slug = ctx.project()?;
     let real = local::realpath(&ctx.cwd);
     let (top, _) = local::outermost_repo(&ctx.cwd);

@@ -10,9 +10,10 @@ use docket_core::rules::COMPLEXITIES;
 use docket_core::word::{Kind, PRIORITIES};
 
 use crate::entities::{item, link};
-use crate::reads::public::{Failure, Kinds, id_of, internal, item_of, project_of, public};
+use crate::reads::public::{Failure, Members, id_of, internal, item_of, project_of, public};
 use crate::store::to_item;
-use crate::verbs::graph::{came_due, open_under};
+use crate::verbs::graph::{member_count, open_under};
+use docket_core::word::kind_of_type;
 
 #[derive(Deserialize)]
 pub struct InProject {
@@ -38,16 +39,16 @@ pub async fn show(
     Path(id): Path<String>,
     Query(q): Query<InProject>,
 ) -> Result<Json<Value>, Failure> {
-    let project = project_of(&db, &q.project).await?;
+    project_of(&db, &q.project).await?;
     let row = item_of(&db, &q.project, &id).await?;
-    let kind = Kinds::of(&project).kind(&row.key);
+    let kind = kind_of_type(&row.item_type);
     let under = children(&db, row.rid).await.map_err(|e| internal(&e))?;
     let members = (kind == Kind::Package).then_some(&under);
-    let open_members = members
-        .into_iter()
-        .flatten()
-        .filter(|m| m.state == "open")
-        .count() as u64;
+    let held = if kind.is_plan() {
+        member_count(&db, row.rid).await.map_err(|e| internal(&e))?
+    } else {
+        Members::default()
+    };
 
     let (mut related, mut origin, mut cites) = (Vec::new(), Vec::new(), Vec::new());
     let links = link::Entity::find()
@@ -77,7 +78,7 @@ pub async fn show(
         None => None,
     };
     let body = row.body.clone();
-    let mut out = public(&db, kind, row, open_members, None)
+    let mut out = public(&db, kind, row, held, None)
         .await
         .map_err(|e| internal(&e))?;
     out.insert("body".into(), json!(body));
@@ -110,27 +111,23 @@ pub async fn offers(
     Path(id): Path<String>,
     Query(q): Query<InProject>,
 ) -> Result<Json<Value>, Failure> {
-    let project = project_of(&db, &q.project).await?;
+    project_of(&db, &q.project).await?;
     let row = item_of(&db, &q.project, &id).await?;
-    let kind = Kinds::of(&project).kind(&row.key);
+    let kind = kind_of_type(&row.item_type);
     let id = row.id.clone();
-    let (pending, due) = if kind == Kind::Audit {
-        let pending = open_under(&db, &q.project, row.rid)
+    let pending = if kind == Kind::Audit {
+        open_under(&db, &q.project, row.rid)
             .await
             .map_err(|e| internal(&e))?
             .into_iter()
             .map(|x| x.id)
-            .collect();
-        (
-            pending,
-            came_due(&db, row.rid).await.map_err(|e| internal(&e))?,
-        )
+            .collect()
     } else {
-        (Vec::new(), false)
+        Vec::new()
     };
     Ok(Json(json!({
         "id": id,
-        "verbs": rules_offers(&to_item(row), kind, &pending, due),
+        "verbs": rules_offers(&to_item(row), kind, &pending),
         "priorities": PRIORITIES,
         "levels": COMPLEXITIES,
     })))

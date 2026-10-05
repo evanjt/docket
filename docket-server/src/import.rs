@@ -240,6 +240,9 @@ pub async fn import(from: &str, to: &DatabaseConnection) -> Result<Counts, Strin
     docket_migration::parents::split(&tx)
         .await
         .map_err(|e| e.to_string())?;
+    docket_migration::item_types::assign(&tx)
+        .await
+        .map_err(|e| e.to_string())?;
     tx.commit().await.map_err(|e| e.to_string())?;
     Ok(has)
 }

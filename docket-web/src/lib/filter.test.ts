@@ -7,7 +7,7 @@ const parse = (s: string, on = scale) => parseFilter(new URLSearchParams(s), on)
 describe('filter state', () => {
   it('round-trips through the query string', () => {
     const f = parse('key=B&priority=high&complexity=low&release=1.1&under=A20&state=open&sort=priority');
-    expect(f).toEqual({ key: 'B', priority: 'high', complexity: 'low', release: '1.1', under: 'A20', state: 'open', sort: 'priority' });
+    expect(f).toEqual({ key: 'B', priority: 'high', complexity: 'low', release: '1.1', under: 'A20', area: '', state: 'open', sort: 'priority' });
     const q = new URLSearchParams();
     for (const [k, v] of Object.entries(filterChanges(f))) if (v) q.set(k, v);
     expect(parseFilter(q, scale)).toEqual(f);
@@ -15,7 +15,7 @@ describe('filter state', () => {
 
   it('drops values outside the options', () => {
     const f = parse('priority=urgent&complexity=huge&state=maybe&sort=random');
-    expect(f).toEqual({ key: '', priority: '', complexity: '', release: '', under: '', state: '', sort: '' });
+    expect(f).toEqual({ key: '', priority: '', complexity: '', release: '', under: '', area: '', state: '', sort: '' });
   });
 
   it('takes the tiers and levels the server lists', () => {
@@ -68,5 +68,14 @@ describe('filter state', () => {
 
   it('links a plan to the work still open under it', () => {
     expect(remainingHref('acme/site', 'A20')).toBe('/ui/acme/site/work?list=next&under=A20');
+  });
+
+  it('keeps the rows in one area, ignoring case, and leaves the area out of the routes\' parameters', () => {
+    const rows = [{ id: 'B1', area: 'Kites' }, { id: 'B2', area: 'lanterns' }, { id: 'B3', area: null }];
+    const f = parse('area=kites');
+    expect(f.area).toBe('kites');
+    expect(rows.filter((r) => applies(r, f, [], scale.priorities)).map((r) => r.id)).toEqual(['B1']);
+    expect(nextParams(f)).not.toHaveProperty('area');
+    expect(pagedParams(f)).not.toHaveProperty('area');
   });
 });

@@ -10,7 +10,9 @@ use serde_json::{Value, json};
 
 use docket_core::api::{
     Common, FactRequest, FactSet, Facts, LeadRequest, LeadState, MachineRequest, Machines,
+    PublicationRequest, Publications,
 };
+use docket_core::metrics::ReleaseRow;
 use docket_core::rows::{Derived, EventRow, ItemRow, LinkRow, ProjectRow, Row, Shown, Status};
 
 use crate::config::Config;
@@ -271,6 +273,25 @@ impl Api {
         self.get("/status", &of(slug))
     }
 
+    /// `/metrics?scope=releases`: one row per unshipped release, the current first.
+    ///
+    /// # Errors
+    /// As `get`.
+    pub fn release_rows(&self, slug: &str) -> Result<Vec<ReleaseRow>> {
+        let mut query = of(slug).clone();
+        query.push(("scope", "releases".to_string()));
+        let mut body: Value = self.get("/metrics", &query)?;
+        Ok(serde_json::from_value(body["releases"].take()).unwrap_or_default())
+    }
+
+    /// `/check`: the integrity problems of a project, each an object with its `kind`.
+    ///
+    /// # Errors
+    /// As `get`.
+    pub fn check(&self, slug: &str) -> Result<Vec<Value>> {
+        self.get("/check", &of(slug))
+    }
+
     /// `/next`, under an item when one is named.
     ///
     /// # Errors
@@ -400,6 +421,22 @@ impl Api {
         self.post("lead", &req)
     }
 
+    /// A project's publications, newest first: the first is where the next squash starts.
+    ///
+    /// # Errors
+    /// As `get`.
+    pub fn publications(&self, slug: &str) -> Result<Publications> {
+        self.get("/publications", &of(slug))
+    }
+
+    /// One publication a squash wrote, recorded; the project's publications as they stand after.
+    ///
+    /// # Errors
+    /// As `post`.
+    pub fn record_publication(&self, req: &PublicationRequest) -> Result<Publications> {
+        self.post("publication", req)
+    }
+
     /// # Errors
     /// As `get`.
     pub fn derived(&self, slug: &str) -> Result<Vec<Derived>> {
@@ -416,6 +453,14 @@ impl Api {
             query.push(("all", "true".to_string()));
         }
         self.get("/releases", &query)
+    }
+
+    /// A project's areas in position order.
+    ///
+    /// # Errors
+    /// As `get`.
+    pub fn areas(&self, slug: &str) -> Result<Vec<docket_core::area::Row>> {
+        self.get("/areas", &of(slug))
     }
 
     /// Every stored item of a project, bodies left out.

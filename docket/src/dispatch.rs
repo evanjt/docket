@@ -13,16 +13,39 @@ use docket_core::machine::Machine;
 
 use crate::job::Change;
 
-/// The job role an item's kind gives when the lead names none: an investigation's or a decided
-/// question's planning, anything else a build. A plan with children is audited and one with none is
-/// planned, as the queue gives it.
-#[must_use]
-pub fn role_of(kind: &str, has_children: bool) -> &'static str {
-    match kind {
-        "audit" if has_children => "audit",
-        "audit" | "research" | "decision" => "plan",
-        _ => "build",
+/// The job role to dispatch an item as: the one the lead names, else the role of the item's row in
+/// the ready queue. An item the queue does not offer, and no role named, is refused with why.
+///
+/// # Errors
+/// The item is not in the ready queue and the lead named no role.
+pub fn role_for(
+    row: Option<&serde_json::Value>,
+    named: Option<&str>,
+    id: &str,
+) -> Result<String, String> {
+    if let Some(role) = named {
+        return Ok(role.to_string());
     }
+    row.and_then(|r| r["role"].as_str())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            format!(
+                "{id} is not in the ready queue (held, waiting, the owner's turn or a plan with open work): \
+                 name --role to dispatch it anyway"
+            )
+        })
+}
+
+/// The assignments under an audit's plan by runner, as its ready row counts them.
+#[must_use]
+pub fn runner_counts(row: Option<&serde_json::Value>) -> BTreeMap<String, usize> {
+    row.and_then(|r| r["audit_runners"].as_object())
+        .map(|m| {
+            m.iter()
+                .filter_map(|(k, v)| Some((k.clone(), usize::try_from(v.as_u64()?).ok()?)))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The branch a dispatch claims an item on: the lead's prefix, the id, and a number nobody guesses.
@@ -82,6 +105,39 @@ pub fn limited_runners(machines: &[Machine], now: &str) -> BTreeMap<String, Stri
         }
     }
     out
+}
+
+/// The end a job reported for the claim on `branch`, from the item's log: the data of the newest
+/// `job_reported` event of that claim that carries an `end`.
+#[must_use]
+pub fn ended_in(log: &serde_json::Value, branch: &str) -> Option<serde_json::Value> {
+    log.as_array()?
+        .iter()
+        .rev()
+        .filter(|e| e["kind"] == "job_reported" && e["branch"] == branch)
+        .map(|e| &e["data"])
+        .find(|d| d["end"].is_string())
+        .cloned()
+}
+
+/// Whether a machine is to be read over ssh for the jobs being waited on: only when `since` the
+/// last read, or the start of the wait, has passed `fallback`, a report being then overdue.
+#[must_use]
+pub fn read_machines_now(since: std::time::Duration, fallback: std::time::Duration) -> bool {
+    since >= fallback
+}
+
+/// Whether a job being waited on, as (machine, job name), is no longer running in the rows read
+/// from its machine.
+#[must_use]
+pub fn gone(waited: &[(String, String)], rows: &[serde_json::Value]) -> bool {
+    waited.iter().any(|(machine, name)| {
+        !rows.iter().any(|r| {
+            r["state"] == "running"
+                && r["machine"] == machine.as_str()
+                && r["name"] == name.as_str()
+        })
+    })
 }
 
 /// The slots a machine has left.
@@ -224,6 +280,15 @@ pub fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
         );
     }
     output(&mut cmd, "git")
+}
+
+/// Pushes `refspec` to a machine of the fleet. Nothing leaves the owner's machines, so the
+/// pre-push hooks that look for private names do not run.
+///
+/// # Errors
+/// git could not be started or exited non-zero.
+pub fn push_to_machine(repo: &Path, url: &str, refspec: &str) -> Result<String, String> {
+    git(repo, &["push", "--no-verify", url, refspec])
 }
 
 /// The commits a job's change was made into here, none of them on a branch yet.
@@ -381,7 +446,10 @@ fn apply(dir: &Path, index: Option<&Path>, to: &str, patch: &str) -> Result<(), 
 }
 
 /// `git ARGS` on the index at `index`, or the repository's own when none is given.
-fn index_git(dir: &Path, index: Option<&Path>, args: &[&str]) -> Result<String, String> {
+///
+/// # Errors
+/// git could not be started or exited non-zero.
+pub fn index_git(dir: &Path, index: Option<&Path>, args: &[&str]) -> Result<String, String> {
     let mut cmd = Command::new("git");
     cmd.arg("-C").arg(dir).args(args);
     if let Some(i) = index {
@@ -391,7 +459,8 @@ fn index_git(dir: &Path, index: Option<&Path>, args: &[&str]) -> Result<String, 
 }
 
 /// A path for a scratch file or worktree of this process, a different one on every call.
-fn scratch(kind: &str) -> PathBuf {
+#[must_use]
+pub fn scratch(kind: &str) -> PathBuf {
     static N: AtomicU32 = AtomicU32::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!("docket-collect-{}-{n}.{kind}", std::process::id()))

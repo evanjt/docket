@@ -1,11 +1,11 @@
 <script lang="ts">
   import { api } from '../lib/api';
   import { project } from '../lib/context';
-  import { ASIDE, FLOW, byId } from '../lib/flow';
+  import { ASIDE, FLOW, byId, wordVar } from '../lib/flow';
   import { resource } from '../lib/live.svelte';
   import { SORTS, applies, filterChanges, nextParams, pagedParams, parseFilter, searchParams, sortRows } from '../lib/filter';
   import { caption, countOf, pageSize, queueNodes, wordList } from '../lib/lists';
-  import { releaseOf } from '../lib/releases';
+  import { checkIds, releaseOf } from '../lib/releases';
   import { at, go, withParams } from '../lib/router.svelte';
   import { act } from '../lib/session.svelte';
   import type { Row } from '../lib/types';
@@ -31,8 +31,9 @@
 
   const q = $derived(at.params.get('q') ?? '');
   const word = $derived(at.params.get('word'));
+  const checkKind = $derived(at.params.get('check'));
   const wordRoute = $derived(word ? wordList(word) : null);
-  const list = $derived(q ? null : word ? wordRoute : (at.params.get('list') ?? 'next'));
+  const list = $derived(q || checkKind ? null : word ? wordRoute : (at.params.get('list') ?? 'next'));
   const selected = $derived(at.params.get('i'));
   const filter = $derived(parseFilter(at.params, ctx));
   const release = $derived(filter.release);
@@ -44,8 +45,10 @@
   let more = $state(0);
 
   const status = resource(() => api.status(ctx.slug));
+  const problems = resource(() => (checkKind ? api.check(ctx.slug) : null));
 
   const fetched = resource<Shape[]>(() => {
+    if (checkKind) return null;
     if (q) return api.search(ctx.slug, q, 200, searchParams(filter));
     if (word && !wordRoute) return filter.under ? api.list('under', ctx.slug, 5000, { under: filter.under }) : null;
     // With a filter chosen, the whole queue is read: next lists the earlier releases first.
@@ -62,13 +65,21 @@
 
   /** A word no list route covers is read from the board, leaving out the plans and packages the Plans page shows. */
   const rows = $derived.by<Shape[]>(() => {
+    if (checkKind) {
+      const board = ctx.board;
+      if (!board || !problems.data) return [];
+      return checkIds(problems.data, checkKind).flatMap((id) => {
+        const n = board.nodes.get(id);
+        return n ? [{ id, title: n.title, word: n.word, theme: n.theme, release: n.release, area: n.area }] : [];
+      });
+    }
     if (word && !wordRoute) {
       if (!ctx.board || (filter.under && !fetched.data)) return [];
       const held = filter.under ? new Set(fetched.data?.map((r) => r.id)) : null;
       return queueNodes(ctx.board, word)
         .filter((n) => !held || held.has(n.id))
         .sort((a, b) => byId(a.id, b.id))
-        .map((n) => ({ id: n.id, title: n.title, word: n.word, theme: n.theme, release: n.release }));
+        .map((n) => ({ id: n.id, title: n.title, word: n.word, theme: n.theme, release: n.release, area: n.area }));
     }
     return fetched.data ?? [];
   });
@@ -77,7 +88,7 @@
   const shown = $derived(
     sortRows(
       rows
-        .map((r) => ({ ...r, release: releaseOf(r.release ?? ctx.board?.nodes.get(r.id)?.release, ctx.releases) }))
+        .map((r) => ({ ...r, release: releaseOf(r.release ?? ctx.board?.nodes.get(r.id)?.release, ctx.releases), area: r.area ?? ctx.board?.nodes.get(r.id)?.area }))
         .filter((r) => applies(r, filter, ctx.releases, ctx.priorities)),
       filter.sort,
       ctx.priorities,
@@ -87,8 +98,8 @@
   const total = $derived(narrowed || q || word || !list ? null : countOf(list, status.data));
   const cut = $derived(!narrowed && !q && !word && list !== 'next' && list !== 'groups' && list !== 'derived' && total !== null && total > shown.length);
 
-  const loading = $derived(word && !wordRoute ? !ctx.board || (!!filter.under && !fetched.data) : fetched.loading && !fetched.data);
-  const heading = $derived(q ? `Search: ${q}` : word ? `Every item ${word}` : LISTS.find((l) => l.name === list)?.label);
+  const loading = $derived(checkKind ? problems.loading && !problems.data : word && !wordRoute ? !ctx.board || (!!filter.under && !fetched.data) : fetched.loading && !fetched.data);
+  const heading = $derived(checkKind ? `Check: ${checkKind}` : q ? `Search: ${q}` : word ? `Every item ${word}` : LISTS.find((l) => l.name === list)?.label);
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   function search(text: string) {
@@ -109,10 +120,11 @@
   /** The keys the project's items carry, read from the board. */
   const keys = $derived([...new Set([...(ctx.board?.nodes.values() ?? [])].map((n) => n.key))].sort());
 
-  const CHOICES = $derived<{ name: 'key' | 'priority' | 'complexity' | 'state'; label: string; options: readonly string[] }[]>([
+  const CHOICES = $derived<{ name: 'key' | 'priority' | 'complexity' | 'area' | 'state'; label: string; options: readonly string[] }[]>([
     { name: 'key', label: 'Any key', options: keys },
     { name: 'priority', label: 'Any priority', options: ctx.priorities },
     { name: 'complexity', label: 'Any complexity', options: ctx.levels },
+    { name: 'area', label: 'Any area', options: ctx.areas.map((a) => a.name) },
     { name: 'state', label: 'Any state', options: ['open', 'done', 'dropped'] },
   ]);
 
@@ -229,7 +241,7 @@
       <nav class="words" aria-label="Words">
         {#each [...FLOW, ...ASIDE, 'done', 'dropped'] as w (w)}
           <a href={withParams({ word: w, q: undefined, list: undefined, i: undefined })} class:active={word === w}
-            style="--c: var(--w-{w})" onclick={() => (typed = '')}>{w}</a>
+            style="--c: {wordVar(w)}" onclick={() => (typed = '')}>{w}</a>
         {/each}
       </nav>
     </div>

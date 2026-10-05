@@ -83,23 +83,17 @@ fn test_members_of_survives_a_parent_cycle_and_an_empty_graph() {
 }
 
 #[test]
-fn test_concepts_of_reads_ties_either_way_and_up_through_parents() {
-    // 10 and 11 are concepts. 1 relates to 10; 2 is a child of 1 and was spawned by 3, which is tied
-    // from 11; 4 stands alone.
-    let ties = [related(1, 10), parent(2, 1), origin(2, 3), related(11, 3)];
-    let index = Neighbours::new(&ties);
-    let concepts = set(&[10, 11]);
-    assert_eq!(index.concepts_of(&concepts, 1), set(&[10]));
-    assert_eq!(index.concepts_of(&concepts, 2), set(&[10]));
-    assert_eq!(index.concepts_of(&concepts, 3), set(&[11]));
-    assert_eq!(index.concepts_of(&concepts, 4), set(&[]));
-}
-
-#[test]
-fn test_concepts_of_a_concept_leaves_itself_out_and_stops_at_a_cycle() {
-    let ties = [related(10, 11), parent(1, 2), parent(2, 1)];
-    let index = Neighbours::new(&ties);
-    let concepts = set(&[10, 11]);
-    assert_eq!(index.concepts_of(&concepts, 10), set(&[11]));
-    assert_eq!(index.concepts_of(&concepts, 1), set(&[]));
+fn test_an_item_under_a_labelled_plan_carries_the_label() {
+    // 1 is a plan over 2, which is a plan over 3; 4 sits under no plan and 5 is only related to 1.
+    let ties = [parent(2, 1), parent(3, 2), related(5, 1)];
+    let own = HashMap::from([
+        (1, vec!["area:sync".to_string()]),
+        (2, vec!["slow".to_string(), "area:sync".to_string()]),
+        (4, vec!["lone".to_string()]),
+    ]);
+    assert_eq!(labels_carried(&ties, &own, 3), ["slow", "area:sync"]);
+    assert_eq!(labels_carried(&ties, &own, 2), ["slow", "area:sync"]);
+    assert_eq!(labels_carried(&ties, &own, 1), ["area:sync"]);
+    assert_eq!(labels_carried(&ties, &own, 4), ["lone"]);
+    assert!(labels_carried(&ties, &own, 5).is_empty());
 }

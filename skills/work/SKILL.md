@@ -142,20 +142,9 @@ account, is handed over with `docket ask T14 "what is needed" --need hold|access
 judgement). The owner holds at most `owner_limit` open asks; past it `ask` is
 refused: derive the choice, depend on an ask already open, or wait.
 
-Every item filed names its release with `--release`, chosen by what it is,
-in this order. Its nature: a crash, a hang, data loss or wrong numbers,
-migration or upgrade safety, security or privacy, or release work is
-`--release current` at high priority. What it serves: a blocker or member of
-current-release work is `--release current`. Otherwise a feature or polish
-goes to a later release, and tests, CI and hooks to the backlog (`--release ""`)
-under the theme the project keeps for them (`docket skills releases` lists the
-releases, the current
-first). The body's last line says which and why: `**Release.** current: it
-loses the draft on resume.`
-
 Something found on the way that is not this ticket is filed only when it is
-critical or high, or the order above puts it in the current release: `docket
-new B "title" --body - --release current --priority high
+critical or high, or the docket block puts it in the current release: `docket
+new B "title" --body - --parent PLAN --release current --priority high
 --complexity medium`. Anything else is an
 observation on the ticket, never a ticket of its own: `docket edit T14
 --append "Observed: ..."`.

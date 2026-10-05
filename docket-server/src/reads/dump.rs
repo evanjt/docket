@@ -121,6 +121,8 @@ async fn projects(tx: &DatabaseTransaction) -> Result<Vec<ProjectDump>, DbErr> {
     let mut out = Vec::with_capacity(rows.len());
     for p in rows {
         let releases = crate::verbs::releases::listed(tx, &p.slug).await?.all();
+        let areas = crate::verbs::areas::listed(tx, &p.slug).await?.all();
+        let labels = crate::verbs::labels::listed(tx, &p.slug).await?;
         out.push(ProjectDump {
             slug: p.slug,
             keys: p.keys,
@@ -136,6 +138,8 @@ async fn projects(tx: &DatabaseTransaction) -> Result<Vec<ProjectDump>, DbErr> {
             created_at: p.created_at,
             updated_at: p.updated_at,
             releases,
+            areas,
+            labels,
         });
     }
     Ok(out)
@@ -144,25 +148,30 @@ async fn projects(tx: &DatabaseTransaction) -> Result<Vec<ProjectDump>, DbErr> {
 async fn items(tx: &DatabaseTransaction, scope: &Scope) -> Result<Vec<ItemDump>, DbErr> {
     let (rids, values) = scope.rids();
     let text = format!(
-        "SELECT i.*, s.id AS superseded_id, r.name AS release_name, p.id AS parent_id FROM items i \
-         LEFT JOIN items s ON s.rid = i.superseded_by LEFT JOIN releases r ON r.id = i.release_id \
+        "SELECT i.*, s.id AS superseded_id, r.name AS release_name, a.name AS area_name, p.id AS parent_id \
+         FROM items i LEFT JOIN items s ON s.rid = i.superseded_by \
+         LEFT JOIN releases r ON r.id = i.release_id LEFT JOIN areas a ON a.id = i.area_id \
          LEFT JOIN items p ON p.rid = i.parent_rid \
          WHERE i.rid IN ({rids}) ORDER BY i.project, i.key, i.num"
     );
     let rows = tx.query_all_raw(sql(&text, values.clone())).await?;
     let mut links = links(tx, &rids, values.clone()).await?;
+    let mut labels = labels(tx, &rids, values.clone()).await?;
     let mut depends = depends(tx, &rids, values).await?;
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
         let superseded: Option<String> = row.try_get("", "superseded_id")?;
         let release: Option<String> = row.try_get("", "release_name")?;
+        let area: Option<String> = row.try_get("", "area_name")?;
         let parent: Option<String> = row.try_get("", "parent_id")?;
         let stored = to_item(item::Model::from_query_result(&row, "")?);
         let (related, origin) = links.remove(&stored.rid).unwrap_or_default();
         let on = depends.remove(&stored.rid);
         out.push(ItemDump {
             depends: on,
+            labels: labels.remove(&stored.rid),
             release,
+            area,
             parent,
             origin: (!origin.is_empty()).then_some(origin),
             ..item_dump(stored, superseded, related)
@@ -192,6 +201,25 @@ async fn links(
         } else {
             entry.1.push(l.id);
         }
+    }
+    Ok(out)
+}
+
+/// `{rid: the names of the labels it was given}` for the items of a scope.
+async fn labels(
+    tx: &DatabaseTransaction,
+    rids: &str,
+    values: Vec<Value>,
+) -> Result<HashMap<i64, Vec<String>>, DbErr> {
+    let text = format!(
+        "SELECT il.rid, l.name FROM item_labels il JOIN labels l ON l.id = il.label_id \
+         WHERE il.rid IN ({rids}) ORDER BY il.rid, l.name"
+    );
+    let mut out: HashMap<i64, Vec<String>> = HashMap::new();
+    for r in tx.query_all_raw(sql(&text, values)).await? {
+        out.entry(r.try_get_by_index(0)?)
+            .or_default()
+            .push(r.try_get_by_index(1)?);
     }
     Ok(out)
 }
@@ -246,13 +274,17 @@ fn item_dump(
         group: r.group_name,
         theme: r.theme,
         release: None,
+        area: None,
         rank: r.rank,
+        item_type: r.item_type.as_str().to_string(),
+        priority: r.priority,
         tags: r.tags,
         related,
         parent: None,
         origin: None,
         opened: Vec::new(),
         depends: None,
+        labels: None,
         opened_at: r.opened_at,
         updated_at: r.updated_at,
         body: r.body,

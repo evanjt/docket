@@ -13,12 +13,10 @@ use docket_core::rules::{prioritise, rate as rate_rule, set_tags};
 
 use crate::auth::Caller;
 use crate::store::id_of;
-use crate::verbs::graph::{
-    holds_of, parent_ties, refuse_later, refuse_later_after_release, release_list, settle_audits,
-    standing,
-};
+use crate::verbs::areas;
+use crate::verbs::graph::{Order, holds_of, parent_ties, refuse_later, release_list, standing};
 use crate::verbs::releases::{name_of, release_id};
-use crate::verbs::view::{item_view, item_views, kind as kind_of};
+use crate::verbs::view::{item_view, item_views};
 use crate::verbs::{Call, Failure};
 
 const EDITABLE: [&str; 6] = ["title", "complexity", "theme", "group", "tags", "turn_note"];
@@ -39,17 +37,13 @@ pub async fn priority(
     }
     let mut out = Vec::new();
     for r in &rows {
-        out.push(
-            call.tx
-                .update(r.rid, &prioritise(&r.tags, &req.tier)?)
-                .await?,
-        );
+        out.push(call.tx.update(r.rid, &prioritise(&req.tier)?).await?);
         let note = format!("priority {}", req.tier);
         call.tx
             .event(&call.slug, Some(r.rid), "edited", Some(&note), None, None)
             .await?;
     }
-    let items = item_views(&call.tx.conn, &call.project, &out).await?;
+    let items = item_views(&call.tx.conn, &out).await?;
     call.tx.commit().await?;
     Ok(Json(MovedMany { items }))
 }
@@ -70,7 +64,7 @@ pub async fn rate(
     call.tx
         .event(&call.slug, Some(r.rid), "edited", Some(&note), None, None)
         .await?;
-    let item = item_view(&call.tx.conn, &call.project, &row).await?;
+    let item = item_view(&call.tx.conn, &row).await?;
     call.tx.commit().await?;
     Ok(Json(Moved { item }))
 }
@@ -86,9 +80,14 @@ pub async fn edit(
 ) -> Result<Json<Moved>, Failure> {
     let mut call = Call::begin(&db, &caller, &req.common).await?;
     let r = call.item(&req.id).await?;
-    if req.set.is_empty() && req.append.is_none() && req.body.is_none() && req.release.is_none() {
+    if req.set.is_empty()
+        && req.append.is_none()
+        && req.body.is_none()
+        && req.release.is_none()
+        && req.area.is_none()
+    {
         return Err(Failure::Refused(
-            "edit needs --set field=value, --release NAME, --append \"text\" or --body FILE|-."
+            "edit needs --set field=value, --release NAME, --area NAME, --append \"text\" or --body FILE|-."
                 .to_string(),
         ));
     }
@@ -103,20 +102,35 @@ pub async fn edit(
     let mut cols = Vec::new();
     let mut notes = Vec::new();
     for kv in &req.set {
-        cols.push(set_field(&r, &kv.field, &kv.value)?);
+        cols.push(set_field(&kv.field, &kv.value)?);
         notes.push(format!("{}={}", kv.field, kv.value));
     }
     if let Some(given) = &req.release {
         let to = release_id(&call.tx.conn, &call.slug, given).await?;
-        if !call.ctx.force {
-            refuse_later_after_release(&call.tx, &call.slug, &r, to).await?;
-        }
+        let order = Order::load(&call.tx.conn, &call.slug).await?;
         let name = name_of(&call.tx.conn, to).await?;
+        if req.carry {
+            let label = name.as_deref().unwrap_or("the backlog");
+            let note = format!("release {label} (carried with {})", r.id);
+            for (rid, _, release) in order.carried(r.rid, to) {
+                call.tx.update(rid, &[Field::ReleaseId(release)]).await?;
+                call.tx
+                    .event(&call.slug, Some(rid), "edited", Some(&note), None, None)
+                    .await?;
+            }
+        } else if !call.ctx.force {
+            order.refuse(&order.moving(r.rid, to))?;
+        }
         cols.push(Field::ReleaseId(to));
         notes.push(format!(
             "release {}",
             name.as_deref().unwrap_or("the backlog")
         ));
+    }
+    if let Some(given) = &req.area {
+        let (col, note) = move_area(&mut call, &r, given).await?;
+        cols.push(col);
+        notes.push(note);
     }
     let mut body = r.body.clone();
     if let Some(append) = &req.append {
@@ -149,15 +163,40 @@ pub async fn edit(
             None,
         )
         .await?;
-    let item = item_view(&call.tx.conn, &call.project, &row).await?;
+    let item = item_view(&call.tx.conn, &row).await?;
     call.tx.commit().await?;
     Ok(Json(Moved { item }))
 }
 
-fn set_field(r: &Item, k: &str, v: &str) -> Result<Field, Failure> {
+/// The area an edit gives an item, every item under it moved with it. Refused on an item under a
+/// plan, whose area is the plan's.
+async fn move_area(call: &mut Call, r: &Item, given: &str) -> Result<(Field, String), Failure> {
+    let to = areas::area_id(&call.tx.conn, &call.slug, given).await?;
+    if let Some(plan) = r.parent_rid
+        && to != r.area_id
+    {
+        let plan = id_of(&call.tx.conn, plan).await?.unwrap_or_default();
+        return Err(Failure::Refused(format!(
+            "{} is under {plan}, and its area is {plan}'s: edit the area of {plan} instead",
+            r.id
+        )));
+    }
+    if let Some(to) = to
+        && r.state == "open"
+    {
+        areas::open_into(&call.tx.conn, &call.slug, to).await?;
+    }
+    let name = areas::name_of(&call.tx.conn, to).await?;
+    let label = areas::label(name.as_deref());
+    let why = format!("area {label} (with {})", r.id);
+    areas::carry_under(&mut call.tx, &call.slug, r.rid, to, &why).await?;
+    Ok((Field::AreaId(to), format!("area {label}")))
+}
+
+fn set_field(k: &str, v: &str) -> Result<Field, Failure> {
     if !EDITABLE.contains(&k) {
         return Err(Failure::Refused(format!(
-            "{k} is not editable; fields are {}. State and turn move with their own verbs. Also priority: docket priority, release: --release NAME.",
+            "{k} is not editable; fields are {}. State and turn move with their own verbs. Also priority: docket priority, release: --release NAME, area: --area NAME.",
             EDITABLE.join(", ")
         )));
     }
@@ -171,7 +210,7 @@ fn set_field(r: &Item, k: &str, v: &str) -> Result<Field, Failure> {
     Ok(match k {
         "complexity" => rate_rule(v)?.remove(0),
         "group" => Field::GroupName(blank(v)),
-        "tags" => Field::Tags(set_tags(&r.tags, v)),
+        "tags" => Field::Tags(set_tags(v)),
         "title" => {
             if v.trim().is_empty() {
                 return Err(Failure::Refused("a title cannot be empty".to_string()));
@@ -248,7 +287,7 @@ async fn refuse_parent(
     many: &[Item],
     listed: &docket_core::release::Listed,
 ) -> Result<(), Failure> {
-    let kind = kind_of(&call.project, plan);
+    let kind = plan.item_type.kind();
     if !kind.is_plan() {
         return Err(Failure::Refused(format!(
             "{} is a {}, and only a plan holds children. Record what spawned an item with docket link ID origin {}.",
@@ -264,6 +303,23 @@ async fn refuse_parent(
         )));
     }
     let open: Vec<&Item> = many.iter().filter(|a| a.state == "open").collect();
+    if !open.is_empty()
+        && let Some(id) = plan.area_id
+        && areas::open_into(&call.tx.conn, &call.slug, id)
+            .await
+            .is_err()
+    {
+        let theirs = areas::name_of(&call.tx.conn, Some(id)).await?;
+        return Err(Failure::Refused(format!(
+            "{} is in {}, which holds closed items only, so no open item goes under it: put {} under a plan in another area",
+            plan.id,
+            theirs.unwrap_or_default(),
+            open.iter()
+                .map(|a| a.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )));
+    }
     if plan.state != "open" && !open.is_empty() {
         return Err(Failure::Refused(format!(
             "{} is {}, and a closed plan holds no open children. Put {} under an open plan, or link it with docket link ID origin {}.",
@@ -300,6 +356,29 @@ async fn refuse_parent(
                 a.id
             )));
         }
+    }
+    Ok(())
+}
+
+/// Each of `many`, and every item under each to any depth, given the area of the plan they are under,
+/// with an edit event on each that moves naming the plan.
+async fn take_area(call: &mut Call, plan: &Item, many: &[Item]) -> Result<(), Failure> {
+    let name = areas::name_of(&call.tx.conn, plan.area_id).await?;
+    let why = format!(
+        "area {} (from plan {})",
+        areas::label(name.as_deref()),
+        plan.id
+    );
+    for a in many {
+        if a.area_id != plan.area_id {
+            call.tx
+                .update(a.rid, &[Field::AreaId(plan.area_id)])
+                .await?;
+            call.tx
+                .event(&call.slug, Some(a.rid), "edited", Some(&why), None, None)
+                .await?;
+        }
+        areas::carry_under(&mut call.tx, &call.slug, a.rid, plan.area_id, &why).await?;
     }
     Ok(())
 }
@@ -345,7 +424,9 @@ pub async fn parent(
             .event(&call.slug, Some(a.rid), "edited", Some(&note), None, None)
             .await?;
     }
-    settle_audits(&mut call.tx, &call.project, &touched).await?;
+    if let Some(b) = &plan {
+        take_area(&mut call, b, &many).await?;
+    }
     call.tx.commit().await?;
     Ok(Json(Parented {
         items: many.into_iter().map(|a| a.id).collect(),

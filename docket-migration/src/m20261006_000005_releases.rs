@@ -9,7 +9,7 @@ use sea_orm::ConnectionTrait;
 use sea_orm_migration::prelude::*;
 
 use docket_core::dump::{ItemDump, ProjectDump};
-use docket_core::migrate::{Areas, Change, Held, Rows, Rules, plan};
+use docket_core::migrate::{Change, Rows, Rules, Themes, plan};
 
 use crate::statement;
 
@@ -36,8 +36,7 @@ const DOWN: &str =
 /// The rules the placement turns on, as decided: a plan's later children come back into its
 /// release, and an item whose theme is no release takes its plan's release, else the backlog.
 const RULES: Rules = Rules {
-    held: Some(Held::PullChildren),
-    areas: Some(Areas::Plan),
+    themes: Themes::Plan,
 };
 
 const PROJECTS: &str = "SELECT slug, keys, themes, skills FROM projects ORDER BY slug";

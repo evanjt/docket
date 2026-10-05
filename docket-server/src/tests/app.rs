@@ -11,12 +11,13 @@ const SEED: &str = r#"
 INSERT INTO projects (slug, keys, created_at, updated_at) VALUES ('o/p',
   '[{"key":"T","kind":"work"},{"key":"PK","kind":"package"},{"key":"CON","kind":"concept"}]', 'c', 'u');
 INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, group_name, opened_at, updated_at)
-  VALUES (1, 'o/p', 'T', 1, 'First', 'open', 'agent', '["high","single"]', 'Body text', 'g', 'o1', 'u1'),
+  VALUES (1, 'o/p', 'T', 1, 'First', 'open', 'agent', '["single"]', 'Body text', 'g', 'o1', 'u1'),
          (2, 'o/p', 'PK', 1, 'Package', 'open', 'agent', '[]', '', NULL, 'o2', 'u2'),
          (3, 'o/p', 'CON', 1, 'Concept', 'open', 'agent', '[]', '', NULL, 'o3', 'u3');
 INSERT INTO items (rid, project, key, num, title, state, resolution, superseded_by, tags, opened_at, updated_at)
   VALUES (4, 'o/p', 'T', 2, 'Old', 'dropped', 'replaced', 1, '[]', 'o4', 'u4');
-UPDATE items SET parent_rid=2 WHERE rid=1;
+UPDATE items SET parent_rid=2, priority='high' WHERE rid=1;
+UPDATE items SET type='plan' WHERE rid=2;
 INSERT INTO links (rid, kind, to_rid) VALUES (1, 'related', 3);
 INSERT INTO links (rid, kind, to_path, to_line) VALUES (1, 'cites_file', 'src/a.rs', 7);
 INSERT INTO events (uid, project, rid, at, host, kind) VALUES ('e1', 'o/p', 1, 'o1', 'devbox', 'opened');
@@ -25,6 +26,7 @@ INSERT INTO events (uid, project, rid, at, host, kind) VALUES ('e1', 'o/p', 1, '
 async fn seeded() -> (Router, Scratch) {
     let s = Scratch::new(2).await;
     s.seed(SEED).await;
+    s.seed(crate::tests::TYPES_BY_KEY).await;
     (app(&s.db, Keys::parse("devbox agent secret").unwrap()), s)
 }
 
@@ -80,8 +82,8 @@ async fn test_show_matches_the_json_of_docket_show() {
         "claim_runner": null, "claim_job": null, "claim_on": null,
         "wait_on": null, "wait_ref": null, "wait_since": null,
         "decision": null, "decided_at": null, "resolution": null,
-        "scope": null, "complexity": null, "theme": null, "release": null, "rank": null,
-        "tags": ["high", "single"], "body": "Body text", "conflict": 0,
+        "scope": null, "complexity": null, "theme": null, "release": null, "area": null, "rank": null,
+        "type": "task", "tags": ["single"], "labels": [], "body": "Body text", "conflict": 0,
         "opened_at": "o1", "updated_at": "u1",
         "group": "g", "word": "ready", "priority": "high", "superseded_by": null,
         "related": ["CON1"], "parent": "PK1", "origin": [], "children": [],
@@ -96,11 +98,7 @@ async fn test_show_matches_the_json_of_docket_show() {
 async fn test_show_derives_word_from_kind_and_open_members() {
     let (_, package) = get("/show/PK1?project=o/p").await;
     assert_eq!(package["word"], "building");
-    assert_eq!(
-        package["progress"].to_string(),
-        r#"{"done":0,"live":0,"total":1}"#
-    );
-    assert_eq!(get("/show/CON1?project=o/p").await.1["word"], "standing");
+    assert_eq!(get("/show/CON1?project=o/p").await.1["word"], "ready");
     let (_, dropped) = get("/show/T2?project=o/p").await;
     assert_eq!(dropped["word"], "dropped");
     assert_eq!(dropped["superseded_by"], "T1");
@@ -288,6 +286,7 @@ UPDATE items SET parent_rid=1 WHERE rid=2;
 "#,
     )
     .await;
+    s.seed(TYPES_BY_KEY).await;
     let app = app(&s.db, Keys::parse("devbox agent secret").unwrap());
     let req = Request::builder()
         .uri("/offers/A1?project=o/p")
@@ -305,3 +304,8 @@ UPDATE items SET parent_rid=1 WHERE rid=2;
         .collect();
     assert!(!verbs.contains(&"close"), "{verbs:?}");
 }
+
+/// Rows seeded by raw SQL carry the default type; this sets each to the type its key is filed under, a legacy plan key to plan and a key outside the fixed five to task.
+pub(crate) const TYPES_BY_KEY: &str = "UPDATE items SET type = CASE key WHEN 'Q' THEN 'question' \
+    WHEN 'A' THEN 'plan' WHEN 'PK' THEN 'plan' WHEN 'STY' THEN 'plan' WHEN 'B' THEN 'bug' \
+    WHEN 'I' THEN 'investigation' ELSE 'task' END";

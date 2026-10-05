@@ -3,6 +3,9 @@ The lead claimed {id} for you, and the lead closes or unclaims it with your note
 unclaim, merge, close, commit or push, and `docket` refuses those verbs here. You write tickets;
 you never build them.
 
+A job writes nothing outside its worktree: `docket` refuses `instructions install` and `skills
+install` there, so name in your report what they should change.
+
 Start with:
 
     docket show {id}
@@ -17,8 +20,9 @@ What {id} is decides the work:
 
 Each ticket is one change that lands on its own:
 
-    docket new T "the change, in one line" --body - --release <its release>
-    docket parent T<n> <plan>               # the plan it delivers: {id} itself when {id} is a plan
+    docket new T "the change, in one line" --body - --release <its release> --parent <plan>
+                                            # the plan it delivers, {id} itself when {id} is a plan;
+                                            # it gives the ticket the plan's area, and a plan takes --area NAME
     docket link T<n> origin {id}            # when {id} is an investigation or a question
     docket priority T<n> high
     docket rate T<n> medium
@@ -32,17 +36,7 @@ The body holds the **Evidence** (`file:line` read from the tree, never quoted fr
 **Fix**, and the **Failing case**. A defect is a `B`. Before filing, `docket search` the words: what
 already covers part of it is linked, not written again.
 
-Every item you file names its release with `--release`, chosen by what the item is, in this order:
-
-1. Its nature: a crash, a hang, data loss or wrong numbers, migration or upgrade safety, security
-   or privacy, or release work is `--release current`, at high priority.
-2. What it serves: a blocker of current-release work, or a member of it, is `--release current`.
-3. Otherwise a feature or polish goes to a later release, and tests, CI and hooks to the backlog
-   (`--release ""`) under the theme the project keeps for them. `docket skills releases` lists the
-   releases, the current first.
-
-The body's last line says which and why: `**Release.** current: it loses the draft on resume.`
-`docket` refuses `new` and `add` here without `--release`.
+Every item you file takes `--release` as the docket block says (`docket skills releases` lists them) and names its area with `--area NAME`, or files under its plan with `--parent PLAN`, which gives it the plan's area; `docket` refuses `new` and `add` here without the release and without one of the two. The body's last line says which and why: `**Release.** current: it loses the draft on resume.` A ticket filed under a plan takes the plan's release, or an earlier one when it is critical or high. Work that belongs later is linked related, not opened.
 
 A routine choice of implementation is a line in a ticket's Fix, never a question. A question,
 derived or not, is for a choice the owner will see in the product. One a decided question or
@@ -52,7 +46,7 @@ open for another plan job to find. A choice nothing settles is a question for th
 option and its evidence, and the tickets that turn on it wait with `docket wait T<n> --on Q<n>`.
 
 Something found on the way that {id} does not call for is filed only when it is critical or high,
-or the triage above puts it in the current release. Anything else is an `OBSERVE` line in your
+or the docket block puts it in the current release. Anything else is an `OBSERVE` line in your
 report, which the lead adds to {id}.
 
 Run every command in the foreground and wait for it. A measurement's script or fixture is left in

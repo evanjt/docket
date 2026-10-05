@@ -1,13 +1,14 @@
 <script lang="ts">
+  import { areaOf } from '../lib/areas';
   import { project } from '../lib/context';
-  import { newItemDefaults, newItemRequests } from '../lib/newitem';
+  import { ITEM_KEYS, newItemDefaults, newItemRequests } from '../lib/newitem';
   import { go } from '../lib/router.svelte';
   import { act } from '../lib/session.svelte';
 
   let { open = $bindable(false), from }: { open?: boolean; from?: { id: string; release?: string | null; kind?: string } } = $props();
 
   const ctx = project();
-  const keys = $derived((ctx.row?.keys ?? []).filter((k) => k.kind !== 'concept' && k.kind !== 'idea'));
+  const keys = ITEM_KEYS;
 
   let key = $state('');
   let title = $state('');
@@ -18,6 +19,7 @@
   let plan = $state('');
   let origin = $state('');
   let group = $state('');
+  let area = $state('');
   let busy = $state(false);
 
   $effect(() => {
@@ -32,10 +34,15 @@
     origin = d.origin;
   });
 
+  /** The plan's area when the plan is named, else the picked one. */
+  const planArea = $derived(plan.trim() ? areaOf(ctx.board?.nodes, plan.trim().toUpperCase()) : null);
+  const refusal = $derived(newItemRequests(ctx.slug, { key, title, body, priority, complexity, release, plan, origin, group, area }, (p) => areaOf(ctx.board?.nodes, p)).refusal);
+
   async function submit(e: SubmitEvent) {
     e.preventDefault();
+    const req = newItemRequests(ctx.slug, { key, title, body, priority, complexity, release, plan, origin, group, area }, (p) => areaOf(ctx.board?.nodes, p));
+    if (req.refusal) return;
     busy = true;
-    const req = newItemRequests(ctx.slug, { key, title, body, priority, complexity, release, plan, origin, group });
     const done = await act<{ item: { id: string } }>('new', req.request, 'Opened');
     for (const [verb, sent, said] of done ? req.after(done.item.id) : []) await act(verb, sent, said);
     busy = false;
@@ -54,7 +61,7 @@
     <h2>New item in {ctx.slug}</h2>
     <label for="new-key">Kind</label>
     <select id="new-key" class="field" bind:value={key}>
-      {#each keys as k (k.key)}<option value={k.key}>{k.key}: {k.meaning ?? k.kind}</option>{/each}
+      {#each keys as k (k.key)}<option value={k.key}>{k.key}: {k.meaning}</option>{/each}
     </select>
     <label for="new-title">Title</label>
     <!-- svelte-ignore a11y_autofocus -->
@@ -84,6 +91,16 @@
         <input class="field" bind:value={group} placeholder="none" />
       </label>
     </div>
+    <label>Area
+      {#if planArea}
+        <input class="field" value={planArea} disabled aria-label="Area" />
+      {:else}
+        <select class="field" bind:value={area} required>
+          <option value="">choose an area</option>
+          {#each ctx.areas as a (a.id)}<option value={a.name}>{a.name}</option>{/each}
+        </select>
+      {/if}
+    </label>
     <div class="pair">
       <label>Plan
         <input class="field" bind:value={plan} placeholder="a plan's id, or none" />
@@ -93,7 +110,7 @@
       </label>
     </div>
     <div class="foot">
-      <button class="btn primary" disabled={!title.trim() || !key || busy}>Open {key}</button>
+      <button class="btn primary" disabled={!title.trim() || !key || !!refusal || busy} title={refusal ?? undefined}>Open {key}</button>
       <button type="button" class="btn" onclick={() => (open = false)}>Cancel</button>
     </div>
   </form>

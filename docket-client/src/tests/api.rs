@@ -14,10 +14,12 @@ INSERT INTO projects (slug, keys, themes, skills, created_at, updated_at) VALUES
     {"key":"PK","kind":"package"}]',
   '[{"name":"sync","note":""}]', '{"mode":"run","land":"make land"}', 'c', 'u');
 INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, opened_at, updated_at) VALUES
-  (1, 'o/p', 'T', 1, 'Fix the sync', 'open', 'agent', '["high"]', 'Body naming PK1', '2026-01-01T00:00:00Z', 'u1'),
+  (1, 'o/p', 'T', 1, 'Fix the sync', 'open', 'agent', '["single"]', 'Body naming PK1', '2026-01-01T00:00:00Z', 'u1'),
   (2, 'o/p', 'PK', 1, 'Sync package', 'open', 'agent', '[]', '', '2026-01-01T00:00:00Z', 'u2'),
   (3, 'o/p', 'Q', 1, 'Which way', 'open', 'user', '[]', 'Two ways', '2026-01-01T00:00:00Z', 'u3');
-UPDATE items SET parent_rid=2 WHERE rid=1;
+UPDATE items SET parent_rid=2, priority='high' WHERE rid=1;
+UPDATE items SET type='plan' WHERE key='PK';
+UPDATE items SET type='question' WHERE key='Q';
 INSERT INTO links (rid, kind, to_rid) VALUES (1, 'origin', 3);
 INSERT INTO links (rid, kind, to_path, to_line) VALUES (1, 'cites_file', 'src/sync.rs', 4);
 INSERT INTO events (uid, project, rid, at, host, kind, note) VALUES
@@ -92,11 +94,10 @@ fn test_typed_rows_read_every_route_the_tui_uses() {
     let projects = api.projects().unwrap();
     assert_eq!(projects[0].slug, "o/p");
     assert_eq!(projects[0].skills["land"], "make land");
-    assert_eq!(projects[0].kind("PK"), docket_core::word::Kind::Package);
 
     let status = api.status("o/p").unwrap();
     assert_eq!(status.count("ready"), 1);
-    assert_eq!(status.count("parked"), 1);
+    assert_eq!(status.count("waiting on owner"), 1);
 
     let next = api.next("o/p", 5, &[]).unwrap();
     assert_eq!(next[0].id, "T1");
@@ -111,8 +112,6 @@ fn test_typed_rows_read_every_route_the_tui_uses() {
     assert_eq!(shown.parent.as_deref(), Some("PK1"));
     assert_eq!(shown.origin, ["Q1"]);
     assert_eq!(shown.cites[0].path.as_deref(), Some("src/sync.rs"));
-    let package = api.show("o/p", "PK1").unwrap();
-    assert_eq!(package.progress.map(|p| (p.done, p.total)), Some((0, 1)));
 }
 
 #[test]
@@ -120,7 +119,7 @@ fn test_stored_lists_read_items_links_and_events() {
     let api = served();
     let items = api.items("o/p").unwrap();
     assert_eq!(items.len(), 3);
-    assert_eq!(items[0].tags, ["high"]);
+    assert_eq!(items[0].tags, ["single"]);
     assert_eq!(items[0].parent_rid, Some(2));
     let origin = api.links_from(&[1, 2, 3], "origin").unwrap();
     assert_eq!((origin[0].rid, origin[0].to_rid), (1, Some(3)));
@@ -238,6 +237,28 @@ fn test_machines_and_the_lead_claim_round_trip() {
     assert!(gave.lead.is_none());
     assert!(matches!(
         api.lead_act("o/p", None, "renew", "lead-1"),
+        Err(Error::Refused(409, _))
+    ));
+}
+
+#[test]
+fn test_a_publication_round_trips_and_a_second_with_its_sha_is_refused() {
+    let api = served();
+    assert!(api.publications("o/p").unwrap().publications.is_empty());
+    let req = PublicationRequest {
+        common: Common {
+            project: "o/p".into(),
+            ..Common::default()
+        },
+        published: "a".repeat(40),
+        work: "b".repeat(40),
+        plans: vec!["PK1".into()],
+    };
+    let recorded = api.record_publication(&req).unwrap();
+    assert_eq!(recorded.publications[0].plans, ["PK1"]);
+    assert_eq!(api.publications("o/p").unwrap(), recorded);
+    assert!(matches!(
+        api.record_publication(&req),
         Err(Error::Refused(409, _))
     ));
 }

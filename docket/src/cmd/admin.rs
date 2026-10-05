@@ -2,7 +2,7 @@
 //! dump the server serves and planned by `docket_core::migrate`, with every risky case.
 
 use docket_core::dump::DumpPage;
-use docket_core::migrate::{Areas, Changes, Held, Rows, Rules, plan};
+use docket_core::migrate::{Changes, Rows, Rules, Themes, plan};
 
 use crate::args::AdminCmd;
 use crate::ctx::Ctx;
@@ -16,33 +16,19 @@ pub fn admin(ctx: &mut Ctx, what: &AdminCmd) -> Result<i32> {
         AdminCmd::Migrate {
             dry_run,
             all,
-            held,
-            areas,
-        } => migrate(
-            ctx,
-            *dry_run,
-            *all,
-            rules(held.as_deref(), areas.as_deref()),
-        ),
+            themes,
+        } => migrate(ctx, *dry_run, *all, rules(themes.as_deref())),
     }
 }
 
-/// The rules the flags decide; a flag not given leaves its rule undecided.
+/// The rules the flags decide; a flag not given leaves the rule at its default.
 #[must_use]
-pub fn rules(held: Option<&str>, areas: Option<&str>) -> Rules {
+pub fn rules(themes: Option<&str>) -> Rules {
     Rules {
-        held: held.and_then(|h| match h {
-            "detach" => Some(Held::Detach),
-            "move-plan" => Some(Held::MovePlan),
-            "pull-children" => Some(Held::PullChildren),
-            _ => None,
-        }),
-        areas: areas.and_then(|a| match a {
-            "current" => Some(Areas::Current),
-            "backlog" => Some(Areas::Backlog),
-            "plan" => Some(Areas::Plan),
-            _ => None,
-        }),
+        themes: match themes {
+            Some("backlog") => Themes::Backlog,
+            _ => Themes::Plan,
+        },
     }
 }
 

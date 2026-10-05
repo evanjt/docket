@@ -96,3 +96,46 @@ fn test_a_project_without_models_or_not_bound_here_starts_nothing() {
         panic!("started a lead in a project with no root here")
     });
 }
+
+fn set(slot: &std::sync::Mutex<Vec<(String, String)>>, key: &str, value: &str) {
+    slot.lock().unwrap().push((key.into(), value.into()));
+}
+
+#[test]
+fn test_an_owner_level_pause_stops_a_project_that_leaves_mode_unset() {
+    let source = Fixture::default();
+    set(&source.facts, "models", "medium=claude:m lead=claude:m");
+    set(&source.owner, "mode", "pause");
+    let mut starts = Starts::default();
+    let launched = tick_once(&source, &mut starts, T0, &Ok(String::new()));
+    assert_eq!(launched, ["o/q"]);
+    assert_eq!(starts.of("o/p").unwrap().why, ["mode is pause"]);
+}
+
+#[test]
+fn test_an_owner_level_models_lets_a_project_without_models_start_on_its_lead_entry() {
+    let source = Fixture::default();
+    set(
+        &source.owner,
+        "models",
+        "medium=claude:m lead=claude:owner-lead",
+    );
+    let launched = RefCell::new(Vec::new());
+    tick(
+        &source,
+        &bound,
+        &mut Starts::default(),
+        T0,
+        &|start: &Start| {
+            launched
+                .borrow_mut()
+                .push((start.slug.clone(), start.model.model.clone()));
+            Ok(String::new())
+        },
+    );
+    assert!(
+        launched
+            .into_inner()
+            .contains(&("o/p".to_string(), "owner-lead".to_string()))
+    );
+}

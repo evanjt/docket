@@ -54,34 +54,42 @@ pub fn tick<S: Source>(
     let Ok(projects) = source.projects() else {
         return;
     };
+    let Some(first) = projects.first() else {
+        return;
+    };
+    let Ok(owner) = source.owner_facts(&first.slug) else {
+        return;
+    };
     for project in projects {
         let roots = roots_of(&project.slug);
         if roots.is_empty() {
             continue;
         }
         let record = starts.0.entry(project.slug.clone()).or_default();
-        if !lead::attempt_due(record.at, now, &project.skills) {
+        let skills = fact::merged(&project.skills, &owner);
+        if !lead::attempt_due(record.at, now, &skills) {
             continue;
         }
         let Ok(state) = source.lead(&project.slug) else {
             continue;
         };
-        if let Err(why) = lead::should_start(state.lead.as_ref(), &project.skills, now) {
+        if let Err(why) = lead::should_start(state.lead.as_ref(), &skills, now) {
             record.why = why;
             continue;
         }
         record.why.clear();
         record.at = Some(now);
-        record.outcome = Some(launch_for(&project, roots, launch));
+        record.outcome = Some(launch_for(&project, &owner, roots, launch));
     }
 }
 
 fn launch_for(
     project: &docket_core::rows::ProjectRow,
+    owner: &BTreeMap<String, String>,
     roots: Vec<String>,
     launch: Launch,
 ) -> Result<String, String> {
-    let model = fact::model_for(&project.skills, &BTreeMap::new(), Role::Lead, None)
+    let model = fact::model_for(&project.skills, owner, Role::Lead, None)
         .ok_or("models has no lead or high entry")?;
     launch(&Start {
         slug: project.slug.clone(),

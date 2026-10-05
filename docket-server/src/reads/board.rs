@@ -4,24 +4,27 @@ use std::collections::{HashMap, HashSet};
 
 use axum::Json;
 use axum::extract::{Extension, Query, State};
-use sea_orm::{ConnectionTrait, DatabaseConnection, FromQueryResult, TransactionTrait};
-use serde::Deserialize;
+use axum::http::header;
+use axum::response::IntoResponse;
+use futures_util::StreamExt;
+use sea_orm::{ConnectionTrait, DatabaseConnection, DbErr, FromQueryResult, TransactionTrait};
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use docket_core::board::{Board, GateProblem};
+use docket_core::board::Board;
 use docket_core::clock::stamp;
 use docket_core::member::{Edge, Tie};
 use docket_core::pace::epoch;
-use docket_core::rows::{ItemRow, KeySpec, ProjectRow};
-use docket_core::rules::GATE;
-use docket_core::word::{Kind, word};
+use docket_core::rows::{ItemRow, Progress, ProjectRow};
+use docket_core::word::Kind;
 
 use crate::auth::Caller;
-use crate::reads::public::{Kinds, facts, open_members, sql};
+use crate::reads::public::{member_counts, sql, word_of};
 use crate::reads::rows::{project_model, rows};
 use crate::store::{self, STATE_COLUMNS, column, to_item};
 use crate::verbs::Failure;
 use crate::verbs::graph::{live_overlaps, open_dependencies, standing};
+use docket_core::word::kind_of_type;
 
 #[derive(Deserialize)]
 pub struct InProject {
@@ -65,41 +68,13 @@ pub async fn counts(State(db): State<DatabaseConnection>) -> Result<Json<Value>,
         .flatten();
         out.push(json!({
             "slug": slug,
-            "open": by_state.get("open").copied().unwrap_or(0),
-            "done": by_state.get("done").copied().unwrap_or(0),
-            "dropped": by_state.get("dropped").copied().unwrap_or(0),
+            "open": by_state.get("open").copied().unwrap_or_default(),
+            "done": by_state.get("done").copied().unwrap_or_default(),
+            "dropped": by_state.get("dropped").copied().unwrap_or_default(),
             "last_event": last,
         }));
     }
     Ok(Json(Value::Array(out)))
-}
-
-/// The word of every item of a project, by state then rid.
-async fn words<C: ConnectionTrait>(
-    db: &C,
-    slug: &str,
-    kinds: &Kinds,
-) -> Result<Vec<(crate::entities::item::Model, String)>, Failure> {
-    let open = open_members(db, slug).await?;
-    let found = rows(
-        db,
-        &format!("SELECT {STATE_COLUMNS} FROM items WHERE project=? ORDER BY state, rid"),
-        vec![slug.into()],
-    )
-    .await?;
-    Ok(found
-        .into_iter()
-        .map(|r| {
-            let kind = kinds.kind(&r.key);
-            let n = if kind == Kind::Package && r.state == "open" {
-                open.get(&r.rid).copied().unwrap_or(0)
-            } else {
-                0
-            };
-            let w = word(&facts(&r, kind), n).to_string();
-            (r, w)
-        })
-        .collect())
 }
 
 /// One integrity problem, as data the client words.
@@ -151,15 +126,14 @@ pub async fn problems<C: ConnectionTrait>(
     out.extend(undefined_keys(db, slug, &project).await?);
     out.extend(database_checks(db).await?);
     out.extend(stalls(db, slug, board).await?);
-    out.extend(audits_held(board));
     let cutoff = stamp(now_secs().saturating_sub(30 * 86_400));
     let waiting = rows(
         db,
         &format!(
             "SELECT {STATE_COLUMNS} FROM items WHERE project=? AND state='open' AND wait_on='condition' \
-             AND wait_since < ? AND wait_ref<>? ORDER BY rid"
+             AND wait_since < ? ORDER BY rid"
         ),
-        vec![slug.into(), cutoff.clone().into(), GATE.into()],
+        vec![slug.into(), cutoff.clone().into()],
     )
     .await?;
     let last = last_forward(db, slug).await?;
@@ -265,6 +239,23 @@ struct Hold {
     to_rid: i64,
 }
 
+/// The ids of the open items an item of a later release holds up.
+///
+/// # Errors
+/// The database cannot be read.
+pub async fn held_later_ids<C: ConnectionTrait>(
+    db: &C,
+    slug: &str,
+    board: &Board,
+) -> Result<HashSet<String>, Failure> {
+    Ok(stalls(db, slug, board)
+        .await?
+        .iter()
+        .filter(|p| p["kind"] == "held_later")
+        .filter_map(|p| p["id"].as_str().map(str::to_string))
+        .collect())
+}
+
 /// What stalls the queue for good: open items holding each other in a cycle, through an item's wait
 /// or a container's wait on its open members, and an item held by one in a later release.
 async fn stalls<C: ConnectionTrait>(
@@ -293,15 +284,13 @@ async fn stalls<C: ConnectionTrait>(
             edges.entry(h.rid).or_default().push(h.to_rid);
         }
     }
-    let gated: Vec<i64> = open
+    let plans: Vec<i64> = open
         .iter()
-        .filter(|r| {
-            r.wait_on.as_deref() == Some("condition") && r.wait_ref.as_deref() == Some(GATE)
-        })
+        .filter(|r| kind_of_type(&r.item_type) == Kind::Audit)
         .map(|r| r.rid)
         .collect();
     let open_rids: HashSet<i64> = by_rid.keys().copied().collect();
-    for (plan, member) in docket_core::stall::gate_edges(&board.ties, &gated, &open_rids) {
+    for (plan, member) in docket_core::stall::plan_edges(&board.ties, &plans, &open_rids) {
         edges.entry(plan).or_default().push(member);
     }
     let mut out: Vec<Value> = docket_core::stall::cycles(&edges)
@@ -342,17 +331,6 @@ async fn stalls<C: ConnectionTrait>(
     Ok(out)
 }
 
-fn audits_held(board: &Board) -> Vec<Value> {
-    board
-        .gate_problems()
-        .into_iter()
-        .map(|g| match g {
-            GateProblem::HeldGate { id } => problem("held_gate", json!({ "id": id })),
-            GateProblem::OpenAudit { id, n } => problem("open_audit", json!({ "id": id, "n": n })),
-        })
-        .collect()
-}
-
 #[derive(FromQueryResult)]
 struct LinkRow {
     rid: i64,
@@ -361,67 +339,144 @@ struct LinkRow {
     to_path: Option<String>,
 }
 
+#[derive(Serialize)]
+struct Node<'a> {
+    id: &'a str,
+    rid: i64,
+    key: &'a str,
+    kind: &'static str,
+    state: &'a str,
+    word: &'a str,
+    theme: Option<&'a str>,
+    release: Option<&'a str>,
+    area: Option<&'a str>,
+    title: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    progress: Option<Progress>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    due: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct GraphEdge<'a> {
+    from: &'a str,
+    to: Option<&'a str>,
+    kind: &'a str,
+}
+
+/// A comma before every element of an array but its first.
+fn separate(text: &mut Vec<u8>, written: usize) {
+    if written > 0 {
+        text.push(b',');
+    }
+}
+
+fn to_writer(text: &mut Vec<u8>, value: &impl Serialize) -> Result<(), DbErr> {
+    serde_json::to_writer(text, value).map_err(|e| DbErr::Custom(e.to_string()))
+}
+
 /// `docket graph`: every item with its rid, kind and word, its parent, and every link and cited file
 /// leaving one.
+///
+/// The answer is written node by node and edge by edge from typed structs that borrow the board's
+/// rows, and the links are read as a stream, so a request holds the board and the response text, not a
+/// second tree of values or every link row beside them.
 ///
 /// # Errors
 /// 404 for an unknown project.
 pub async fn graph(
     State(db): State<DatabaseConnection>,
     Query(q): Query<InProject>,
-) -> Result<Json<Value>, Failure> {
+) -> Result<impl IntoResponse, Failure> {
     let model = project_model(&db, &q.project).await?;
-    let kinds = Kinds::of(&model);
-    let items = words(&db, &q.project, &kinds).await?;
     let board = core_board(&db, &model).await?;
-    let ids: HashMap<i64, &str> = items.iter().map(|(r, _)| (r.rid, r.id.as_str())).collect();
+    let open = member_counts(&db, &q.project).await?;
+    let mut items: Vec<&ItemRow> = board.items.iter().collect();
+    items.sort_by(|a, b| (&a.state, a.rid).cmp(&(&b.state, b.rid)));
+    let ids: HashMap<i64, &str> = items.iter().map(|r| (r.rid, r.id.as_str())).collect();
     let listed = crate::verbs::releases::listed(&db, &q.project).await?;
-    let nodes: Vec<Value> = items
-        .iter()
-        .map(|(r, w)| {
-            let kind = kinds.kind(&r.key);
-            let mut node = json!({ "id": r.id, "rid": r.rid, "key": r.key, "kind": kind.as_str(), "state": r.state,
-                                   "word": w, "theme": r.theme, "release": listed.name(r.release_id),
-                                   "title": r.title });
-            if let Some(row) = board.by_rid(r.rid).filter(|_| holds(kind)) {
-                node["progress"] = json!(board.progress(row));
-                if kind == Kind::Audit {
-                    node["due"] = json!(board.due(row));
-                }
-            }
-            node
-        })
-        .collect();
-    let links = LinkRow::find_by_statement(sql(
-        "SELECT l.* FROM links l JOIN items i ON i.rid=l.rid WHERE i.project=? ORDER BY i.state, i.rid, \
-         l.kind, l.to_rid NULLS FIRST, l.to_path NULLS FIRST, l.to_line NULLS FIRST, l.id",
+    let areas = crate::verbs::areas::listed(&db, &q.project).await?;
+    let mut text = Vec::new();
+    text.extend_from_slice(b"{\"project\":");
+    to_writer(&mut text, &q.project)?;
+    text.extend_from_slice(b",\"nodes\":[");
+    for (i, r) in items.iter().enumerate() {
+        let kind = kind_of_type(&r.item_type);
+        let held = holds(kind);
+        let node = Node {
+            id: &r.id,
+            rid: r.rid,
+            key: &r.key,
+            kind: kind.as_str(),
+            state: &r.state,
+            word: word_of(
+                &r.state,
+                r.claim_branch.as_deref(),
+                r.wait_on.as_deref(),
+                r.turn.as_deref(),
+                kind,
+                open.get(&r.rid).copied().unwrap_or_default(),
+            ),
+            theme: r.theme.as_deref(),
+            release: listed.name(r.release_id),
+            area: areas.name(r.area_id),
+            title: &r.title,
+            progress: held.then(|| board.progress(r)),
+            due: (held && kind == Kind::Audit).then(|| board.due(r)),
+        };
+        separate(&mut text, i);
+        to_writer(&mut text, &node)?;
+    }
+    text.extend_from_slice(b"],\"edges\":[");
+    let mut written = 0;
+    for r in &items {
+        let Some(plan) = r.parent_rid.and_then(|p| ids.get(&p)) else {
+            continue;
+        };
+        separate(&mut text, written);
+        written += 1;
+        let edge = GraphEdge {
+            from: &r.id,
+            to: Some(plan),
+            kind: "parent",
+        };
+        to_writer(&mut text, &edge)?;
+    }
+    let mut links = LinkRow::find_by_statement(sql(
+        "SELECT l.rid, l.kind, l.to_rid, l.to_path FROM links l JOIN items i ON i.rid=l.rid \
+         WHERE i.project=? ORDER BY i.state, i.rid, l.kind, l.to_rid NULLS FIRST, l.to_path NULLS FIRST, \
+         l.to_line NULLS FIRST, l.id",
         vec![q.project.clone().into()],
     ))
-    .all(&db)
+    .stream(&db)
     .await?;
-    let mut edges: Vec<Value> = items
-        .iter()
-        .filter_map(|(r, _)| {
-            let plan = ids.get(&r.parent_rid?)?;
-            Some(json!({ "from": r.id, "to": plan, "kind": "parent" }))
-        })
-        .collect();
-    for l in links {
+    while let Some(l) = links.next().await {
+        let l = l?;
         let Some(a) = ids.get(&l.rid) else { continue };
-        match l.to_rid {
+        let edge = match l.to_rid {
             Some(to) => {
                 let Some(b) = ids.get(&to) else { continue };
                 if l.kind == "related" && a > b {
                     continue;
                 }
-                edges.push(json!({ "from": a, "to": b, "kind": l.kind }));
+                GraphEdge {
+                    from: a,
+                    to: Some(b),
+                    kind: &l.kind,
+                }
             }
-            None => edges.push(json!({ "from": a, "to": l.to_path, "kind": "cites" })),
-        }
+            None => GraphEdge {
+                from: a,
+                to: l.to_path.as_deref(),
+                kind: "cites",
+            },
+        };
+        separate(&mut text, written);
+        written += 1;
+        to_writer(&mut text, &edge)?;
     }
-    Ok(Json(
-        json!({ "project": q.project, "nodes": nodes, "edges": edges }),
-    ))
+    text.extend_from_slice(b"]}");
+    Ok(([(header::CONTENT_TYPE, "application/json")], text))
 }
 
 /// Kinds that hold other items, and so carry a progress: what a package, plan or story opened, what
@@ -433,49 +488,40 @@ fn holds(kind: Kind) -> bool {
     )
 }
 
-/// A project as docket-core's board reads it: every item with its parent, every `origin` tie, and the
-/// `related` ties reaching or leaving a standing item, as the TUI loads it.
+/// A project as docket-core's board reads it: every item with its parent, every `origin` tie, as the TUI loads it.
 ///
 /// # Errors
 /// The database.
-pub async fn core_board<C: ConnectionTrait>(
+pub async fn core_board<C>(
     db: &C,
     model: &crate::entities::project::Model,
-) -> Result<Board, Failure> {
+) -> Result<Board, Failure>
+where
+    C: ConnectionTrait + sea_orm::StreamTrait,
+{
     let project = ProjectRow {
         slug: model.slug.clone(),
-        keys: model
-            .keys
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|spec| serde_json::from_value::<KeySpec>(spec.clone()).ok())
-            .collect(),
         ..ProjectRow::default()
     };
-    let items: Vec<ItemRow> = rows(
-        db,
+    let mut items: Vec<ItemRow> = Vec::new();
+    let mut stream = crate::entities::item::Model::find_by_statement(sql(
         &format!("SELECT {STATE_COLUMNS} FROM items WHERE project=? ORDER BY rid"),
         vec![model.slug.clone().into()],
-    )
-    .await?
-    .into_iter()
-    .map(item_row)
-    .collect();
-    let standing: HashSet<i64> = items
-        .iter()
-        .filter(|i| project.kind(&i.key).is_standing())
-        .map(|i| i.rid)
-        .collect();
+    ))
+    .stream(db)
+    .await?;
+    while let Some(m) = stream.next().await {
+        items.push(item_row(m?));
+    }
+    drop(stream);
     let ties = TieRow::find_by_statement(sql(
         "SELECT l.rid, l.kind, l.to_rid FROM links l JOIN items i ON i.rid=l.rid \
-         WHERE i.project=? AND l.to_rid IS NOT NULL AND l.kind IN ('related', 'origin') ORDER BY l.id",
+         WHERE i.project=? AND l.to_rid IS NOT NULL AND l.kind='origin' ORDER BY l.id",
         vec![model.slug.clone().into()],
     ))
     .all(db)
     .await?
     .into_iter()
-    .filter(|t| t.kind == "origin" || standing.contains(&t.rid) || standing.contains(&t.to_rid))
     .filter_map(|t| {
         Some(Tie {
             rid: t.rid,
@@ -497,6 +543,7 @@ struct TieRow {
 fn item_row(m: crate::entities::item::Model) -> ItemRow {
     ItemRow {
         tags: serde_json::from_value(m.tags).unwrap_or_default(),
+        item_type: m.item_type,
         rid: m.rid,
         project: m.project,
         key: m.key,
@@ -521,6 +568,7 @@ fn item_row(m: crate::entities::item::Model) -> ItemRow {
         group_name: m.group_name,
         theme: m.theme,
         release_id: m.release_id,
+        area_id: m.area_id,
         rank: m.rank,
         opened_at: m.opened_at,
         updated_at: m.updated_at,
@@ -651,7 +699,7 @@ async fn fact_int<C: ConnectionTrait>(
         .unwrap_or(default))
 }
 
-/// What the status text reads beside the flow and the queue: the pace, the claims, the plans under
+/// What the status text reads beside the flow and the queue: the claims, the plans under
 /// way, the plans due for audit and the check.
 ///
 /// # Errors
@@ -664,9 +712,7 @@ pub async fn summary(
         .begin_with_config(None, Some(sea_orm::AccessMode::ReadOnly))
         .await?;
     let model = project_model(&db, &q.project).await?;
-    let project = store::project(&db, &q.project).await?;
     let board = core_board(&db, &model).await?;
-    let now = i64::try_from(now_secs()).unwrap_or(0);
     let stored: std::collections::BTreeMap<String, String> = model
         .skills
         .as_object()
@@ -678,106 +724,11 @@ pub async fn summary(
         .unwrap_or_default();
     Ok(Json(json!({
         "skills": docket_core::fact::known(&stored),
-        "pace": pace(&db, &q.project, &project, now).await?,
-        "net": net(&db, &model, now - 3600).await?,
         "claims": claims(&db, &q.project, &model).await?,
         "plans": plans(&board),
         "due": due(&board),
         "problems": problems(&db, &q.project, &board).await?,
     })))
-}
-
-#[derive(FromQueryResult)]
-struct MoveRow {
-    kind: String,
-    note: Option<String>,
-    at: String,
-    id: String,
-    key: String,
-}
-
-/// The closes and working seconds over the last twenty closes.
-async fn pace<C: ConnectionTrait>(
-    db: &C,
-    slug: &str,
-    project: &store::ProjectRow,
-    now: i64,
-) -> Result<Value, Failure> {
-    use docket_core::pace::{Logged, moves, pace as pace_of};
-    let found = MoveRow::find_by_statement(sql(
-        "SELECT e.kind, e.note, e.at, i.id, i.key FROM events e JOIN items i ON i.rid = e.rid \
-         WHERE e.project=? ORDER BY e.at, e.seq",
-        vec![slug.into()],
-    ))
-    .all(db)
-    .await?;
-    let standing = crate::verbs::graph::keys_of(project, &[Kind::Concept, Kind::Idea]);
-    let events: Vec<Logged> = found
-        .iter()
-        .filter(|r| !standing.contains(&r.key))
-        .map(|r| Logged {
-            at: epoch(&r.at).unwrap_or(i64::MIN),
-            id: &r.id,
-            kind: &r.kind,
-            note: r.note.as_deref(),
-        })
-        .collect();
-    // An event with no readable time still marks a legacy close as logged, and moves nothing itself.
-    let timed: Vec<_> = moves(&events)
-        .into_iter()
-        .filter(|m| m.at != i64::MIN)
-        .collect();
-    let p = pace_of(&timed, 20, now);
-    Ok(json!({ "closed": p.closed, "working": p.working }))
-}
-
-#[derive(FromQueryResult)]
-struct NetRow {
-    kind: String,
-    at: String,
-    key: String,
-    release: Option<String>,
-    opened: i64,
-}
-
-/// The current release's tickets closed and opened since `since`, and the research closes that opened
-/// nothing.
-async fn net<C: ConnectionTrait>(
-    db: &C,
-    model: &crate::entities::project::Model,
-    since: i64,
-) -> Result<docket_core::pace::Net, Failure> {
-    use docket_core::pace::{Class, Counted, net as net_of};
-    let found = NetRow::find_by_statement(sql(
-        "SELECT e.kind, e.at, i.key, (SELECT r.name FROM releases r WHERE r.id=i.release_id) AS release, \
-           (SELECT COUNT(*) FROM links l WHERE l.to_rid=i.rid AND l.kind='origin') AS opened \
-         FROM events e JOIN items i ON i.rid = e.rid WHERE e.project=? AND e.at >= ? ORDER BY e.at, e.seq",
-        vec![
-            model.slug.clone().into(),
-            stamp(u64::try_from(since).unwrap_or(0)).into(),
-        ],
-    ))
-    .all(db)
-    .await?;
-    let kinds = Kinds::of(model);
-    let releases = crate::verbs::releases::listed(db, &model.slug).await?.open;
-    let counted: Vec<Counted> = found
-        .iter()
-        .map(|r| Counted {
-            at: epoch(&r.at).unwrap_or(i64::MIN),
-            kind: &r.kind,
-            class: match kinds.kind(&r.key) {
-                Kind::Work => Class::Code {
-                    current: docket_core::queue::in_current(&releases, r.release.as_deref()),
-                },
-                Kind::Decision | Kind::Research => Class::Research {
-                    opened: r.opened > 0,
-                },
-                _ => Class::Other,
-            },
-        })
-        .collect();
-    Ok(net_of(&counted, since))
 }
 
 /// Every claim in the project, oldest first: its branch, the host it was claimed on, since when, and

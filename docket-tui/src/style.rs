@@ -1,5 +1,5 @@
 //! One rule for every colour: it names the state an item is in or is moved into. A verb takes the colour
-//! of the word it leads to, so `claimed` is the yellow of `building`.
+//! of the word it leads to, so `claimed` is the yellow of `in progress`.
 
 use ratatui::style::{Color, Modifier, Style};
 
@@ -9,9 +9,9 @@ pub fn word(w: &str) -> Style {
     let s = Style::default();
     match w {
         "ready" => s.fg(Color::Green),
-        "building" => s.fg(Color::Yellow),
-        "checking" => s.fg(Color::Cyan),
-        "parked" => s.fg(Color::Magenta),
+        "in progress" | "building" => s.fg(Color::Yellow),
+        "audit due" => s.fg(Color::Cyan),
+        "waiting on owner" => s.fg(Color::Magenta),
         "blocked" => s.fg(Color::Blue),
         "dropped" | "FAILED" => s.fg(Color::Red),
         "done" => s.add_modifier(Modifier::DIM),
@@ -25,9 +25,8 @@ pub fn verb_tint(verb: &str) -> Option<&'static str> {
     match verb {
         "closed" => Some("done"),
         "released" | "replied" | "resumed" => Some("ready"),
-        "claimed" => Some("building"),
-        "parked" => Some("parked"),
-        "decided" => Some("checking"),
+        "claimed" => Some("in progress"),
+        "parked" => Some("waiting on owner"),
         "blocked" => Some("blocked"),
         "dropped" | "lost" => Some("dropped"),
         _ => None,

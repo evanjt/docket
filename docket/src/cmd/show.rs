@@ -4,19 +4,16 @@ use std::fmt::Write;
 
 use serde_json::Value;
 
+use docket_core::area::Placement;
 use docket_core::rows::Row;
 use docket_core::touch::declared_files;
 
-use crate::cmd::lists::{keys_of, print_decided_like};
+use crate::cmd::lists::{print_decided_like, question_keys};
+use crate::cmd::published;
 use crate::ctx::{Ctx, id};
 use crate::fail::Result;
 use crate::py::{Py, cut, dumps_line, float_repr, or_none};
 use crate::row::{fmt_row, item_json, row_of};
-
-/// The words in the order an item moves through them.
-pub const WORDS: [&str; 8] = [
-    "ready", "building", "checking", "blocked", "parked", "standing", "done", "dropped",
-];
 
 /// `members: 9 of 13 done, 2 live`.
 #[must_use]
@@ -77,6 +74,13 @@ pub fn show(ctx: &mut Ctx, item: &str) -> Result<i32> {
     for line in ties(&r, &v, &about) {
         println!("       {line}");
     }
+    let events = ctx.read(&format!("/log/{item}"), &[])?;
+    if let Some(line) = placed_line(events.as_array().map_or(&[], Vec::as_slice)) {
+        println!("       {line}");
+    }
+    if let Some(line) = published::show_line(ctx, r.resolution.as_deref().unwrap_or_default()) {
+        println!("       {line}");
+    }
     println!();
     println!(
         "{}",
@@ -88,17 +92,28 @@ pub fn show(ctx: &mut Ctx, item: &str) -> Result<i32> {
     );
     print_cites(&v);
     if r.state == "open" {
-        let slug = ctx.project()?;
-        let qkeys = keys_of(&ctx.project_row(&slug)?, "decision");
-        print_decided_like(ctx, &r, &qkeys)?;
+        print_decided_like(ctx, &r, &question_keys())?;
     }
     Ok(0)
+}
+
+/// `placed in NAME (derived)`: the newest placement an agent recorded with `decide --area`.
+fn placed_line(events: &[Value]) -> Option<String> {
+    events
+        .iter()
+        .rev()
+        .filter(|e| e["kind"] == "decided")
+        .find_map(|e| Placement::of(&e["data"].to_string()))
+        .map(|p| format!("placed in {} (derived)", p.area))
 }
 
 fn facts(r: &Row, about: &Value) -> Vec<String> {
     let mut facts = Vec::new();
     if let Some(release) = r.release.as_deref() {
         facts.push(format!("release: {release}"));
+    }
+    if let Some(area) = r.area.as_deref() {
+        facts.push(format!("area: {area}"));
     }
     if let Some(t) = r.theme.as_deref().filter(|t| !t.is_empty()) {
         facts.push(format!("theme: {t}"));
@@ -122,9 +137,7 @@ fn facts(r: &Row, about: &Value) -> Vec<String> {
 fn ties(r: &Row, v: &Value, about: &Value) -> Vec<String> {
     let mut out = Vec::new();
     let related = strs(&v["related"]);
-    if about["standing"].is_object() {
-        out.push(member_counts(&r.id, &about["standing"]));
-    } else if !related.is_empty() {
+    if !related.is_empty() {
         out.push(format!("related: {}", related.join(", ")));
     }
     if let Some(parent) = v["parent"].as_str() {
@@ -170,32 +183,11 @@ fn ties(r: &Row, v: &Value, about: &Value) -> Vec<String> {
     if !holds.is_empty() {
         out.push(format!("holds: {}", holds.join(", ")));
     }
-    let concepts = strs(&about["concepts"]);
-    if !concepts.is_empty() {
-        out.push(format!("concepts: {}", concepts.join(", ")));
+    let labels = strs(&v["labels"]);
+    if !labels.is_empty() {
+        out.push(format!("labels: {}", labels.join(", ")));
     }
     out
-}
-
-/// `members: 12, 3 ready, 9 done: docket audit CON2`.
-fn member_counts(item: &str, standing: &Value) -> String {
-    let words = &standing["words"];
-    let parts: Vec<String> = WORDS
-        .iter()
-        .filter_map(|w| {
-            let n = words[*w].as_u64().filter(|n| *n > 0)?;
-            Some(format!("{n} {w}"))
-        })
-        .collect();
-    let joined = if parts.is_empty() {
-        String::new()
-    } else {
-        format!(", {}", parts.join(", "))
-    };
-    format!(
-        "members: {}{joined}: docket audit {item}",
-        standing["total"].as_u64().unwrap_or(0)
-    )
 }
 
 fn print_cites(v: &Value) {
@@ -475,3 +467,7 @@ pub fn graph(ctx: &mut Ctx, dot: bool, no_files: bool) -> Result<i32> {
     println!("{}", dumps_line(&out));
     Ok(0)
 }
+
+#[cfg(test)]
+#[path = "../tests/show.rs"]
+mod tests;

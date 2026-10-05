@@ -2,6 +2,7 @@
 //! raw query is sent as.
 
 pub mod assignments;
+pub mod item_types;
 mod m20261001_000001_schema;
 mod m20261002_000001_machines_and_leads;
 mod m20261005_000001_owner_facts;
@@ -14,6 +15,15 @@ mod m20261006_000003_ask_need;
 mod m20261006_000004_job_reports;
 mod m20261006_000005_releases;
 mod m20261006_000006_parents;
+mod m20261006_000007_assignee;
+mod m20261006_000008_areas;
+mod m20261006_000009_job_times;
+mod m20261006_000010_plan_gates;
+pub(crate) mod m20261006_000011_area_places;
+mod m20261006_162014_item_types;
+mod m20261006_163830_labels;
+mod m20261006_164713_area_placements;
+mod m20261006_174229_publications;
 pub mod parents;
 #[cfg(any(test, feature = "scratch"))]
 pub mod scratch;
@@ -24,11 +34,14 @@ use sea_orm::{
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
 /// The identity columns, by table. Rows written with their own keys leave each to be moved past them.
-pub const IDENTITIES: [(&str, &str); 4] = [
+pub const IDENTITIES: [(&str, &str); 7] = [
     ("items", "rid"),
     ("events", "seq"),
     ("links", "id"),
     ("releases", "id"),
+    ("areas", "id"),
+    ("labels", "id"),
+    ("publications", "id"),
 ];
 
 /// The advisory lock held while migrating, so two servers starting together migrate one at a time.
@@ -51,6 +64,15 @@ impl MigratorTrait for Migrator {
             Box::new(m20261006_000004_job_reports::Migration),
             Box::new(m20261006_000005_releases::Migration),
             Box::new(m20261006_000006_parents::Migration),
+            Box::new(m20261006_000007_assignee::Migration),
+            Box::new(m20261006_000008_areas::Migration),
+            Box::new(m20261006_000009_job_times::Migration),
+            Box::new(m20261006_000010_plan_gates::Migration),
+            Box::new(m20261006_000011_area_places::Migration),
+            Box::new(m20261006_162014_item_types::Migration),
+            Box::new(m20261006_163830_labels::Migration),
+            Box::new(m20261006_164713_area_placements::Migration),
+            Box::new(m20261006_174229_publications::Migration),
         ]
     }
 }

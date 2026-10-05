@@ -83,6 +83,25 @@ pub fn ancestors(ties: &[Tie], rid: i64) -> Vec<i64> {
     out
 }
 
+/// The labels an item carries: its own, then those of each plan above it, nearest first, each once.
+/// A descendant inherits at read time, so a label is stored on the item it was given to alone.
+#[must_use]
+pub fn labels_carried<S: BuildHasher>(
+    ties: &[Tie],
+    own: &HashMap<i64, Vec<String>, S>,
+    rid: i64,
+) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for at in std::iter::once(rid).chain(ancestors(ties, rid)) {
+        for label in own.get(&at).into_iter().flatten() {
+            if !out.contains(label) {
+                out.push(label.clone());
+            }
+        }
+    }
+    out
+}
+
 /// What belongs to a standing item: anything tied to it either way, with everything under that at
 /// any depth. Standing items are never members of each other.
 #[must_use]
@@ -107,48 +126,6 @@ pub fn members_of<S: BuildHasher>(
     }
     out.retain(|x| !standing.contains(x));
     out
-}
-
-/// Every plain tie by the item at either end, and every item's parent.
-pub struct Neighbours {
-    near: HashMap<i64, Vec<i64>>,
-    parents: HashMap<i64, Vec<i64>>,
-}
-
-impl Neighbours {
-    #[must_use]
-    pub fn new(ties: &[Tie]) -> Self {
-        let mut near: HashMap<i64, Vec<i64>> = HashMap::new();
-        let mut parents: HashMap<i64, Vec<i64>> = HashMap::new();
-        for t in ties {
-            if t.is_parent() {
-                parents.entry(t.rid).or_default().push(t.to);
-            } else {
-                near.entry(t.rid).or_default().push(t.to);
-                near.entry(t.to).or_default().push(t.rid);
-            }
-        }
-        Self { near, parents }
-    }
-
-    /// The concepts an item belongs to: tied to it either way, or to any plan above it.
-    #[must_use]
-    pub fn concepts_of<S: BuildHasher>(
-        &self,
-        concepts: &HashSet<i64, S>,
-        rid: i64,
-    ) -> HashSet<i64> {
-        let (mut seen, mut todo, mut out) = (HashSet::new(), vec![rid], HashSet::new());
-        while let Some(x) = todo.pop() {
-            if !seen.insert(x) {
-                continue;
-            }
-            let near = self.near.get(&x).into_iter().flatten();
-            out.extend(near.filter(|o| **o != rid && concepts.contains(*o)));
-            todo.extend(self.parents.get(&x).into_iter().flatten());
-        }
-        out
-    }
 }
 
 #[cfg(test)]

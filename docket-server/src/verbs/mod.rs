@@ -1,12 +1,13 @@
 //! The write verbs: `POST /do/{verb}`, each one rule run inside one transaction.
 
+pub mod areas;
 pub mod claim;
 pub mod fields;
 pub mod graph;
+pub mod labels;
 pub mod open;
 pub mod project;
 pub mod releases;
-pub mod retry;
 pub mod turn;
 pub mod view;
 
@@ -24,12 +25,9 @@ use docket_core::item::{Ctx, Item};
 use crate::auth::Caller;
 use crate::store::{ProjectRow, Tx};
 
-pub const TURNS: [&str; 2] = ["agent", "user"];
-pub const RUNNERS: [&str; 3] = ["codex", "claude", "remote"];
-pub const ROLES: [&str; 5] = ["build", "rebase", "review", "plan", "audit"];
-pub const KINDS: [&str; 8] = [
-    "work", "decision", "research", "audit", "story", "concept", "idea", "package",
-];
+pub const TURNS: [&str; 2] = docket_core::assignment::TURNS;
+pub const RUNNERS: [&str; 3] = docket_core::assignment::CLAIM_RUNNERS;
+pub const ROLES: [&str; 5] = docket_core::assignment::ROLES;
 
 /// Why a verb did not apply, and the status that says so.
 #[derive(Debug)]
@@ -152,7 +150,6 @@ pub fn router() -> Router<DatabaseConnection> {
     Router::new()
         .route("/new", post(open::new))
         .route("/add", post(open::add))
-        .route("/key", post(open::key))
         .route("/start", post(claim::start))
         .route("/release", post(claim::release))
         .route("/job-report", post(claim::job_report))
@@ -165,13 +162,14 @@ pub fn router() -> Router<DatabaseConnection> {
         .route("/ask", post(turn::ask))
         .route("/park", post(turn::ask))
         .route("/reply", post(turn::reply))
-        .route("/retry", post(retry::retry))
         .route("/answer", post(turn::answer))
         .route("/decide", post(turn::decide))
         .route("/priority", post(fields::priority))
         .route("/rate", post(fields::rate))
         .route("/edit", post(fields::edit))
         .route("/releases", post(releases::releases))
+        .route("/areas", post(areas::areas))
+        .route("/label", post(labels::label))
         .route("/link", post(fields::link))
         .route("/parent", post(fields::parent))
         .route("/project", post(project::project))
@@ -181,3 +179,16 @@ pub fn router() -> Router<DatabaseConnection> {
 #[cfg(test)]
 #[path = "../tests/verbs.rs"]
 mod tests;
+
+#[cfg(test)]
+mod choices {
+    use super::*;
+    use docket_core::assignment;
+
+    #[test]
+    fn accepted_choices_are_cores() {
+        assert_eq!(TURNS, assignment::TURNS);
+        assert_eq!(RUNNERS, assignment::CLAIM_RUNNERS);
+        assert_eq!(ROLES, assignment::ROLES);
+    }
+}

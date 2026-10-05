@@ -8,7 +8,8 @@ use docket_core::pace::{Minute, duration};
 use docket_core::rows::Row;
 use ratatui::style::Style;
 
-use crate::doc::{Doc, Listing, Route, Seg, Target, seg, spot};
+use crate::doc::{Doc, Listing, Route, Seg, Target, seg, spot, wrap};
+use crate::filter::Filter;
 use crate::page::ProjectData;
 use crate::style;
 use docket_core::board::Board;
@@ -19,8 +20,8 @@ const WIDE: usize = 120;
 const SIDE: usize = 44;
 const GAP: usize = 2;
 /// The flow counts the sidebar always shows; the rest only when something carries them.
-const FLOW: [&str; 2] = ["ready", "building"];
-const ASIDE: [&str; 3] = ["checking", "blocked", "parked"];
+const FLOW: [&str; 3] = ["ready", "in progress", "building"];
+const ASIDE: [&str; 4] = ["audit due", "blocked", "waiting on owner", "parked"];
 /// Rows each sidebar block shows before it says how many more.
 const ROWS: usize = 5;
 /// Rows of NEXT, and of MOVES until `m` shows them all.
@@ -107,6 +108,10 @@ fn sidebar(board: &Board, data: &ProjectData, width: usize) -> Doc {
     let mut d = Doc::default();
     progress(&mut d, data, width);
     d.blank();
+    releases(&mut d, data, width);
+    d.blank();
+    checks(&mut d, data, width);
+    d.blank();
     lead(&mut d, data, width);
     d.blank();
     claimed(&mut d, board, &data.wip, data.now, width);
@@ -123,7 +128,7 @@ fn sidebar(board: &Board, data: &ProjectData, width: usize) -> Doc {
     d
 }
 
-/// PROGRESS: closed of everything in the flow, the pace, and the open counts, each a hot spot.
+/// PROGRESS: closed of everything in the flow, the forecast, and the open counts, each a hot spot.
 fn progress(d: &mut Doc, data: &ProjectData, width: usize) {
     d.plain("PROGRESS", style::bold());
     let closed = data.status.count("done");
@@ -135,13 +140,10 @@ fn progress(d: &mut Doc, data: &ProjectData, width: usize) {
         ),
         Style::default(),
     );
-    let pace = pace(data);
-    if !pace.is_empty() {
-        d.plain(cut(&format!(" {pace}"), width), Style::default());
-    }
-    let net = data.net.line("last hour");
-    if !net.is_empty() {
-        d.plain(cut(&format!(" {net}"), width), Style::default());
+    if let Some(forecast) = data.releases.first().map(|r| &r.forecast) {
+        for line in wrap(&forecast.line(), width.saturating_sub(1)) {
+            d.plain(cut(&format!(" {line}"), width), Style::default());
+        }
     }
     let trend = trend(&data.trend);
     if !trend.is_empty() {
@@ -162,6 +164,70 @@ fn progress(d: &mut Doc, data: &ProjectData, width: usize) {
         ));
     }
     d.line(fit(segs, width));
+}
+
+/// RELEASES: each release not shipped, its closed of all, a hot spot to the queue for that release.
+fn releases(d: &mut Doc, data: &ProjectData, width: usize) {
+    d.plain("RELEASES", style::bold());
+    if data.releases.is_empty() {
+        d.plain(" none set", style::dim());
+    }
+    for r in &data.releases {
+        let name = &r.name;
+        let total = r.closed + r.open;
+        let counts = [
+            ("ready", r.ready),
+            ("building", r.building),
+            ("owner", r.waiting_owner),
+            ("blocked", r.blocked),
+            ("held later", r.held_later),
+        ]
+        .iter()
+        .filter(|(_, n)| *n > 0)
+        .map(|(w, n)| format!("{w} {n}"))
+        .collect::<Vec<_>>()
+        .join("  ");
+        let segs = vec![
+            seg(" ", Style::default()),
+            spot(
+                format!("{name:<9}"),
+                Style::default(),
+                Target::List(Listing::Next(Box::new(Filter {
+                    release: Some(name.clone()),
+                    ..Filter::default()
+                }))),
+            ),
+            seg(
+                format!("{}  {} of {total} closed", bar(r.closed, total), r.closed),
+                Style::default(),
+            ),
+        ];
+        d.line(fit(segs, width));
+        if !counts.is_empty() {
+            d.plain(cut(&format!("   {counts}"), width), style::dim());
+        }
+    }
+}
+
+/// CHECKS: the count of each kind of problem `check` finds, a hot spot to the items it names.
+fn checks(d: &mut Doc, data: &ProjectData, width: usize) {
+    let problems = serde_json::Value::Array(data.problems.clone());
+    let counts = docket_core::check::counts(&problems);
+    d.plain("CHECKS", style::bold());
+    if counts.is_empty() {
+        d.plain(" clean", style::dim());
+    }
+    for (kind, n) in counts {
+        let segs = vec![
+            seg(" ", Style::default()),
+            spot(
+                docket_core::check::phrase(&kind, n),
+                style::alarm(),
+                Target::List(Listing::Problems(kind)),
+            ),
+        ];
+        d.line(fit(segs, width));
+    }
 }
 
 /// Opened and closed per day as two sparklines, oldest day first.
@@ -188,19 +254,6 @@ fn trend(days: &[(u64, u64)]) -> String {
         line(|d| d.0),
         line(|d| d.1)
     )
-}
-
-/// The pace of closes and how long the open work takes at it, when anything closed lately.
-fn pace(data: &ProjectData) -> String {
-    let Some(per_hour) = data.pace.per_hour() else {
-        return String::new();
-    };
-    let todo = data.status.open();
-    if todo == 0 {
-        return format!("closing {per_hour}/h");
-    }
-    let eta = i64::try_from(todo * 3600 / per_hour).unwrap_or(0);
-    format!("closing {per_hour}/h   clear in {}", duration(eta))
 }
 
 /// LEAD: who leads the project and when the claim was last renewed, or that it lapsed or is free.
@@ -296,7 +349,7 @@ fn yours(d: &mut Doc, board: &Board, width: usize) {
     rows.sort_by(|a, b| (&a.key, a.num).cmp(&(&b.key, b.num)));
     d.line(vec![spot(
         format!("YOURS  {}", rows.len()),
-        style::word("parked"),
+        style::word("waiting on owner"),
         Target::List(Listing::Route(Route::Todo)),
     )]);
     if rows.is_empty() {
@@ -387,7 +440,7 @@ fn main(board: &Board, data: &ProjectData, width: usize, all_moves: bool) -> Doc
 fn next(d: &mut Doc, board: &Board, rows: &[Row], width: usize) {
     if rows.is_empty() {
         d.plain(
-            "NEXT  nothing ready: what is parked or blocked holds the rest",
+            "NEXT  nothing ready: what is blocked or waits on the owner holds the rest",
             style::bold(),
         );
         return;

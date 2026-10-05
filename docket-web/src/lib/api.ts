@@ -1,6 +1,6 @@
 import type {
   Offers,
-  Context, Count, Deps, Derived, EventRow, Facts, Graph, LeadState, Machine, ProjectRow, Row, Shown, Status, Whoami,
+  Area, Count, Deps, Derived, EventRow, Facts, Graph, LeadState, Machine, Problem, ProjectRow, ReleaseCounts, Row, Shown, Status, Summary, Whoami,
 } from './types';
 
 const KEY = 'docket.key';
@@ -121,6 +121,7 @@ export const api = {
   projects: () => all<ProjectRow>('/projects', {}, '["slug","ASC"]'),
   counts: () => get<Count[]>('/counts'),
   status: (p: string) => get<Status>('/status', of(p)),
+  releases: (p: string) => get<{ releases: ReleaseCounts[] }>('/metrics', { project: p, scope: 'releases' }).then((b) => b.releases),
   next: (p: string, n = 100, filter: Params = {}) => get<Row[]>('/next', { project: p, n, ...filter }),
   list: (route: string, p: string, n?: number, filter: Params = {}) => get<Row[]>(`/${route}`, { project: p, n, ...filter }),
   derived: (p: string, n?: number, filter: Params = {}) => get<Derived[]>('/derived', { project: p, n, ...filter }),
@@ -128,9 +129,11 @@ export const api = {
   show: (p: string, id: string) => get<Shown>(`/show/${encodeURIComponent(id)}`, of(p)),
   offers: (p: string, id: string) => get<Offers>(`/offers/${encodeURIComponent(id)}`, of(p)),
   log: (p: string, id: string) => get<EventRow[]>(`/log/${encodeURIComponent(id)}`, of(p)),
-  context: (p: string, id: string) => get<Context>(`/context/${encodeURIComponent(id)}`, of(p)),
   deps: (p: string, id: string) => get<Deps>(`/deps/${encodeURIComponent(id)}`, of(p)),
+  summary: (p: string) => get<Summary>('/summary', of(p)),
+  check: (p: string) => get<Problem[]>('/check', of(p)),
   graph: (p: string) => get<Graph>('/graph', of(p)),
+  areas: (p: string) => get<Area[]>('/areas', of(p)),
   facts: (p: string) => get<Facts>('/facts', of(p)),
   machines: () => get<{ machines: Machine[] }>('/machines').then((m) => m.machines),
   lead: (p: string) => get<LeadState>('/lead', of(p)),

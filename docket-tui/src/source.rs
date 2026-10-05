@@ -1,10 +1,11 @@
 //! Where the screen reads from: the server through its routes, or fixed rows in a test.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use docket_client::{Api, Error};
 use docket_core::api::{LeadState, Machines};
 use docket_core::member::{Edge, Tie};
+use docket_core::metrics::ReleaseRow;
 use docket_core::release::Listed;
 use docket_core::rows::{Derived, EventRow, ProjectRow, Row, Shown, Status};
 use serde_json::Value;
@@ -15,7 +16,7 @@ use crate::filter::Filter;
 
 pub type Result<T> = std::result::Result<T, String>;
 
-/// The event kinds that move an item, which the moves and the pace read.
+/// The event kinds that move an item, which the moves read.
 pub const MOVE_KINDS: [&str; 13] = [
     "opened",
     "reopened",
@@ -80,6 +81,21 @@ pub trait Source: Sync {
     /// # Errors
     /// As `projects`.
     fn lead(&self, slug: &str) -> Result<LeadState>;
+    /// The owner-level agent settings, read through a project's facts route.
+    ///
+    /// # Errors
+    /// As `projects`.
+    fn owner_facts(&self, slug: &str) -> Result<BTreeMap<String, String>>;
+    /// One row per unshipped release, the current first.
+    ///
+    /// # Errors
+    /// As `projects`.
+    fn releases(&self, slug: &str) -> Result<Vec<ReleaseRow>>;
+    /// The integrity problems `check` finds, each with its `kind`.
+    ///
+    /// # Errors
+    /// As `projects`.
+    fn problems(&self, slug: &str) -> Result<Vec<Value>>;
     /// Every machine jobs run on, with its slots.
     ///
     /// # Errors
@@ -147,6 +163,18 @@ impl Source for Http {
         self.0.lead(slug).map_err(|e| e.to_string())
     }
 
+    fn owner_facts(&self, slug: &str) -> Result<BTreeMap<String, String>> {
+        Ok(self.0.facts(slug).map_err(|e| e.to_string())?.owner)
+    }
+
+    fn releases(&self, slug: &str) -> Result<Vec<ReleaseRow>> {
+        self.0.release_rows(slug).map_err(|e| e.to_string())
+    }
+
+    fn problems(&self, slug: &str) -> Result<Vec<Value>> {
+        self.0.check(slug).map_err(|e| e.to_string())
+    }
+
     fn machines(&self) -> Result<Machines> {
         self.0.machines().map_err(|e| e.to_string())
     }
@@ -159,8 +187,7 @@ impl Source for Http {
 }
 
 /// A project's board from the stored lists: its row, its items with their parents, every `origin`
-/// tie leaving them, and the `related` ties reaching or leaving a standing item, which make a
-/// concept's members.
+/// tie leaving them.
 fn board(api: &Api, slug: &str) -> docket_client::api::Result<Board> {
     let mut project = api
         .projects()?
@@ -169,16 +196,13 @@ fn board(api: &Api, slug: &str) -> docket_client::api::Result<Board> {
         .ok_or_else(|| docket_client::Error::Refused(404, format!("no project {slug}")))?;
     let rows = api.releases(slug, true)?;
     project.releases = Listed::new(rows.into_iter().map(|r| (r.id, r.release)).collect());
+    let areas = api.areas(slug)?;
+    project.areas = docket_core::area::Listed {
+        rows: areas.into_iter().map(|r| (r.id, r.area)).collect(),
+    };
     let items = api.items(slug)?;
     let rids: Vec<i64> = items.iter().map(|i| i.rid).collect();
-    let standing: Vec<i64> = items
-        .iter()
-        .filter(|i| project.kind(&i.key).is_standing())
-        .map(|i| i.rid)
-        .collect();
-    let mut links = api.links_from(&rids, "origin")?;
-    links.extend(api.links_from(&standing, "related")?);
-    links.extend(api.links_to(&standing, "related")?);
+    let links = api.links_from(&rids, "origin")?;
     let mut seen = HashSet::new();
     let ties = links
         .into_iter()

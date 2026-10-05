@@ -18,6 +18,7 @@ const SEED: &str = "INSERT INTO projects (slug, keys, created_at, updated_at) \
 async fn seeded() -> Scratch {
     let s = Scratch::new(2).await;
     s.seed(SEED).await;
+    s.seed(crate::tests::TYPES_BY_KEY).await;
     s
 }
 

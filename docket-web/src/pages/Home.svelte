@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api } from '../lib/api';
-  import { ASIDE, FLOW } from '../lib/flow';
+  import { ASIDE, FLOW, wordVar } from '../lib/flow';
   import { resource } from '../lib/live.svelte';
   import { href } from '../lib/route';
   import { session } from '../lib/session.svelte';
@@ -26,7 +26,7 @@
   const totals = $derived(
     (counts.data ?? []).reduce((a: { open: number; done: number }, c: Count) => ({ open: a.open + c.open, done: a.done + c.done }), { open: 0, done: 0 }),
   );
-  const parked = $derived([...(statuses.data?.values() ?? [])].reduce((a, s) => a + (s.by_word.parked ?? 0), 0));
+  const parked = $derived([...(statuses.data?.values() ?? [])].reduce((a, s) => a + (s.by_word['waiting on owner'] ?? 0), 0));
 </script>
 
 <div class="home">
@@ -35,7 +35,7 @@
     {#if counts.data}
       <p class="muted">
         {totals.open} open across {counts.data.length - quiet} projects, {totals.done} closed in all.
-        {#if parked}<span class="parked">{parked} parked on you.</span>{/if}
+        {#if parked}<span class="parked">{parked} waiting on you.</span>{/if}
       </p>
     {/if}
   </header>
@@ -48,7 +48,7 @@
         <th>Project</th>
         <th class="flowh">Open work by state</th>
         <th class="num">Open</th>
-        <th class="num">Parked</th>
+        <th class="num">Waiting</th>
         <th class="num">Done</th>
         <th>Last move</th>
       </tr>
@@ -63,13 +63,13 @@
             {#if s && open > 0}
               <a class="mini" href={href(c.slug)} aria-label="{c.slug}: {WORDS.map((w) => `${s.by_word[w] ?? 0} ${w}`).join(', ')}">
                 {#each WORDS as w (w)}
-                  {#if s.by_word[w]}<span style="flex-grow: {s.by_word[w]}; --c: var(--w-{w})" title="{s.by_word[w]} {w}"></span>{/if}
+                  {#if s.by_word[w]}<span style="flex-grow: {s.by_word[w]}; --c: {wordVar(w)}" title="{s.by_word[w]} {w}"></span>{/if}
                 {/each}
               </a>
             {/if}
           </td>
           <td class="num strong">{c.open}</td>
-          <td class="num" class:parked={(s?.by_word.parked ?? 0) > 0}>{s?.by_word.parked ?? ''}</td>
+          <td class="num" class:parked={(s?.by_word['waiting on owner'] ?? 0) > 0}>{s?.by_word['waiting on owner'] ?? ''}</td>
           <td class="num faint">{c.done}</td>
           <td class="faint when">{c.last_event ? ago(c.last_event) : 'never'}</td>
         </tr>
@@ -83,7 +83,7 @@
   {/if}
 
   <div class="legend">
-    {#each WORDS as w (w)}<span style="--c: var(--w-{w})"><i></i>{w}</span>{/each}
+    {#each WORDS as w (w)}<span style="--c: {wordVar(w)}"><i></i>{w}</span>{/each}
   </div>
 </div>
 
@@ -104,7 +104,7 @@
   }
 
   .parked {
-    color: var(--w-parked);
+    color: var(--w-waiting-on-owner);
     font-weight: 600;
   }
 

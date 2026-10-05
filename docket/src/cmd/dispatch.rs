@@ -17,7 +17,8 @@ use docket_core::machine::{Limit, Machine};
 
 use crate::ctx::Ctx;
 use crate::dispatch::{
-    Via, branch_for, choose, commit_change, git, limited_runners, nonce, role_of,
+    Via, branch_for, choose, commit_change, ended_in, git, gone, limited_runners, nonce,
+    push_to_machine, read_machines_now, role_for, runner_counts,
 };
 use crate::fail::{Fail, Result};
 use crate::job::{self, Change};
@@ -51,9 +52,16 @@ pub fn dispatch(ctx: &mut Ctx, ask: &Ask) -> Result<i32> {
             item["claim_host"].as_str().unwrap_or("?")
         )));
     }
-    let key = item["key"].as_str().unwrap_or_default();
-    let role = default_role(ctx, &slug, &item, key, ask.role)?;
-    let (model, m) = place(ctx, ask, &item, &role, &here)?;
+    let ready = ready_row(ctx, &id)?;
+    let role = role_for(ready.as_ref(), ask.role, &id).map_err(Fail::refused)?;
+    let (model, m) = place(
+        ctx,
+        ask,
+        &item,
+        &role,
+        &runner_counts(ready.as_ref()),
+        &here,
+    )?;
     let m = &m;
     let via = Via::of(m, &here);
     let checkout = via
@@ -96,7 +104,7 @@ pub fn dispatch(ctx: &mut Ctx, ask: &Ask) -> Result<i32> {
         },
     );
     if let Err(why) = started {
-        let _ = git(&repo, &["push", &url, &format!(":refs/heads/{branch}")]);
+        let _ = push_to_machine(&repo, &url, &format!(":refs/heads/{branch}"));
         give_back(
             ctx,
             common,
@@ -138,6 +146,7 @@ fn place(
     ask: &Ask,
     item: &Value,
     role: &str,
+    runs: &BTreeMap<String, usize>,
     here: &str,
 ) -> Result<(Model, Machine)> {
     let slug = ctx.project()?;
@@ -149,15 +158,15 @@ fn place(
         &facts,
         role,
         item["complexity"].as_str(),
+        runs,
         &limited_runners(&machines, &now),
     )?;
-    refuse_a_running_group(ctx, item, &machines, here, ask.force)?;
-    let (running, unread) = running(&machines, here);
+    refuse_a_running_group(ctx, item, ask.force)?;
+    let running = running(&live_claims(ctx, true)?);
     let m = pick(
         &machines,
         &Pick {
             running: &running,
-            unread: &unread,
             on: ask.on,
             runner: &model.runner,
             here,
@@ -182,8 +191,20 @@ fn give_back(ctx: &mut Ctx, common: Common, id: &str, note: String) -> Result<()
     Ok(())
 }
 
-/// The project's jobs on every machine, or every project's; with `wait`, read again until one of
-/// the jobs running at the start ends, or `timeout` seconds pass when it is not 0.
+/// How long a wait goes without a report before it reads the machines: `DOCKET_JOBS_FALLBACK`
+/// seconds, else five minutes.
+fn fallback() -> Duration {
+    let secs = std::env::var("DOCKET_JOBS_FALLBACK")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(300);
+    Duration::from_secs(secs)
+}
+
+/// The project's jobs on every machine, or every project's; with `wait`, until one of the jobs
+/// holding a claim at the start reports its end to the server, or `timeout` seconds pass when it is
+/// not 0. The server's change stream says when to look, `every` seconds being the longest between
+/// looks. A machine is read over ssh only when no report has come for a while.
 ///
 /// # Errors
 /// The server cannot be reached for the machines.
@@ -191,22 +212,21 @@ pub fn jobs(ctx: &mut Ctx, wait: bool, every: u64, timeout: u64, all: bool) -> R
     let slug = if all { None } else { Some(ctx.project()?) };
     let here = ctx.host()?;
     let machines = machines(ctx)?;
-    let mut rows = read_all(&machines, &here, slug.as_deref());
-    let live: BTreeSet<(String, String)> = running_of(&rows);
-    if wait && !live.is_empty() {
-        let until = (timeout > 0).then(|| Instant::now() + Duration::from_secs(timeout));
-        loop {
-            if until.is_some_and(|u| Instant::now() >= u) {
-                break;
-            }
-            std::thread::sleep(Duration::from_secs(every.max(1)));
-            rows = read_all(&machines, &here, slug.as_deref());
-            let now = running_of(&rows);
-            if !live.is_subset(&now) {
-                break;
-            }
+    if wait {
+        let held = live_claims(ctx, all)?;
+        if !held.is_empty() {
+            wait_for_an_end(
+                ctx,
+                &held,
+                &machines,
+                &here,
+                slug.as_deref(),
+                every,
+                timeout,
+            );
         }
     }
+    let rows = read_all(&machines, &here, slug.as_deref());
     record_limits(ctx, &rows);
     if ctx.json {
         println!("{}", Value::Array(rows));
@@ -218,6 +238,57 @@ pub fn jobs(ctx: &mut Ctx, wait: bool, every: u64, timeout: u64, all: bool) -> R
         }
     }
     Ok(0)
+}
+
+/// Block until one of `held` reports its end, the timeout passes, or a machine read after the
+/// fallback shows one of them no longer running.
+fn wait_for_an_end(
+    ctx: &mut Ctx,
+    held: &[Claim],
+    machines: &[Machine],
+    here: &str,
+    slug: Option<&str>,
+    every: u64,
+    timeout: u64,
+) {
+    let (tick, news) = std::sync::mpsc::channel::<()>();
+    if let Ok(stream) = ctx.api.changes() {
+        std::thread::spawn(move || {
+            for _ in stream {
+                if tick.send(()).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+    let waited: Vec<(String, String)> = held
+        .iter()
+        .map(|c| (c.machine.clone(), c.job.clone()))
+        .collect();
+    let every = Duration::from_secs(every.max(1));
+    let until = (timeout > 0).then(|| Instant::now() + Duration::from_secs(timeout));
+    let mut read_at = Instant::now();
+    loop {
+        if until.is_some_and(|u| Instant::now() >= u) {
+            return;
+        }
+        match news.recv_timeout(every) {
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => std::thread::sleep(every),
+            Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+        }
+        if held
+            .iter()
+            .any(|c| reported_end(ctx, &c.project, &c.id, &c.branch).is_some())
+        {
+            return;
+        }
+        if read_machines_now(read_at.elapsed(), fallback()) {
+            read_at = Instant::now();
+            if gone(&waited, &read_all(machines, here, slug)) {
+                return;
+            }
+        }
+    }
 }
 
 /// Bring a finished job's change to this machine and commit it here, on the job's branch, with the
@@ -300,7 +371,7 @@ pub fn collect(ctx: &mut Ctx, id: &str, discard: bool) -> Result<i32> {
         None
     };
     append_observations(ctx, &id, name, &row)?;
-    report_usage(ctx, &id, &row);
+    report_usage(ctx, &slug, &id, branch, &row);
     record_limits(ctx, &[with_machine(&row, on)]);
     let reference = format!("refs/heads/{branch}");
     let commits = if git(&repo, &["rev-parse", "--verify", "--quiet", &reference]).is_ok() {
@@ -322,29 +393,50 @@ pub fn collect(ctx: &mut Ctx, id: &str, discard: bool) -> Result<i32> {
     Ok(0)
 }
 
-/// The job's times, exit, tokens and reported cost posted to the item's open claim. A server that
-/// cannot take them is said on standard error: the change is collected all the same.
-fn report_usage(ctx: &mut Ctx, id: &str, row: &Value) {
+/// What a job's end posts to its claim: its times, exit, final report word, tokens and reported
+/// cost, from the job's row.
+#[must_use]
+pub fn report_request(common: Common, id: &str, row: &Value) -> JobReportRequest {
     let stamp = |k: &str| row[k].as_u64().map(clock::stamp);
+    JobReportRequest {
+        common,
+        id: id.to_string(),
+        start: stamp("started"),
+        end: stamp("ended"),
+        exit: row["exit"].as_i64().and_then(|e| i32::try_from(e).ok()),
+        tokens_in: row["tokens_in"].as_i64(),
+        tokens_out: row["tokens"].as_i64(),
+        cost_reported: row["cost"].as_f64(),
+        report: row["report"].as_str().map(str::to_string),
+    }
+}
+
+/// The job's end posted to the item's open claim when the job's own report did not get there: one
+/// writer for the fact, the job, and this only where it is missing. A server that cannot take it is
+/// said on standard error: the change is collected all the same.
+fn report_usage(ctx: &mut Ctx, slug: &str, id: &str, branch: &str, row: &Value) {
+    if reported_end(ctx, slug, id, branch).is_some() {
+        return;
+    }
     let sent = ctx.common(false).and_then(|common| {
-        let _: Value = ctx.api.post(
-            "job-report",
-            &JobReportRequest {
-                common,
-                id: id.to_string(),
-                start: stamp("started"),
-                end: stamp("ended"),
-                exit: row["exit"].as_i64().and_then(|e| i32::try_from(e).ok()),
-                tokens_in: row["tokens_in"].as_i64(),
-                tokens_out: row["tokens"].as_i64(),
-                cost_reported: row["cost"].as_f64(),
-            },
-        )?;
+        let _: Value = ctx
+            .api
+            .post("job-report", &report_request(common, id, row))?;
         Ok(())
     });
     if let Err(why) = sent {
         eprintln!("docket: the usage of {id}'s job was not recorded: {why}");
     }
+}
+
+/// The end a job reported to the server for the claim on `branch`: the data of its newest
+/// `job_reported` event that carries one. None when the server holds none, or cannot be read.
+fn reported_end(ctx: &mut Ctx, slug: &str, id: &str, branch: &str) -> Option<Value> {
+    let log: Value = ctx
+        .api
+        .get(&format!("/log/{id}"), &[("project", slug.to_string())])
+        .ok()?;
+    ended_in(&log, branch)
 }
 
 /// A job's row with the machine it ran on added, as `jobs` reads it.
@@ -553,10 +645,7 @@ fn start(
     base: &str,
     job: &Job,
 ) -> std::result::Result<String, String> {
-    git(
-        repo,
-        &["push", url, &format!("{base}:refs/heads/{}", job.branch)],
-    )?;
+    push_to_machine(repo, url, &format!("{base}:refs/heads/{}", job.branch))?;
     let mut args = strings(&[
         "-p", job.slug, "--branch", job.branch, "job", "run", "--id", job.id, "--runner",
     ]);
@@ -580,6 +669,7 @@ fn model(
     facts: &Facts,
     role: &str,
     complexity: Option<&str>,
+    runs: &BTreeMap<String, usize>,
     limited: &BTreeMap<String, String>,
 ) -> Result<Model> {
     if let (Some(runner), Some(model)) = (ask.runner, ask.model) {
@@ -595,13 +685,18 @@ fn model(
         _ => Role::Build,
     };
     let unavailable: Vec<&str> = limited.keys().map(String::as_str).collect();
-    let Some(mut m) = fact::model_without(
-        &facts.skills,
-        &facts.owner,
-        role_of,
-        complexity,
-        &unavailable,
-    ) else {
+    let chosen = if role_of == Role::Audit {
+        fact::audit_model(&facts.skills, &facts.owner, runs, &unavailable)
+    } else {
+        fact::model_without(
+            &facts.skills,
+            &facts.owner,
+            role_of,
+            complexity,
+            &unavailable,
+        )
+    };
+    let Some(mut m) = chosen else {
         if fact::model_for(&facts.skills, &facts.owner, role_of, complexity).is_some() {
             let resets: Vec<String> = limited
                 .iter()
@@ -644,7 +739,6 @@ fn machines(ctx: &mut Ctx) -> Result<Vec<Machine>> {
 /// What `pick` chooses by.
 struct Pick<'a> {
     running: &'a BTreeMap<String, usize>,
-    unread: &'a BTreeMap<String, String>,
     on: Option<&'a str>,
     runner: &'a str,
     here: &'a str,
@@ -656,7 +750,6 @@ struct Pick<'a> {
 fn pick<'a>(machines: &'a [Machine], by: &Pick) -> Result<&'a Machine> {
     let Pick {
         running,
-        unread,
         on,
         runner,
         here,
@@ -665,9 +758,8 @@ fn pick<'a>(machines: &'a [Machine], by: &Pick) -> Result<&'a Machine> {
     let Some(name) = on else {
         return choose(machines, running, runner, here, now).ok_or_else(|| {
             Fail::refused(format!(
-                "no machine has {runner} and a free slot: docket jobs shows what runs{}{}",
-                limit_note(machines, runner, now),
-                unread_note(unread)
+                "no machine has {runner} and a free slot: docket jobs shows what runs{}",
+                limit_note(machines, runner, now)
             ))
         });
     };
@@ -683,13 +775,6 @@ fn pick<'a>(machines: &'a [Machine], by: &Pick) -> Result<&'a Machine> {
         )));
     }
     if crate::dispatch::free(m, running) == 0 {
-        if let Some(why) = unread.get(name) {
-            return Err(Fail::refused(format!(
-                "{name} cannot be read: {}{}",
-                first_line(why),
-                update_hint(why)
-            )));
-        }
         return Err(Fail::refused(format!(
             "{name} runs {} jobs, its slots: docket jobs",
             m.slots
@@ -714,29 +799,62 @@ fn limit_note(machines: &[Machine], runner: &str, now: &str) -> String {
     out
 }
 
-/// The jobs running on each machine, every project's, and the reason for each machine that could
-/// not be read, which counts as full.
-fn running(
-    machines: &[Machine],
-    here: &str,
-) -> (BTreeMap<String, usize>, BTreeMap<String, String>) {
-    let mut counts = BTreeMap::new();
-    let mut unread = BTreeMap::new();
-    for m in machines {
-        match read(m, here, None) {
-            Ok(rows) => {
-                counts.insert(
-                    m.name.clone(),
-                    rows.iter().filter(|r| r["state"] == "running").count(),
-                );
-            }
-            Err(why) => {
-                counts.insert(m.name.clone(), usize::MAX);
-                unread.insert(m.name.clone(), why);
+/// A claim held by a job a lead started on a machine.
+struct Claim {
+    project: String,
+    id: String,
+    machine: String,
+    job: String,
+    branch: String,
+}
+
+/// The claims of jobs on the server, this project's or every project's. The server holds each one
+/// with its job and machine, so no machine is asked.
+fn claims(ctx: &mut Ctx, all: bool) -> Result<Vec<Claim>> {
+    let slugs = if all {
+        ctx.api.slugs()?
+    } else {
+        vec![ctx.project()?]
+    };
+    let mut out = Vec::new();
+    for slug in slugs {
+        let rows: Value = ctx.api.get("/wip", &[("project", slug.clone())])?;
+        for r in rows.as_array().into_iter().flatten() {
+            if let (Some(id), Some(machine), Some(job), Some(branch)) = (
+                r["id"].as_str(),
+                r["claim_on"].as_str(),
+                r["claim_job"].as_str(),
+                r["claim_branch"].as_str(),
+            ) {
+                out.push(Claim {
+                    project: slug.clone(),
+                    id: id.to_string(),
+                    machine: machine.to_string(),
+                    job: job.to_string(),
+                    branch: branch.to_string(),
+                });
             }
         }
     }
-    (counts, unread)
+    Ok(out)
+}
+
+/// The claims whose job has not reported its end.
+fn live_claims(ctx: &mut Ctx, all: bool) -> Result<Vec<Claim>> {
+    let all = claims(ctx, all)?;
+    Ok(all
+        .into_iter()
+        .filter(|c| reported_end(ctx, &c.project, &c.id, &c.branch).is_none())
+        .collect())
+}
+
+/// The jobs running on each machine, counted from their claims.
+fn running(claims: &[Claim]) -> BTreeMap<String, usize> {
+    let mut counts = BTreeMap::new();
+    for c in claims {
+        *counts.entry(c.machine.clone()).or_insert(0) += 1;
+    }
+    counts
 }
 
 fn first_line(why: &str) -> &str {
@@ -751,21 +869,6 @@ fn update_hint(why: &str) -> &'static str {
     } else {
         ""
     }
-}
-
-/// One line per machine that could not be read, to follow a refusal.
-fn unread_note(unread: &BTreeMap<String, String>) -> String {
-    use std::fmt::Write;
-    let mut out = String::new();
-    for (name, why) in unread {
-        let _ = write!(
-            out,
-            "\n{name} cannot be read: {}{}",
-            first_line(why),
-            update_hint(why)
-        );
-    }
-    out
 }
 
 /// One machine's jobs, each with the machine's name added.
@@ -803,13 +906,7 @@ fn read_all(machines: &[Machine], here: &str, slug: Option<&str>) -> Vec<Value> 
 }
 
 /// Refuse an item whose group has another member with a job running, naming that job.
-fn refuse_a_running_group(
-    ctx: &mut Ctx,
-    item: &Value,
-    machines: &[Machine],
-    here: &str,
-    force: bool,
-) -> Result<()> {
+fn refuse_a_running_group(ctx: &mut Ctx, item: &Value, force: bool) -> Result<()> {
     let Some(group) = item["group"].as_str().filter(|g| !g.is_empty() && !force) else {
         return Ok(());
     };
@@ -826,34 +923,14 @@ fn refuse_a_running_group(
         .filter_map(|r| r["id"].as_str())
         .filter(|m| *m != id)
         .collect();
-    let rows = read_all(machines, here, Some(&slug));
-    if let Some(job) = running_member(&rows, &others) {
+    let held = live_claims(ctx, false)?;
+    if let Some(job) = held.iter().find(|c| others.contains(c.id.as_str())) {
         return Err(Fail::refused(format!(
             "{id} is in group {group}, whose member {} runs as {} on {}: give the group to that job, or --force",
-            job["id"].as_str().unwrap_or("?"),
-            job["name"].as_str().unwrap_or("?"),
-            job["machine"].as_str().unwrap_or("?")
+            job.id, job.job, job.machine
         )));
     }
     Ok(())
-}
-
-/// The running job of one of `members`, if any.
-fn running_member<'a>(rows: &'a [Value], members: &BTreeSet<&str>) -> Option<&'a Value> {
-    rows.iter()
-        .find(|r| r["state"] == "running" && r["id"].as_str().is_some_and(|i| members.contains(i)))
-}
-
-fn running_of(rows: &[Value]) -> BTreeSet<(String, String)> {
-    rows.iter()
-        .filter(|r| r["state"] == "running")
-        .map(|r| {
-            (
-                r["machine"].as_str().unwrap_or_default().to_string(),
-                r["name"].as_str().unwrap_or_default().to_string(),
-            )
-        })
-        .collect()
 }
 
 /// One job as a line: machine, name, state, item, role, runner and model, minutes and report.
@@ -874,30 +951,15 @@ pub fn line(r: &Value) -> String {
     )
 }
 
-/// The role the lead named, or the one the item's kind and its children give.
-fn default_role(
-    ctx: &mut Ctx,
-    slug: &str,
-    item: &Value,
-    key: &str,
-    named: Option<&str>,
-) -> Result<String> {
-    if let Some(r) = named {
-        return Ok(r.to_string());
-    }
-    let children = item["children"].as_array().is_some_and(|o| !o.is_empty());
-    Ok(role_of(&kind_of(&ctx.project_row(slug)?, key), children).to_string())
-}
-
-fn kind_of(project: &Value, key: &str) -> String {
-    project["keys"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|k| k["key"] == key)
-        .and_then(|k| k["kind"].as_str())
-        .unwrap_or("work")
-        .to_string()
+/// The item's row in the ready queue, which carries the role it is taken in; none when the queue
+/// does not offer it.
+fn ready_row(ctx: &mut Ctx, id: &str) -> Result<Option<Value>> {
+    let slug = ctx.project()?;
+    let rows: Value = ctx.api.get(
+        "/next",
+        &[("project", slug), ("id", id.to_string()), ("n", "1".into())],
+    )?;
+    Ok(rows.as_array().and_then(|a| a.first()).cloned())
 }
 
 /// The repository this command runs in, the one the lead merges into.

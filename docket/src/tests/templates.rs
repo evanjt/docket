@@ -52,7 +52,8 @@ fn test_each_skill_names_itself_and_its_role() {
             "audit",
             "lead",
             "ask-questions",
-            "owner-queue"
+            "owner-queue",
+            "squash"
         ]
     );
     for s in &SKILLS {
@@ -64,7 +65,7 @@ fn test_each_skill_names_itself_and_its_role() {
             );
             let role = match s.name {
                 "lead" => "docket lead take".to_string(),
-                "ask-questions" | "owner-queue" => "docket skills".to_string(),
+                "ask-questions" | "owner-queue" | "squash" => "docket skills".to_string(),
                 _ => format!("--role {}", s.name),
             };
             assert!(text.contains(&role), "{}", s.name);
@@ -151,6 +152,8 @@ fn test_install_on_a_scratch_home_lists_and_writes_exactly_the_skills() {
             "new .agents/skills/ask-questions/SKILL.md",
             "new .claude/skills/owner-queue/SKILL.md",
             "new .agents/skills/owner-queue/SKILL.md",
+            "new .claude/skills/squash/SKILL.md",
+            "new .agents/skills/squash/SKILL.md",
         ]
     );
     apply(&steps).unwrap();
@@ -179,7 +182,7 @@ fn test_install_for_one_tool_leaves_the_other_alone() {
     write(&h.join(".agents/skills/start-queue/SKILL.md"), "old loop");
     let steps = skill_steps(h, &["claude"]);
     assert!(steps.iter().all(|s| s.path.starts_with(h.join(".claude"))));
-    assert_eq!(steps.len(), 6);
+    assert_eq!(steps.len(), 7);
 }
 
 #[test]
@@ -248,13 +251,16 @@ fn test_a_derived_answer_names_its_carrier_and_a_routine_choice_is_a_note() {
 }
 
 #[test]
-fn test_every_template_names_the_release_of_what_it_files() {
+fn test_the_release_triage_has_one_owner_and_no_copy() {
+    assert!(BLOCK.contains("names its release"));
+    assert!(BLOCK.contains("data loss"));
+    assert!(BLOCK.contains("A ticket under a plan takes its release"));
     for (name, text) in texts() {
-        if name.starts_with("lead/") {
+        if name == "docket-block.md" {
             continue;
         }
-        assert!(text.contains("--release"), "{name}");
-        assert!(text.contains("data loss"), "{name}");
+        assert!(!text.contains("names its release"), "{name}");
+        assert!(!text.contains("a feature or polish"), "{name}");
     }
 }
 

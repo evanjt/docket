@@ -79,7 +79,7 @@ fn test_mouse_click_on_a_count_opens_its_list() {
     let mut a = app();
     a.open(Target::Project("o/p".into()));
     let buf = draw(&mut a, 160, 40);
-    let at = find(&buf, "ready 2", 0, 160);
+    let at = find(&buf, "ready 1", 0, 160);
     click(&mut a, (at.0 + 6, at.1));
     assert_eq!(a.page.title(), "ready");
 }
@@ -183,6 +183,8 @@ fn test_mouse_click_in_the_lower_half_of_one_line_rows_keeps_the_window() {
             word: "ready".into(),
             title: "t".into(),
             note: String::new(),
+            area: String::new(),
+            release: String::new(),
         })
         .collect();
     b.sel = 0;
@@ -303,4 +305,29 @@ fn test_drawing_the_same_layout_again_keeps_its_generation() {
     let layout = a.map.layout;
     draw(&mut a, 160, 40);
     assert_eq!(a.map.layout, layout);
+}
+
+#[test]
+fn test_a_release_line_opens_the_queue_for_that_release() {
+    let mut a = app();
+    a.open(Target::Project("o/p".into()));
+    let at = find(&draw(&mut a, 160, 80), "4.2.0", 0, 44);
+    click(&mut a, at);
+    let Page::Browser(b) = &a.page else {
+        panic!("not a browser");
+    };
+    assert_eq!(b.listing.title(), "next release:4.2.0");
+}
+
+#[test]
+fn test_a_check_line_opens_the_items_with_that_problem() {
+    let mut a = app();
+    a.open(Target::Project("o/p".into()));
+    let at = find(&draw(&mut a, 160, 80), "1 cycle", 0, 44);
+    click(&mut a, at);
+    let Page::Browser(b) = &a.page else {
+        panic!("not a browser");
+    };
+    let ids: Vec<&str> = b.entries.iter().map(|e| e.id.as_str()).collect();
+    assert_eq!(ids, ["B1"]);
 }

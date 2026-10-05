@@ -41,6 +41,9 @@ pub struct Model {
     pub tokens_in: Option<i64>,
     pub tokens_out: Option<i64>,
     pub cost_reported: Option<f64>,
+    pub job_started_at: Option<String>,
+    pub job_ended_at: Option<String>,
+    pub job_exit: Option<i32>,
     #[crudcrate(filterable)]
     pub need: Option<String>,
 }

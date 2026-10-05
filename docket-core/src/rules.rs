@@ -1,13 +1,11 @@
 //! The verbs that move an item. Each takes the row as stored and the caller's context, and returns
 //! the columns to set or the refusal the caller reads.
 
-use crate::item::{Ctx, Field, Item, KeySpec, Project, Refused};
-use crate::word::{Kind, PRIORITIES};
+use crate::item::{Ctx, Field, Item, Refused};
+use crate::word::{ItemType, Kind, PRIORITIES};
 
 pub const COMPLEXITIES: [&str; 3] = ["high", "medium", "low"];
 pub const DERIVED: &str = "Derived from ";
-/// The wait a plan holds while anything under it is still open; the words are stored on the wait.
-pub const GATE: &str = "everything it opened is closed";
 
 /// Every column a claim sets, cleared together.
 #[must_use]
@@ -35,40 +33,14 @@ fn chars(text: &str, n: usize) -> String {
     text.chars().take(n).collect()
 }
 
-/// The spec of one of a project's keys.
-///
-/// # Errors
-/// Refused when the project has no such key.
-pub fn key_spec<'a>(project: &'a Project, key: &str) -> Result<&'a KeySpec, Refused> {
-    project.keys.iter().find(|s| s.key == key).ok_or_else(|| {
-        let keys: Vec<&str> = project.keys.iter().map(|s| s.key.as_str()).collect();
-        Refused(format!(
-            "{} has no key {key}; its keys are {}",
-            project.slug,
-            keys.join(", ")
-        ))
-    })
-}
-
-/// # Errors
-/// Refused when the project has no such key.
-pub fn kind_of(project: &Project, key: &str) -> Result<Kind, Refused> {
-    Ok(key_spec(project, key)?.kind)
-}
-
-/// The turn a new item under the key opens on.
-///
-/// # Errors
-/// Refused when the project has no such key.
-pub fn default_turn(project: &Project, key: &str) -> Result<String, Refused> {
-    let spec = key_spec(project, key)?;
-    Ok(spec.turn.clone().unwrap_or_else(|| {
-        if spec.kind == Kind::Decision {
-            "user".to_string()
-        } else {
-            "agent".to_string()
-        }
-    }))
+/// The turn a new item of the type opens on.
+#[must_use]
+pub fn default_turn(item_type: ItemType) -> &'static str {
+    if item_type == ItemType::Question {
+        "user"
+    } else {
+        "agent"
+    }
 }
 
 /// Whether the caller may act on a claimed item: same branch, or force.
@@ -182,16 +154,41 @@ pub fn release(row: &Item, ctx: &Ctx) -> Result<Vec<Field>, Refused> {
     Ok(unclaimed())
 }
 
+/// The refusal for a plan with work still open under it, naming up to ten of it, then what follows.
+#[must_use]
+pub fn open_under_plan(row: &Item, open_members: &[String], then: &str) -> Refused {
+    let shown: Vec<&str> = open_members.iter().take(10).map(String::as_str).collect();
+    let more = if open_members.len() > 10 { " ..." } else { "" };
+    Refused(format!(
+        "{} has work under it that is still open: {}{more}. {then}",
+        row.id,
+        shown.join(", ")
+    ))
+}
+
+/// A plan closes once nothing under it is open, or while its audit holds it: the gaps that audit
+/// files are worked as tickets after the plan closes. `open_members` are the ids of the open items
+/// under a plan, any depth, and are empty for any other kind.
+///
 /// # Errors
-/// Refused when the item is not open, held elsewhere, an undecided question, or given no resolution.
+/// Refused when the item is not open, held elsewhere, an undecided question, given no resolution, or
+/// a plan nobody holds with work under it still open.
 pub fn close(
     row: &Item,
     ctx: &Ctx,
     resolution: Option<&str>,
     kind: Kind,
+    open_members: &[String],
 ) -> Result<Vec<Field>, Refused> {
     require_open(row, "close")?;
     require_hold(row, ctx, "close")?;
+    if row.claim_branch.is_none() && !open_members.is_empty() {
+        return Err(open_under_plan(
+            row,
+            open_members,
+            "It closes only when nothing under it is open; unclaim it and it comes back when they close.",
+        ));
+    }
     if kind == Kind::Decision && row.decision.is_none() {
         return Err(Refused(format!(
             "{} is a decision and has none yet. answer it first, or drop it if it no longer needs one.",
@@ -214,43 +211,11 @@ pub fn close(
     Ok(out)
 }
 
-/// Whether a plan's audit is due or under way: its last gate event, `(kind, note)` oldest first, is the
-/// resume that came when everything it opened closed.
-#[must_use]
-pub fn came_due<'a>(gate_events: impl IntoIterator<Item = (&'a str, &'a str)>) -> bool {
-    gate_events
-        .into_iter()
-        .filter(|(kind, note)| {
-            (*kind == "resumed" && *note == GATE)
-                || (*kind == "waited" && note.starts_with(&format!("until: {GATE}")))
-        })
-        .last()
-        .is_some_and(|(kind, _)| kind == "resumed")
-}
-
-/// A plan closes once its audit came due, the gaps that audit filed still open: one round, and the
-/// gaps are worked as tickets. Before that, anything under it that is open holds it.
-///
-/// # Errors
-/// Refused when the plan never came due and opened work that is still open.
-pub fn close_plan(row: &Item, open_under: &[String], due: bool) -> Result<(), Refused> {
-    if due || open_under.is_empty() {
-        return Ok(());
-    }
-    let shown: Vec<&str> = open_under.iter().take(10).map(String::as_str).collect();
-    let more = if open_under.len() > 10 { " ..." } else { "" };
-    Err(Refused(format!(
-        "{} has work under it that is still open: {}{more}. It closes only when nothing under it is open; unclaim it and it comes back when they close.",
-        row.id,
-        shown.join(", ")
-    )))
-}
-
-/// The tags with one tier in place of any other; normal carries no tag.
+/// The priority column set to one tier; the labels stay as they are.
 ///
 /// # Errors
 /// Refused when the tier is not one of the four.
-pub fn prioritise(tags: &[String], tier: &str) -> Result<Vec<Field>, Refused> {
+pub fn prioritise(tier: &str) -> Result<Vec<Field>, Refused> {
     if !PRIORITIES.contains(&tier) {
         return Err(Refused(format!(
             "priority is one of {}, not {}",
@@ -258,17 +223,7 @@ pub fn prioritise(tags: &[String], tier: &str) -> Result<Vec<Field>, Refused> {
             crate::text::py_repr(tier)
         )));
     }
-    let mut out: Vec<String> = tags
-        .iter()
-        .filter(|t| !PRIORITIES.contains(&t.as_str()))
-        .cloned()
-        .collect();
-    if tier != "normal" {
-        out.push(tier.to_string());
-    }
-    out.sort();
-    out.dedup();
-    Ok(vec![Field::Tags(out)])
+    Ok(vec![Field::Priority(tier.to_string())])
 }
 
 /// # Errors
@@ -328,32 +283,12 @@ pub fn depend(row: &Item, ctx: &Ctx, on_rid: i64) -> Result<(), Refused> {
     Ok(())
 }
 
-/// A plan's gate opens by hand only once nothing under it is open, or by force: `open_members` are
-/// the ids of the open items under it.
-///
 /// # Errors
-/// Refused when the item is not open or not waiting, or is a gated plan with open members and force
-/// is not given.
-pub fn resume(row: &Item, open_members: &[String], force: bool) -> Result<Vec<Field>, Refused> {
+/// Refused when the item is not open or not waiting.
+pub fn resume(row: &Item) -> Result<Vec<Field>, Refused> {
     require_open(row, "resume")?;
     if row.wait_on.is_none() {
         return Err(Refused(format!("{} is not waiting.", row.id)));
-    }
-    let gated =
-        row.wait_on.as_deref() == Some("condition") && row.wait_ref.as_deref() == Some(GATE);
-    if gated && !open_members.is_empty() && !force {
-        let shown: Vec<&str> = open_members.iter().take(10).map(String::as_str).collect();
-        let more = if open_members.len() > 10 { " ..." } else { "" };
-        let (verb, them) = if open_members.len() == 1 {
-            ("is", "it")
-        } else {
-            ("are", "them")
-        };
-        return Err(Refused(format!(
-            "{} waits until {GATE}, and {}{more} {verb} open. Close {them} first, or pass --force.",
-            row.id,
-            shown.join(", ")
-        )));
     }
     let mut out = unwaiting();
     out.push(Field::Turn(Some("agent".to_string())));
@@ -487,22 +422,15 @@ pub fn rate(level: &str) -> Result<Vec<Field>, Refused> {
     Ok(vec![Field::Complexity(Some(level.to_string()))])
 }
 
-/// The tags `--set tags=` gives: the list as written, keeping the priority unless it names one.
+/// The tags `--set tags=` gives: the list as written.
 #[must_use]
-pub fn set_tags(tags: &[String], value: &str) -> Vec<String> {
+pub fn set_tags(value: &str) -> Vec<String> {
     let mut new: Vec<String> = value
         .split(',')
         .map(str::trim)
         .filter(|t| !t.is_empty())
         .map(str::to_string)
         .collect();
-    if !new.iter().any(|t| PRIORITIES.contains(&t.as_str())) {
-        new.extend(
-            tags.iter()
-                .filter(|t| PRIORITIES.contains(&t.as_str()))
-                .cloned(),
-        );
-    }
     new.sort();
     new.dedup();
     new
@@ -511,22 +439,6 @@ pub fn set_tags(tags: &[String], value: &str) -> Vec<String> {
 /// An item the loop parked or sent back, given a fresh start: back to the agents when it is the owner's
 /// turn, else only recorded.
 ///
-/// # Errors
-/// Refused when the item is not open, is held, or is the owner's turn with no note.
-pub fn retry(row: &Item, note: Option<&str>) -> Result<Vec<Field>, Refused> {
-    require_open(row, "retry")?;
-    if let Some(branch) = &row.claim_branch {
-        return Err(Refused(format!(
-            "{} is held by {branch}: docket kill {} first if its job is stuck.",
-            row.id, row.id
-        )));
-    }
-    if row.turn.as_deref() == Some("user") {
-        return reply(row, note);
-    }
-    Ok(Vec::new())
-}
-
 #[cfg(test)]
 #[path = "tests/rules.rs"]
 mod tests;

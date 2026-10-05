@@ -68,8 +68,9 @@ INSERT INTO items (rid, project, key, num, title, state, resolution, tags, rank,
 INSERT INTO items (rid, project, key, num, title, state, turn, decision, decided_at, tags, opened_at, updated_at) VALUES
   (9, 'o/p', 'Q', 2, 'Decided lantern choice', 'open', 'agent', 'Derived from CID1: keep it', 'd09', '[]', 'o09', 'u09');
 INSERT INTO items (rid, project, key, num, title, state, turn, wait_on, wait_item, wait_ref, wait_since, tags, opened_at, updated_at) VALUES
-  (10, 'o/p', 'T', 6, 'Waiting', 'open', 'agent', 'item', 1, 'T1', 'w10', '[]', 'o10', 'u10'),
-  (16, 'o/p', 'A', 1, 'Plan', 'open', 'agent', 'condition', NULL, 'all closed', 'w16', '[]', 'o16', 'u16');
+  (10, 'o/p', 'T', 6, 'Waiting', 'open', 'agent', 'item', 1, 'T1', 'w10', '[]', 'o10', 'u10');
+INSERT INTO items (rid, project, key, num, title, state, turn, tags, opened_at, updated_at) VALUES
+  (16, 'o/p', 'A', 1, 'Plan', 'open', 'agent', '[]', 'o16', 'u16');
 INSERT INTO items (rid, project, key, num, title, state, turn, claim_branch, claim_host, claim_since, tags, opened_at, updated_at) VALUES
   (11, 'o/p', 'T', 7, 'Claimed', 'open', 'agent', 'b', 'h', 'c11', '[]', 'o11', 'u11');
 UPDATE items SET parent_rid=4 WHERE rid=5;
@@ -88,11 +89,23 @@ INSERT INTO search (rid, id, title, body, files) VALUES
   (302, 'T1', 'Opened and done', 'lamp', ''),
   (303, 'T2', 'Opened and dropped', 'lamp', ''),
   (304, 'T3', 'Related and done', 'lamp', '');
+INSERT INTO projects (slug, keys, themes, skills, created_at, updated_at) VALUES ('o/a',
+  '[{"key":"T","kind":"work"},{"key":"A","kind":"audit"}]', '[]', '{}', 'c', 'u');
+INSERT INTO areas (id, project, name, description, position, priority) VALUES
+  (1, 'o/a', 'lanterns', 'Paper lights', 1, NULL), (2, 'o/a', 'kites', 'Things that fly', 2, 'high');
+INSERT INTO items (rid, project, key, num, title, state, resolution, turn, tags, body, opened_at, updated_at, area_id) VALUES
+  (500, 'o/a', 'T', 1, 'Fold the tail', 'open', NULL, 'agent', '[]', '', 'o50', 'u50', 2),
+  (501, 'o/a', 'T', 2, 'Tie the string', 'done', 'ok', NULL, '[]', '', 'o51', 'u51', 2),
+  (502, 'o/a', 'T', 3, 'Trim the wick', 'open', NULL, 'agent', '[]', '', 'o52', 'u52', 1);
+UPDATE items SET priority='high' WHERE rid IN (2, 130);
+UPDATE items SET priority='critical' WHERE rid=6;
+UPDATE items SET priority='low' WHERE rid=132;
 "#;
 
 async fn seeded() -> (Router, Scratch) {
     let s = Scratch::new(2).await;
     s.seed(SEED).await;
+    s.seed(crate::tests::TYPES_BY_KEY).await;
     (app(&s.db, Keys::parse("devbox agent secret").unwrap()), s)
 }
 
@@ -131,9 +144,9 @@ async fn ids(path: &str) -> Vec<String> {
 async fn test_next_orders_by_priority_then_age_alone() {
     assert_eq!(
         ids("/next").await,
-        ["T2", "T1", "T3", "T5", "Q2", "T8", "T9"]
+        ["T2", "PK1", "Q2", "T1", "T3", "T5", "T8", "T9", "CON1"]
     );
-    assert_eq!(ids("/next?n=2").await, ["T2", "T1"]);
+    assert_eq!(ids("/next?n=2").await, ["T2", "PK1"]);
     let (_, rows) = get("/next?n=1").await;
     assert_eq!(rows[0]["priority"], "high");
     assert_eq!(rows[0]["word"], "ready");
@@ -151,11 +164,30 @@ async fn test_next_orders_by_release_then_priority() {
 async fn test_next_by_role() {
     assert_eq!(
         ids("/next?role=work").await,
-        ["T2", "T1", "T3", "T5", "T8", "T9"]
+        ["T2", "T1", "T3", "T5", "T8", "T9", "CON1"]
     );
     assert_eq!(ids("/next?role=plan").await, ["Q2"]);
-    assert!(ids("/next?role=audit").await.is_empty());
-    assert_eq!(ids("/next?role=plan,work").await[0], "Q2");
+    assert_eq!(ids("/next?role=audit").await, ["PK1"]);
+    assert_eq!(ids("/next?role=plan,work").await[0], "T2");
+}
+
+#[tokio::test]
+async fn test_next_rows_carry_their_role_and_what_they_unblock() {
+    let (_, rows) = get("/next").await;
+    let role = |id: &str| {
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == id)
+            .unwrap()["role"]
+            .clone()
+    };
+    assert_eq!(role("T2"), "build");
+    assert_eq!(role("Q2"), "plan");
+    assert_eq!(rows[0]["unblocks"], 0);
+    let (_, one) = get("/next?id=Q2").await;
+    assert_eq!(one.as_array().unwrap().len(), 1);
+    assert_eq!(one[0]["id"], "Q2");
 }
 
 #[tokio::test]
@@ -165,11 +197,10 @@ async fn test_next_narrows_by_key_priority_under_theme_and_complexity() {
         ids("/next?key=t").await,
         ["T2", "T1", "T3", "T5", "T8", "T9"]
     );
-    assert!(ids("/next?key=CON").await.is_empty());
-    assert!(ids("/next?key=PK").await.is_empty());
+    assert_eq!(ids("/next?key=CON").await, ["CON1"]);
+    assert_eq!(ids("/next?key=PK").await, ["PK1"]);
     assert_eq!(ids("/next?priority=high").await, ["T2"]);
     assert_eq!(ids("/next?under=A1").await, ["T2", "T3"]);
-    assert_eq!(ids("/next?under=con1").await, ["T1"]);
     assert_eq!(ids("/next?complexity=low").await, ["T3"]);
 }
 
@@ -194,7 +225,7 @@ async fn test_owner_lists_todo_questions_research() {
     assert_eq!(ids("/research").await, ["Q2"]);
     let (_, todo) = get("/todo").await;
     assert_eq!(todo[0]["owner_group"], "derived");
-    assert_eq!(todo[1]["word"], "parked");
+    assert_eq!(todo[1]["word"], "waiting on owner");
     assert_eq!(todo[1]["owner_group"], "question");
     assert_eq!(todo[1]["group"], Value::Null);
 }
@@ -232,13 +263,12 @@ async fn test_waiting_rows_carry_the_word_and_title_of_an_item_target() {
     let target = &held.unwrap()["wait_target"];
     assert_eq!(target["word"], "ready");
     assert_eq!(target["title"], "Plain fix");
-    let condition = rows.as_array().unwrap().iter().find(|r| r["id"] == "A1");
-    assert_eq!(condition.unwrap()["wait_target"], Value::Null);
+    assert!(rows.as_array().unwrap().iter().all(|r| r["id"] != "A1"));
 }
 
 #[tokio::test]
 async fn test_state_lists_waiting_wip_done_dropped_groups() {
-    assert_eq!(ids("/waiting").await, ["A1", "T6"]);
+    assert_eq!(ids("/waiting").await, ["T6"]);
     assert_eq!(ids("/waiting?on=item").await, ["T6"]);
     assert_eq!(get("/waiting?on=x").await.0, StatusCode::BAD_REQUEST);
     assert_eq!(ids("/wip").await, ["T7"]);
@@ -249,7 +279,7 @@ async fn test_state_lists_waiting_wip_done_dropped_groups() {
     assert_eq!(ids("/groups").await, ["T11", "T10"]);
     assert_eq!(ids("/groups?name=none").await, Vec::<String>::new());
     let (_, wip) = get("/wip").await;
-    assert_eq!(wip[0]["word"], "building");
+    assert_eq!(wip[0]["word"], "in progress");
 }
 
 #[tokio::test]
@@ -268,12 +298,11 @@ async fn test_done_and_dropped_filter_by_release_before_the_page_is_cut() {
 }
 
 #[tokio::test]
-async fn test_lists_under_a_plan_hold_what_it_opened_and_not_what_its_concept_relates() {
+async fn test_lists_under_a_plan_hold_what_it_opened() {
     let under = |route: &str, id: &str| format!("/{route}?project=o/s&under={id}");
     assert_eq!(ids(&under("done", "A1")).await, ["T1"]);
     assert_eq!(ids(&under("dropped", "A1")).await, ["T2"]);
     assert_eq!(ids(&under("waiting", "A1")).await, ["T5"]);
-    assert_eq!(ids(&under("done", "CON1")).await, ["T3", "T1"]);
     assert_eq!(ids("/done?project=o/s").await, ["T3", "T1"]);
     assert_eq!(get(&under("done", "T99")).await.0, StatusCode::NOT_FOUND);
 }
@@ -308,14 +337,14 @@ async fn test_status_counts_tickets_in_total_and_every_key() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["project"], "o/p");
     assert_eq!(body["host"], "devbox");
-    assert_eq!(body["total"], 15);
+    assert_eq!(body["total"], 17);
     assert_eq!(
         body["by_word"],
-        json!({"ready": 7, "done": 2, "parked": 1, "blocked": 2, "building": 1,
-               "dropped": 1, "standing": 1})
+        json!({"ready": 8, "done": 2, "waiting on owner": 1, "blocked": 1, "building": 2,
+               "in progress": 1, "dropped": 1, "audit due": 1})
     );
-    assert_eq!(body["by_key"]["PK"], json!({"ready": 1, "building": 1}));
-    assert_eq!(body["by_key"]["CON"], json!({"standing": 1}));
+    assert_eq!(body["by_key"]["PK"], json!({"audit due": 1, "building": 1}));
+    assert_eq!(body["by_key"]["CON"], json!({"ready": 1}));
 }
 
 #[tokio::test]
@@ -415,4 +444,126 @@ async fn test_search_finds_each_part_of_a_path_a_hyphenated_word_and_text_in_bra
             .collect();
         assert!(ids.contains(&"T30"), "{q}: {found}");
     }
+}
+
+const METRICS_SEED: &str = r#"
+INSERT INTO projects (slug, keys, themes, skills, created_at, updated_at) VALUES ('o/m',
+  '[{"key":"T","kind":"work"},{"key":"A","kind":"audit"}]', '[]', '{"prices":"opus=10:20"}', 'c', 'u');
+INSERT INTO releases (id, project, name, position, target_date) VALUES
+  (10, 'o/m', '1.0', 0, '2026-12-01'), (11, 'o/m', '1.1', 1, NULL);
+INSERT INTO items (rid, project, key, num, title, state, turn, release_id, resolution, tags, body, opened_at, updated_at) VALUES
+  (400, 'o/m', 'A', 1, 'Plan', 'open', 'agent', 10, NULL, '[]', '', '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z'),
+  (401, 'o/m', 'T', 1, 'Shipped', 'done', NULL, 10, 'ok', '[]', '', '2020-01-01T00:00:00Z', '2020-01-03T00:00:00Z'),
+  (402, 'o/m', 'T', 2, 'Waiting for work', 'open', 'agent', 10, NULL, '[]', '', '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z'),
+  (403, 'o/m', 'T', 3, 'Later', 'open', 'agent', 11, NULL, '[]', '', '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z');
+UPDATE items SET parent_rid=400 WHERE rid IN (401, 402);
+INSERT INTO events (uid, project, rid, at, host, kind) VALUES
+  ('m1', 'o/m', 401, '2020-01-03T00:00:00Z', 'devbox', 'closed');
+INSERT INTO assignments (rid, assignee, kind, started_at, ended_at, outcome, host, runner, model, tokens_in, tokens_out, cost_reported) VALUES
+  (401, 'agent', 'claim', '2020-01-02T00:00:00Z', '2020-01-02T01:00:00Z', 'landed', 'devbox', 'claude', 'opus', 100, 50, 1.5);
+"#;
+
+async fn metrics_of(query: &str) -> (StatusCode, Value) {
+    let s = Scratch::new(2).await;
+    s.seed(METRICS_SEED).await;
+    s.seed(crate::tests::TYPES_BY_KEY).await;
+    let app = app(&s.db, Keys::parse("devbox agent secret").unwrap());
+    let req = Request::builder()
+        .uri(format!("/metrics?project=o/m&{query}"))
+        .header(AUTHORIZATION, "Bearer secret")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+#[tokio::test]
+async fn test_metrics_of_a_release_counts_its_items_and_forecasts_from_the_burn() {
+    let (status, body) = metrics_of("scope=release&release=1.0").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["progress"]["done"], 1);
+    assert_eq!(body["progress"]["total"], 3);
+    assert_eq!(body["progress"]["open"], json!({"building": 1, "ready": 1}));
+    assert_eq!(body["lead_time"]["median"], 2 * 86_400);
+    assert_eq!(body["cycle_time"]["median"], 86_400);
+    assert_eq!(body["time_spent"]["agent"], 3600);
+    assert_eq!(body["cost"]["tokens_in"], 100);
+    assert_eq!(body["cost"]["cost_reported"], 1.5);
+    assert!((body["cost"]["money"].as_f64().unwrap() - 0.002).abs() < 1e-9);
+    assert_eq!(body["throughput"].as_array().unwrap().len(), 28);
+    let forecast = &body["forecast"];
+    assert_eq!(forecast["open"], 2);
+    assert_eq!(forecast["converging"], false);
+    assert_eq!(forecast["target"], "2026-12-01");
+    assert_eq!(forecast["late"], true);
+}
+
+#[tokio::test]
+async fn test_metrics_of_a_plan_reads_what_it_holds_and_refuses_what_is_not_offered() {
+    let (status, body) = metrics_of("scope=plan&plan=A1").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["progress"]["total"], 2);
+    assert!(body.get("forecast").is_none());
+    assert_eq!(metrics_of("scope=plan").await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(metrics_of("scope=sprint").await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        metrics_of("scope=plan&plan=T99").await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(metrics_of("release=9.9").await.0, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn test_metrics_of_the_releases_gives_one_row_each_with_what_a_later_release_holds() {
+    let s = Scratch::new(2).await;
+    s.seed(METRICS_SEED).await;
+    s.seed(crate::tests::TYPES_BY_KEY).await;
+    s.seed("INSERT INTO dependencies (rid, on_rid, created_at) VALUES (402, 403, 'c')")
+        .await;
+    let app = app(&s.db, Keys::parse("devbox agent secret").unwrap());
+    let req = Request::builder()
+        .uri("/metrics?project=o/m&scope=releases")
+        .header(AUTHORIZATION, "Bearer secret")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    let rows = body["releases"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{body}");
+    assert_eq!(rows[0]["name"], "1.0");
+    assert_eq!(rows[0]["closed"], 1);
+    assert_eq!(rows[0]["open"], 2);
+    assert_eq!(rows[0]["held_later"], 1);
+    assert_eq!(rows[0]["pace"], rows[0]["forecast"]["burn"]);
+    assert_eq!(rows[1]["name"], "1.1");
+    assert_eq!(rows[1]["held_later"], 0);
+}
+
+#[tokio::test]
+async fn test_next_and_audit_narrow_to_one_area_ignoring_case() {
+    assert_eq!(ids("/next?project=o/a&area=Kites").await, ["T1"]);
+    let (status, body) = get("/audit?project=o/a&area=kites").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["area"]["name"], "kites");
+    assert_eq!(body["area"]["description"], "Things that fly");
+    assert_eq!(body["area"]["priority"], "high");
+    let rows: Vec<&str> = body["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(rows, ["T2", "T1"]);
+    let (_, item) = get("/audit?project=o/a&id=T3").await;
+    assert_eq!(item["area"]["name"], "lanterns");
+    assert_eq!(item["area"]["description"], "Paper lights");
+    let (status, _) = get("/audit?project=o/a&area=boats").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }

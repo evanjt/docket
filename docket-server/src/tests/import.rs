@@ -115,7 +115,9 @@ async fn test_import_copies_every_row_with_its_keys() {
     let app = app(&s.db, Keys::parse("box owner k").unwrap());
     let shown = call(&app, Method::GET, "/show/T1?project=o/p", None).await;
     assert_eq!(shown["wait_ref"], "T2");
-    assert_eq!(shown["tags"], json!(["high"]));
+    assert_eq!(shown["tags"], json!([]));
+    assert_eq!(shown["priority"], "high");
+    assert_eq!(shown["type"], "task");
     assert_eq!(
         shown["parent"], "PK1",
         "an opened link to a package becomes the parent"
@@ -142,8 +144,9 @@ async fn test_import_builds_search_and_moves_each_key_past_the_copy() {
     let deps = call(&app, Method::GET, "/deps/T1?project=o/p", None).await;
     assert_eq!(deps["waits_on"][0]["id"], "T2");
 
-    let body =
-        json!({"project": "o/p", "key": "T", "title": "After the copy", "body": "`src/b.rs:1`"});
+    s.seed("INSERT INTO areas (project, name, description, position, priority) VALUES ('o/p', 'general', '', 1, NULL)")
+        .await;
+    let body = json!({"project": "o/p", "key": "T", "title": "After the copy", "area": "general", "body": "`src/b.rs:1`"});
     let opened = call(&app, Method::POST, "/do/new", Some(body)).await;
     assert_eq!(opened["item"]["id"], "T4");
     let page = call(&app, Method::GET, "/dump?since=10", None).await;

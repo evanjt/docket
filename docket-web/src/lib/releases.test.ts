@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { holdsOf, releaseList, releaseOf, releaseRow, releaseRows } from './releases';
-import type { GraphNode } from './types';
-
-const node = (id: string, release: string | null, word: string, state = 'open', kind = 'work'): GraphNode =>
-  ({ id, key: 'T', kind, state, theme: null, release, title: id, word }) as GraphNode;
+import { checkByRelease, checkCounts, checkIds, forecastLine, holdsOf, inversionsOf, staleClaims, releaseList, releaseOf, releaseRow, releaseTally } from './releases';
+import type { Problem, ReleaseCounts } from './types';
 
 describe('releaseList', () => {
   it('reads the releases the server lists in order and nothing when there are none', () => {
@@ -25,24 +22,33 @@ describe('releaseOf', () => {
   });
 });
 
-describe('releaseRows', () => {
-  it('counts tickets per release, done, live and open words, leaving out plans and dropped tickets', () => {
-    const rows = releaseRows(
-      [
-        node('T1', '1.0', 'ready'),
-        node('T2', '1.0', 'building'),
-        node('T6', null, 'ready'),
-        node('T3', '1.0', 'done', 'done'),
-        node('T4', '1.1', 'blocked'),
-        node('T5', '1.1', 'dropped', 'dropped'),
-        node('A1', '1.1', 'building', 'open', 'audit'),
-      ],
-      ['1.0', '1.1'],
-    );
-    expect(rows).toEqual([
-      { name: '1.0', current: true, done: 1, total: 3, live: 1, words: { ready: 1, building: 1 } },
-      { name: '1.1', current: false, done: 0, total: 1, live: 0, words: { blocked: 1 } },
-    ]);
+const counts = (over: Partial<ReleaseCounts> = {}): ReleaseCounts => ({
+  name: '1.0', open: 5, ready: 2, building: 1, waiting_owner: 1, blocked: 1, closed: 3, held_later: 1, pace: 0.5,
+  forecast: { open: 5, burn: 0.5, converging: true, p50: null, p85: null, target: null, late: null },
+  ...over,
+});
+
+describe('releaseTally', () => {
+  it('prints the row of a release: closed of open and closed, live, and each word apart with held later', () => {
+    expect(releaseTally(counts(), true)).toEqual({
+      name: '1.0', current: true, done: 3, total: 8, live: 1,
+      words: { ready: 2, building: 1, 'waiting on owner': 1, blocked: 1, 'held later': 1 },
+    });
+  });
+});
+
+describe('forecastLine', () => {
+  it('prints the P50 date and a late target', () => {
+    const forecast = { open: 12, burn: 1.5, converging: true, p50: '2026-10-20', p85: '2026-11-02', target: '2026-10-30', late: true };
+    expect(forecastLine(forecast)).toBe('12 open, clear by P50 2026-10-20, P85 2026-11-02; late for the target 2026-10-30');
+  });
+  it('says not converging for a zero burn', () => {
+    const forecast = { open: 12, burn: 0, converging: false, p50: null, p85: null, target: null, late: null };
+    expect(forecastLine(forecast)).toBe('12 open, not converging: closes do not outrun opens');
+  });
+  it('says nothing is open for a cleared release', () => {
+    const forecast = { open: 0, burn: 0, converging: true, p50: '2026-10-05', p85: '2026-10-05', target: null, late: null };
+    expect(forecastLine(forecast)).toBe('nothing open');
   });
 });
 
@@ -66,5 +72,62 @@ describe('holdsOf', () => {
   it('is empty when the reply has none', () => {
     expect(holdsOf(undefined)).toEqual([]);
     expect(holdsOf({})).toEqual([]);
+  });
+});
+
+const late = (id: string, by: string, release: string, later: string): Problem => ({ kind: 'held_later', id, by, release, later });
+
+describe('checkByRelease', () => {
+  it('groups the held-later problems by the release of the held item and leaves other kinds out', () => {
+    const problems: Problem[] = [
+      late('T1', 'T9', '1.0', '1.1'),
+      { kind: 'cycle', id: 'T4' },
+      late('T2', 'T9', '1.0', 'the backlog'),
+      late('T5', 'T6', '1.1', '2.0'),
+    ];
+    expect(checkByRelease(problems, ['1.0', '1.1', '2.0'])).toEqual([
+      { release: '1.0', problems: [problems[0], problems[2]] },
+      { release: '1.1', problems: [problems[3]] },
+    ]);
+  });
+  it('puts a release not listed after the listed ones, and nothing when there are no problems', () => {
+    expect(checkByRelease([late('T1', 'T2', '0.9', '1.0')], ['1.0']).map((g) => g.release)).toEqual(['0.9']);
+    expect(checkByRelease([], ['1.0'])).toEqual([]);
+  });
+});
+
+describe('inversionsOf', () => {
+  it('finds the problems an item is held in or holds in another release', () => {
+    const a = late('T1', 'T9', '1.0', '1.1');
+    const b = late('T9', 'T3', '1.1', '1.2');
+    expect(inversionsOf([a, b, late('T7', 'T8', '1.0', '1.1')], 'T9')).toEqual([a, b]);
+    expect(inversionsOf([a], 'T5')).toEqual([]);
+  });
+});
+
+describe('staleClaims', () => {
+  it('maps each flagged claim by its id', () => {
+    const claims = [
+      { id: 'T1', title: 'a', branch: 'b', host: 'h', since: 1, flag: 'no event for 3h' },
+      { id: 'T2', title: 'b', branch: 'b', host: 'h', since: 1, flag: null },
+    ];
+    expect([...staleClaims(claims)]).toEqual([['T1', 'no event for 3h']]);
+    expect(staleClaims(undefined).size).toBe(0);
+  });
+});
+
+describe('checkCounts', () => {
+  const p = (kind: string, id: string): Problem => ({ kind, id });
+  it('counts each kind of problem in the words the CLI uses, each with the list it links to', () => {
+    const problems = [...['a', 'b', 'c', 'd', 'e'].map((id) => p('cycle', id)), p('held_later', 'x'), p('held_later', 'y'), p('held_gate', 'z')];
+    expect(checkCounts(problems, 'proj')).toEqual([
+      { kind: 'cycle', line: '5 cycles', href: '/ui/proj/work?check=cycle' },
+      { kind: 'held_later', line: '2 release inversions', href: '/ui/proj/work?check=held_later' },
+      { kind: 'held_gate', line: '1 hold on closed work', href: '/ui/proj/work?check=held_gate' },
+    ]);
+  });
+  it('names the items of one kind once each', () => {
+    const problems = [p('cycle', 'a'), p('cycle', 'a'), p('cycle', 'b'), p('held_later', 'c')];
+    expect(checkIds(problems, 'cycle')).toEqual(['a', 'b']);
   });
 });

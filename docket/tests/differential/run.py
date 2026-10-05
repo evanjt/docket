@@ -251,8 +251,8 @@ def reads(i):
            'wip', 'wip --json', 'waiting', 'waiting --json', 'blocked --on condition', 'questions', 'q --json',
            'research', 'research --json', 'derived', 'derived 5 --json', 'done 5', 'done 3 --json',
            'dropped 3', 'dropped 2 --json', 'groups', 'groups --json', 'projects', 'projects --json',
-           'graph', 'graph --dot', 'graph --no-files', 'check', 'check --json', 'audit --orphans',
-           'audit --orphans --json', 'stale', 'show ZZ', 'show B999999', 'audit', 'next --under QQ',
+           'graph', 'graph --dot', 'graph --no-files', 'check', 'check --json',
+           'stale', 'show ZZ', 'show B999999', 'audit', 'next --under QQ',
            'log not-an-id', 'skills', 'skills show', 'skills owner', 'skills land', 'skills mode', 'skills poll',
            'skills slug', 'skills root', 'skills last_tick', 'skills nosuch', 'skills set']
     for k in i.keys.get('work', [])[:1]:

@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use docket_core::api::{
     AnswerRequest, Common, FactRequest, LinkRequest, ParentRequest, PriorityRequest, RateRequest,
-    ReplyRequest, RetryRequest,
+    ReplyRequest,
 };
 use docket_core::flow::DERIVED;
 
@@ -41,9 +41,6 @@ pub struct Prompt {
     pub label: String,
     pub text: String,
 }
-
-/// The note a retry from the screen carries.
-pub const RETRY_NOTE: &str = "retried from the screen";
 
 const TIERS: [(char, &str); 4] = [
     ('c', "critical"),
@@ -172,7 +169,6 @@ impl<S: Source> App<S> {
             }
             KeyCode::Char('a') => self.ask_one(Ask::Answer),
             KeyCode::Char('r') => self.ask_one(Ask::Reply),
-            KeyCode::Char('R') => self.retry(),
             KeyCode::Char('!') => self.ask_many(Ask::Priority),
             KeyCode::Char('c') => self.ask_many(Ask::Rate),
             KeyCode::Char('L') => self.ask_many(Ask::Link),
@@ -196,7 +192,7 @@ impl<S: Source> App<S> {
             _ => String::new(),
         };
         self.start_prompt(
-            "filter (release priority key complexity under): ",
+            "filter (release priority key complexity under area): ",
             Ask::Filter,
             text,
         );
@@ -268,21 +264,6 @@ impl<S: Source> App<S> {
             _ => format!("link {shown} (related ID, origin ID or parent PLAN): "),
         };
         self.start_prompt(&label, make(ids), String::new());
-    }
-
-    fn retry(&mut self) {
-        let Some(id) = self.selected_row() else {
-            self.flash = Some("select an item first".into());
-            return;
-        };
-        let req = RetryRequest {
-            common: self.common(),
-            id: id.clone(),
-            note: Some(RETRY_NOTE.into()),
-        };
-        if self.send("retry", &body(&req)) {
-            self.landed(format!("retried {id}"));
-        }
     }
 
     /// One key while a line is typed: Enter sends it, Esc drops it, Ctrl-E opens it in `$EDITOR`.

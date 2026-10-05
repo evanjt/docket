@@ -44,7 +44,7 @@
     document.title = current ? `${current} · docket` : 'docket';
   });
 
-  const GOTO: Record<string, Tab | 'home'> = { o: 'overview', w: 'work', p: 'plans', y: 'yours', a: 'activity', s: 'settings', h: 'home' };
+  const GOTO: Record<string, Tab | 'home'> = { o: 'overview', w: 'work', p: 'plans', r: 'areas', y: 'yours', a: 'activity', s: 'settings', h: 'home' };
 
   function onkey(e: KeyboardEvent) {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {

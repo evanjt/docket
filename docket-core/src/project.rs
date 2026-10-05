@@ -5,6 +5,9 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde_json::{Value, json};
 
+use crate::item::Refused;
+use crate::word::ItemType;
+
 static URL_SLUG: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[:/]([^/:]+)/([^/]+?)(?:\.git)?/?$").unwrap());
 
@@ -38,23 +41,37 @@ pub fn matches(
     out
 }
 
-/// The keys a new project opens with.
+/// The type a new item filed under the key takes.
+///
+/// # Errors
+/// Refused when the key is not one of the five docket fixes: a key that holds stored items keeps them
+/// and takes no new ones.
+pub fn require_fileable(key: &str) -> Result<ItemType, Refused> {
+    ItemType::filed_under(key).ok_or_else(|| {
+        let keys: Vec<&str> = ItemType::ALL.iter().map(|t| t.key()).collect();
+        Refused(format!(
+            "{key} is not one of docket's keys. File under {}.",
+            keys.join(", ")
+        ))
+    })
+}
+
+/// The keys a new project opens with: one per item type, as docket fixes them.
 #[must_use]
 pub fn default_keys() -> Value {
-    json!([
-        {"key": "T", "kind": "work", "meaning": "tasks", "turn": "agent"},
-        {"key": "B", "kind": "work", "meaning": "bugs", "turn": "agent"},
-        {"key": "Q", "kind": "decision", "meaning": "questions, a decision not a commit", "turn": "user"},
-        {"key": "I", "kind": "research", "meaning": "investigations, measured before decided", "turn": "agent"},
-        {"key": "A", "kind": "audit", "meaning": "audits, a plan checked against the tree once all it opened is closed",
-         "turn": "agent"},
-        {"key": "STY", "kind": "story", "meaning": "user stories, accepted by the owner once all they opened is closed",
-         "turn": "agent"},
-        {"key": "CON", "kind": "concept", "meaning": "concepts, the domain areas every item belongs to", "turn": "agent"},
-        {"key": "CID", "kind": "idea", "meaning": "central ideas, the rules every plan is held to", "turn": "agent"},
-        {"key": "PK", "kind": "package", "meaning": "packages: one fact given one owner, its symptoms held under it",
-         "turn": "agent"}
-    ])
+    Value::Array(
+        ItemType::ALL
+            .into_iter()
+            .map(|t| {
+                let turn = if t == ItemType::Question {
+                    "user"
+                } else {
+                    "agent"
+                };
+                json!({"key": t.key(), "kind": t.kind(), "meaning": t.meaning(), "turn": turn})
+            })
+            .collect(),
+    )
 }
 
 #[cfg(test)]

@@ -113,7 +113,7 @@ fn test_a_refused_answer_changes_nothing_and_shows_the_reason() {
 }
 
 #[test]
-fn test_reply_and_retry_in_the_owner_queue() {
+fn test_reply_in_the_owner_queue() {
     let mut a = queue();
     press(&mut a, KeyCode::Char('r'));
     typed(&mut a, "plugged in");
@@ -123,12 +123,6 @@ fn test_reply_and_retry_in_the_owner_queue() {
         (verb.as_str(), &body["id"], &body["note"]),
         ("reply", &json!("Q1"), &json!("plugged in"))
     );
-
-    let mut a = queue();
-    press(&mut a, KeyCode::Char('R'));
-    let (verb, body) = only(&a);
-    assert_eq!(verb, "retry");
-    assert_eq!(body["note"], RETRY_NOTE);
 }
 
 #[test]
@@ -224,7 +218,7 @@ fn test_priority_takes_one_key_for_the_tier() {
     assert_eq!(verb, "priority");
     assert_eq!(
         (&body["ids"], &body["tier"]),
-        (&json!(["A2"]), &json!("high"))
+        (&json!(["T3"]), &json!("high"))
     );
 }
 
@@ -236,7 +230,7 @@ fn test_rate_sends_one_request_per_marked_row() {
     let (verb, body) = only(&a);
     assert_eq!(
         (verb.as_str(), &body["id"], &body["level"]),
-        ("rate", &json!("A2"), &json!("low"))
+        ("rate", &json!("T3"), &json!("low"))
     );
 
     let mut a = browse(Listing::Ties("PK1".into()));
@@ -264,7 +258,7 @@ fn test_link_acts_on_the_selection() {
     assert_eq!(verb, "link");
     assert_eq!(
         (&body["a"], &body["kind"], &body["b"]),
-        (&json!(["A2"]), &json!("related"), &json!("CON1"))
+        (&json!(["T3"]), &json!("related"), &json!("CON1"))
     );
 }
 
@@ -413,7 +407,7 @@ fn test_palette_runs_a_verb_on_the_selected_row() {
     assert_eq!(verb, "close");
     assert_eq!(
         (&body["id"], &body["resolution"]),
-        (&json!("A2"), &json!("abc1234"))
+        (&json!("T3"), &json!("abc1234"))
     );
 }
 

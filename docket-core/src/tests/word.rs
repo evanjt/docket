@@ -1,82 +1,54 @@
 use super::*;
 
-fn open(kind: Kind) -> Facts<'static> {
-    Facts {
-        state: "open",
-        kind,
-        claimed: false,
-        waiting: false,
-        turn: Some("agent"),
-    }
+fn open(claimed: bool, waiting: bool, turn: Option<&str>) -> Standing<'_> {
+    Standing::of("open", claimed, waiting, turn)
 }
 
 #[test]
 fn test_word_closed_is_its_state() {
-    let facts = Facts {
-        state: "dropped",
-        turn: None,
-        ..open(Kind::Work)
+    let row = Standing::of("dropped", false, false, None);
+    assert_eq!(row.word(), "dropped");
+}
+
+#[test]
+fn test_word_open_item_is_ready_or_in_progress() {
+    assert_eq!(open(true, false, None).word(), "in progress");
+    assert_eq!(open(false, false, None).word(), "ready");
+}
+
+#[test]
+fn test_word_claimed_item_is_in_progress() {
+    assert_eq!(open(true, false, None).word(), "in progress");
+}
+
+#[test]
+fn test_word_open_assignment_comes_before_dependency_and_turn() {
+    assert_eq!(open(true, true, Some("user")).word(), "in progress");
+}
+
+#[test]
+fn test_word_dependency_comes_before_turn() {
+    assert_eq!(open(false, true, Some("user")).word(), "blocked");
+    assert_eq!(open(false, false, Some("user")).word(), "waiting on owner");
+}
+
+#[test]
+fn test_word_plan_reads_its_members() {
+    let row = |open_members, closed_members| {
+        open(false, false, Some("agent")).holding(Kind::Audit, open_members, closed_members)
     };
-    assert_eq!(word(&facts, 0), "dropped");
+    assert_eq!(row(2, 1).word(), "building");
+    assert_eq!(row(0, 3).word(), "audit due");
+    assert_eq!(row(0, 0).word(), "ready");
 }
 
 #[test]
-fn test_word_standing_kind_ignores_claim() {
-    let facts = Facts {
-        claimed: true,
-        ..open(Kind::Concept)
+fn test_word_package_reads_open_members_only() {
+    let row = |open_members, closed_members| {
+        open(false, false, Some("agent")).holding(Kind::Package, open_members, closed_members)
     };
-    assert_eq!(word(&facts, 0), "standing");
-}
-
-#[test]
-fn test_word_claimed_ticket_builds_and_claimed_package_checks() {
-    assert_eq!(
-        word(
-            &Facts {
-                claimed: true,
-                ..open(Kind::Work)
-            },
-            0
-        ),
-        "building"
-    );
-    assert_eq!(
-        word(
-            &Facts {
-                claimed: true,
-                ..open(Kind::Package)
-            },
-            0
-        ),
-        "checking"
-    );
-}
-
-#[test]
-fn test_word_wait_comes_before_turn() {
-    let facts = Facts {
-        waiting: true,
-        turn: Some("user"),
-        ..open(Kind::Work)
-    };
-    assert_eq!(word(&facts, 0), "blocked");
-    assert_eq!(
-        word(
-            &Facts {
-                turn: Some("user"),
-                ..open(Kind::Decision)
-            },
-            0
-        ),
-        "parked"
-    );
-}
-
-#[test]
-fn test_word_package_with_open_members_builds() {
-    assert_eq!(word(&open(Kind::Package), 2), "building");
-    assert_eq!(word(&open(Kind::Package), 0), "ready");
+    assert_eq!(row(2, 1).word(), "building");
+    assert_eq!(row(0, 3).word(), "ready");
 }
 
 #[test]
@@ -180,4 +152,32 @@ fn test_status_plan_reads_audit_due_when_its_last_member_closes() {
         ..building
     };
     assert_eq!(status(&closed).as_str(), "audit due");
+}
+
+#[test]
+fn test_each_type_files_under_its_key_and_a_retired_key_files_nothing() {
+    for t in ItemType::ALL {
+        assert_eq!(ItemType::filed_under(t.key()), Some(t));
+        assert_eq!(ItemType::parse(t.as_str()), Some(t));
+    }
+    for retired in ["STY", "PK", "CON", "CID", "X"] {
+        assert_eq!(ItemType::filed_under(retired), None);
+    }
+}
+
+#[test]
+fn test_a_stored_item_takes_its_type_from_its_key_else_its_kind() {
+    assert_eq!(ItemType::of_stored("B", Kind::Work), ItemType::Bug);
+    assert_eq!(ItemType::of_stored("PK", Kind::Package), ItemType::Plan);
+    assert_eq!(ItemType::of_stored("PK", Kind::Audit), ItemType::Plan);
+    assert_eq!(ItemType::of_stored("STY", Kind::Story), ItemType::Plan);
+    assert_eq!(ItemType::of_stored("ZZ", Kind::Work), ItemType::Task);
+    assert_eq!(
+        ItemType::of_stored("ZZ", Kind::Decision),
+        ItemType::Question
+    );
+    assert_eq!(
+        ItemType::of_stored("ZZ", Kind::Research),
+        ItemType::Investigation
+    );
 }

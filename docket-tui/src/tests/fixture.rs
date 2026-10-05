@@ -1,15 +1,16 @@
 //! A fixed project for the tests: a plan waiting on its work, a plan due for audit, a package half
 //! done, tickets in each word, a question, a concept, and a second project.
 
+use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use docket_core::api::{LeadState, Machines};
 use docket_core::flow::tally;
 use docket_core::machine::Machine;
 use docket_core::member::{Edge, Tie};
-use docket_core::rows::{
-    Derived, EventRow, ItemRow, KeySpec, Progress, ProjectRow, Row, Shown, Status,
-};
+use docket_core::metrics::ReleaseRow;
+use docket_core::release::{Listed, Release};
+use docket_core::rows::{Derived, EventRow, ItemRow, Progress, ProjectRow, Row, Shown, Status};
 use docket_core::word::Kind;
 use serde_json::Value;
 
@@ -17,45 +18,51 @@ use crate::filter::Filter;
 use crate::source::{Result, Source};
 use docket_core::board::Board;
 
-fn keys() -> Vec<KeySpec> {
-    [
-        ("T", Kind::Work),
-        ("B", Kind::Work),
-        ("Q", Kind::Decision),
-        ("A", Kind::Audit),
-        ("PK", Kind::Package),
-        ("CON", Kind::Concept),
-    ]
-    .into_iter()
-    .map(|(key, kind)| KeySpec {
-        key: key.into(),
-        kind,
-        meaning: None,
-        turn: None,
-    })
-    .collect()
-}
-
 fn project(slug: &str, skills: &[(&str, &str)]) -> ProjectRow {
     ProjectRow {
         slug: slug.into(),
-        keys: keys(),
         themes: Vec::new(),
         skills: skills
             .iter()
             .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
             .collect(),
         updated_at: String::new(),
-        ..ProjectRow::default()
+        releases: Listed::new(vec![(1, release("4.2.0", 1)), (2, release("4.3.0", 2))]),
+        areas: docket_core::area::Listed {
+            rows: vec![(1, area("lanterns", 1)), (2, area("kites", 2))],
+        },
+    }
+}
+
+fn area(name: &str, position: i64) -> docket_core::area::Area {
+    docket_core::area::Area {
+        name: name.into(),
+        position,
+        ..docket_core::area::Area::default()
+    }
+}
+
+fn release(name: &str, position: i64) -> Release {
+    Release {
+        name: name.into(),
+        position,
+        ..Release::default()
     }
 }
 
 fn item(rid: i64, id: &str, title: &str, state: &str) -> ItemRow {
     let key: String = id.chars().take_while(char::is_ascii_uppercase).collect();
+    let item_type = match key.as_str() {
+        "Q" => "question",
+        "A" | "PK" => "plan",
+        "B" => "bug",
+        _ => "task",
+    };
     ItemRow {
         rid,
         project: "o/p".into(),
         num: id[key.len()..].parse().unwrap(),
+        item_type: item_type.into(),
         key,
         id: id.into(),
         title: title.into(),
@@ -81,21 +88,29 @@ fn items() -> Vec<ItemRow> {
     blocked.wait_on = Some("item".into());
     blocked.wait_ref = Some("Q1".into());
     blocked.group_name = Some("loaves".into());
-    let mut plan = item(8, "A1", "Loaves stay put", "open");
-    plan.wait_on = Some("condition".into());
-    plan.wait_ref = Some("all closed".into());
+    let plan = item(8, "A1", "Loaves stay put", "open");
     let mut out = vec![
         item(1, "T1", "First member, done", "done"),
         claimed,
         item(3, "T3", "Fix the loaf count", "open"),
         item(4, "PK1", "Loaf count has one owner", "open"),
         question,
-        item(6, "CON1", "Crusts", "open"),
+        item(6, "CON1", "Crusts", "dropped"),
         blocked,
         plan,
         item(9, "A2", "Orders print at the till", "open"),
         item(10, "T4", "Print the order slips", "done"),
     ];
+    for (rid, release) in [(1, 1), (2, 1), (3, 1), (10, 2)] {
+        if let Some(i) = out.iter_mut().find(|i| i.rid == rid) {
+            i.release_id = Some(release);
+        }
+    }
+    for (rid, area) in [(2, 2), (3, 1), (4, 1), (7, 1)] {
+        if let Some(i) = out.iter_mut().find(|i| i.rid == rid) {
+            i.area_id = Some(area);
+        }
+    }
     for (rid, parent) in [(1, 4), (2, 4), (4, 8), (3, 8), (10, 9)] {
         if let Some(i) = out.iter_mut().find(|i| i.rid == rid) {
             i.parent_rid = Some(parent);
@@ -133,6 +148,10 @@ pub struct Fixture {
     pub lead: Mutex<Option<docket_core::lead::Lead>>,
     /// Whether that lead claim went unrenewed past the lapse.
     pub lapsed: Mutex<bool>,
+    /// The release rows the server answers for every project.
+    pub releases: Mutex<Vec<ReleaseRow>>,
+    /// The owner-level agent settings every project reads.
+    pub owner: Mutex<Vec<(String, String)>>,
 }
 
 impl Default for Fixture {
@@ -145,6 +164,22 @@ impl Default for Fixture {
             facts: Mutex::new(Vec::new()),
             lead: Mutex::new(None),
             lapsed: Mutex::new(false),
+            releases: Mutex::new(vec![
+                ReleaseRow {
+                    name: "4.2.0".into(),
+                    closed: 1,
+                    open: 2,
+                    ready: 1,
+                    held_later: 1,
+                    ..ReleaseRow::default()
+                },
+                ReleaseRow {
+                    name: "4.3.0".into(),
+                    closed: 1,
+                    ..ReleaseRow::default()
+                },
+            ]),
+            owner: Mutex::new(Vec::new()),
         }
     }
 }
@@ -211,6 +246,18 @@ impl Source for Fixture {
             lapsed: *self.lapsed.lock().unwrap(),
             ..LeadState::default()
         })
+    }
+
+    fn owner_facts(&self, _slug: &str) -> Result<BTreeMap<String, String>> {
+        Ok(self.owner.lock().unwrap().iter().cloned().collect())
+    }
+
+    fn releases(&self, _slug: &str) -> Result<Vec<ReleaseRow>> {
+        Ok(self.releases.lock().unwrap().clone())
+    }
+
+    fn problems(&self, _slug: &str) -> Result<Vec<Value>> {
+        Ok(vec![serde_json::json!({ "kind": "cycle", "id": "B1" })])
     }
 
     fn machines(&self) -> Result<Machines> {

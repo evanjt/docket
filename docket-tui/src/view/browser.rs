@@ -40,6 +40,10 @@ pub fn rows_fitting(entries: &[Entry], top: usize, lines: usize) -> usize {
     fit.max(1)
 }
 
+fn short(s: &str, n: usize) -> String {
+    s.chars().take(n).collect()
+}
+
 /// One row: a star when marked, id in its word's colour, the word, the title, and under it why it
 /// stands there.
 fn entry_lines(
@@ -57,12 +61,21 @@ fn entry_lines(
         mark |= style::HOVER;
     }
     let tone = style::word(&e.word).add_modifier(mark);
-    let title: String = e.title.chars().take(width.saturating_sub(18)).collect();
+    let title: String = e
+        .title
+        .chars()
+        .take(width.saturating_sub(18 + 8 + 9))
+        .collect();
     let star = if marked { "*" } else { " " };
     let mut out = vec![Line::from(vec![
         Span::styled(star, style::bold()),
         Span::styled(format!("{:<7}", e.id), tone.add_modifier(Modifier::BOLD)),
         Span::styled(format!("{:<9}", e.word), tone),
+        Span::styled(format!("{:<8}", e.release), style::dim().add_modifier(mark)),
+        Span::styled(
+            format!("{:<9}", short(&e.area, 8)),
+            style::dim().add_modifier(mark),
+        ),
         Span::styled(title, Style::default().add_modifier(mark)),
     ])];
     if !e.note.is_empty() {

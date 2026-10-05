@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use crate::args::JobCmd;
 use crate::ctx::Ctx;
 use crate::fail::{Fail, Result};
-use crate::job::{self, Row, Spec};
+use crate::job::{self, Cap, Launch, Row, Spec};
 use crate::local;
 
 /// The flags `docket job` reads from the command line around it.
@@ -73,6 +73,7 @@ pub fn job(flags: &Flags, what: &JobCmd) -> Result<i32> {
             }
             Ok(0)
         }
+        JobCmd::Report { dir } => report(dir),
         JobCmd::Kill { job: name } => {
             let dir = job::find(&root, name, flags.project.as_deref()).map_err(Fail::refused)?;
             job::kill(&dir).map_err(Fail::refused)?;
@@ -118,6 +119,10 @@ fn run(
         effort: effort.filter(|e| !e.is_empty()).map(str::to_string),
         role: role.to_string(),
         provision,
+        launch: Launch {
+            reporter: std::env::current_exe().ok(),
+            cap: Cap::detect(),
+        },
     };
     let name = job::name_of(&spec.branch);
     let env = [
@@ -147,6 +152,25 @@ fn run(
             started.worktree.display()
         );
     }
+    Ok(0)
+}
+
+/// `docket job report DIR`: the end of the job in `dir` posted to the claim of its item. The
+/// reporter the job's wrapper runs, so it is the one place a job's end leaves its machine.
+fn report(dir: &std::path::Path) -> Result<i32> {
+    let Some(row) = job::row(dir, job::now()) else {
+        return Err(Fail::refused(format!("{}: no job here", dir.display())));
+    };
+    if row.state == job::State::Running {
+        return Err(Fail::refused(format!("{} is still running", row.name)));
+    }
+    let mut ctx = Ctx::new(false, Some(row.project.clone()), Some(row.branch.clone()))?;
+    let common = ctx.common(false)?;
+    let value = serde_json::to_value(&row).map_err(|e| Fail::refused(e.to_string()))?;
+    let _: serde_json::Value = ctx.api.post(
+        "job-report",
+        &crate::cmd::dispatch::report_request(common, &row.id, &value),
+    )?;
     Ok(0)
 }
 

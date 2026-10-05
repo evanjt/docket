@@ -14,6 +14,7 @@ use tokio::sync::{Mutex, OwnedMutexGuard};
 use docket_core::item::{Field, Item, KeySpec, Project, Refused};
 use docket_core::pyjson;
 use docket_core::text::{citations, split_id};
+use docket_core::word::ItemType;
 use docket_core::{assignment, clock};
 use docket_migration::assignments;
 
@@ -62,7 +63,10 @@ pub fn to_item(m: item::Model) -> Item {
         group_name: m.group_name,
         theme: m.theme,
         release_id: m.release_id,
+        area_id: m.area_id,
         rank: m.rank,
+        item_type: ItemType::parse(&m.item_type).unwrap_or_default(),
+        priority: m.priority,
         tags: serde_json::from_value(m.tags).unwrap_or_default(),
         body: m.body,
         conflict: m.conflict,
@@ -172,17 +176,7 @@ pub async fn by_rid<C: ConnectionTrait>(c: &C, rid: i64) -> Result<Option<Item>,
 pub const STATE_COLUMNS: &str = "rid, project, key, num, id, title, state, turn, turn_note, asked_at, \
     claim_branch, claim_host, claim_since, claim_runner, claim_job, claim_on, wait_on, wait_item, \
     wait_ref, wait_since, decision, decided_at, resolution, superseded_by, parent_rid, scope, complexity, \
-    group_name, theme, release_id, rank, tags, '' AS body, conflict, opened_at, updated_at";
-
-/// An item by rid without its body.
-pub async fn state_by_rid<C: ConnectionTrait>(c: &C, rid: i64) -> Result<Option<Item>, DbErr> {
-    item_row(
-        c,
-        &format!("SELECT {STATE_COLUMNS} FROM items WHERE rid=?"),
-        vec![rid.into()],
-    )
-    .await
-}
+    group_name, theme, release_id, area_id, rank, type, priority, tags, '' AS body, conflict, opened_at, updated_at";
 
 pub async fn id_of<C: ConnectionTrait>(c: &C, rid: i64) -> Result<Option<String>, DbErr> {
     scalar(c, "SELECT id FROM items WHERE rid=?", vec![rid.into()]).await
@@ -239,7 +233,9 @@ fn column_of(f: &Field) -> (&'static str, Value) {
         Field::GroupName(v) => ("group_name", v.into()),
         Field::Theme(v) => ("theme", v.into()),
         Field::ReleaseId(v) => ("release_id", v.into()),
+        Field::AreaId(v) => ("area_id", v.into()),
         Field::Rank(v) => ("rank", v.into()),
+        Field::Priority(v) => ("priority", v.into()),
         Field::Tags(v) => ("tags", json(serde_json::json!(v))),
         Field::Body(v) => ("body", v.into()),
         Field::Conflict(v) => ("conflict", v.into()),
@@ -258,8 +254,11 @@ pub struct NewItem {
     pub complexity: Option<String>,
     pub theme: Option<String>,
     pub release_id: Option<i64>,
+    pub area_id: Option<i64>,
     pub group_name: Option<String>,
     pub scope: Option<String>,
+    pub item_type: ItemType,
+    pub priority: String,
     pub tags: Vec<String>,
 }
 
@@ -368,8 +367,8 @@ impl Tx {
 
     pub async fn insert(&mut self, cols: NewItem) -> Result<Item, Failure> {
         let text = "INSERT INTO items (project, key, num, title, state, turn, body, complexity, theme, \
-                    release_id, group_name, scope, tags, opened_at, updated_at) \
-                    VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *";
+                    release_id, area_id, group_name, scope, type, priority, tags, opened_at, updated_at) \
+                    VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *";
         let values: Vec<Value> = vec![
             cols.project.into(),
             cols.key.into(),
@@ -380,8 +379,11 @@ impl Tx {
             cols.complexity.into(),
             cols.theme.into(),
             cols.release_id.into(),
+            cols.area_id.into(),
             cols.group_name.into(),
             cols.scope.into(),
+            cols.item_type.as_str().into(),
+            cols.priority.into(),
             json(serde_json::json!(cols.tags)),
             self.now.clone().into(),
             self.now.clone().into(),

@@ -190,6 +190,7 @@ it over. A take, a takeover and a give each write a `lead` event on the project;
 | `GET /dump` | the rows changed after an event `seq` (`since=N`), or every row (`since=0`), for `docket-dump` |
 | `GET /machines`, `POST /do/machine` | every machine; one set or removed (`remove: true`), on the owner's key |
 | `GET /lead`, `POST /do/lead` | a project's lead claim; `act` take, renew or give, with the holder's `session` |
+| `GET /publications`, `POST /do/publication` | a project's publications newest first; one recorded with its `published` and `work` shas and the `plans` it covers |
 | `GET /ui/` | the web client when `DOCKET_WEB` is set, with `/` sent to it; neither asks for a key |
 | `POST /do/{verb}` | `new`, `add`, `start`, `close`, `release`, `drop`, `reopen`, `wait`, `resume`, `ask`, `reply`, `answer`, `decide`, `priority`, `rate`, `edit`, `link`, `parent`, `key`, `project`, `reindex` |
 
@@ -238,25 +239,36 @@ DATABASE_URL=postgres://... docket-server simplify
 DATABASE_URL=postgres://... docket-server simplify --write
 ```
 
-The move onto the core (releases as rows, dependencies, one parent plan, an origin link, labels, a
-priority column and assignment rows) is planned by one function, `docket_core::migrate::plan`, over
+The move onto the core (releases as rows, dependencies, one parent plan, an origin link, areas,
+labels, a priority column and assignment rows) is planned by one function, `docket_core::migrate::plan`, over
 the rows the full dump carries. `docket admin migrate --dry-run` prints every change it makes to the
 bound project (`--all` for every project), then each risky case and what is done about it: a plan
 held by work in a later release, the edge that closes a cycle (kept as `related`), an item under two
 plans (the earliest open one is its parent), a dependency in a later release (pulled into its
-dependant's), a theme that is not a release, and the change to the dump's item files. A case whose
-repair turns on an undecided rule waits on it, and nothing is written while one does. `--held` and
-`--areas` decide those rules for one run, so the dry run shows each choice.
+dependant's), a theme that is not a release, and the change to the dump's item files. An item whose theme is not a
+release takes its parent plan's release, and the backlog without one or when the plan has none;
+`--themes backlog` sends them all to the backlog. Each concept item becomes an area, named by its
+title before the first colon in lower case, and is dropped; each item takes the area of its nearest
+plan up the parent edges that has one, else its own concept's, the oldest tie when it has several. An
+item tied to a concept other than its plan's, or to several with no plan, is a risky case, and the
+items neither places wait on the rule for them. The dry run prints each area with its member count.
+A case whose repair turns on an undecided rule
+waits on it, and nothing is written while one does. A plan held by later
+work always pulls that work into its own release.
 
 ```bash
 docket admin migrate --dry-run
-docket admin migrate --dry-run --all --held detach --areas current
+docket admin migrate --dry-run --all --themes backlog
 ```
 
 The parent slice is applied when the server migrates: each item's `opened` links split as the plan
 splits them, into one parent plan (`items.parent_rid`, set with `docket parent T1 A3`) and `origin`
 links (`docket link T1 origin Q2`), which record what spawned an item and add no structure. A dump
 checkout or SQLite store written before then splits the same way on restore or import.
+
+The area slice is applied the same way: each concept item becomes an `areas` row and is dropped
+with "became area NAME", and each item the plan places takes it in `items.area_id`, unless it carries
+an area already. An item neither its plan nor a concept places keeps no area.
 
 ## Docker
 

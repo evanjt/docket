@@ -27,15 +27,17 @@ const PROJECT: Style = Style {
 };
 
 /// Written only when set, so every file dumped before them stays byte-identical.
-pub const OPTIONAL: [&str; 8] = [
+pub const OPTIONAL: [&str; 10] = [
     "claim_runner",
     "claim_job",
     "claim_on",
     "scope",
     "release",
+    "area",
     "parent",
     "origin",
     "depends",
+    "labels",
 ];
 
 /// Fields an older item file carries that are read and never written: `opened`, which a restore
@@ -43,7 +45,7 @@ pub const OPTIONAL: [&str; 8] = [
 pub const LEGACY: [&str; 1] = ["opened"];
 
 /// The frontmatter of an item file, in order.
-pub const FIELDS: [&str; 32] = [
+pub const FIELDS: [&str; 36] = [
     "id",
     "title",
     "state",
@@ -68,12 +70,16 @@ pub const FIELDS: [&str; 32] = [
     "group",
     "theme",
     "release",
+    "area",
     "rank",
+    "type",
+    "priority",
     "tags",
     "related",
     "parent",
     "origin",
     "depends",
+    "labels",
     "opened_at",
     "updated_at",
 ];
@@ -108,7 +114,15 @@ pub struct ItemDump {
     pub theme: Option<String>,
     /// The release it is in by name; none is the backlog.
     pub release: Option<String>,
+    /// The area it is in by name.
+    pub area: Option<String>,
     pub rank: Option<i64>,
+    /// What the item is; a file written before the column carries none, and a restore reads it from
+    /// the key.
+    #[serde(rename = "type")]
+    pub item_type: String,
+    /// A file written before the column carries none, and a restore reads it from the tags.
+    pub priority: String,
     pub tags: Vec<String>,
     pub related: Vec<String>,
     /// The plan the item belongs to.
@@ -121,6 +135,8 @@ pub struct ItemDump {
     pub opened: Vec<String>,
     /// What the item depends on; none when it depends on nothing.
     pub depends: Option<Vec<String>>,
+    /// The labels it was given, never those it inherits; none when it was given none.
+    pub labels: Option<Vec<String>>,
     pub opened_at: String,
     pub updated_at: String,
     pub body: String,
@@ -159,6 +175,12 @@ pub struct ProjectDump {
     /// Every release, shipped or not, in position order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub releases: Vec<crate::release::Release>,
+    /// Every area, in position order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub areas: Vec<crate::area::Area>,
+    /// Every label, by name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<crate::label::Label>,
 }
 
 /// What changed after a cursor: every project, the items to rewrite and the events to add. A full
@@ -199,7 +221,7 @@ pub fn render_item(item: &ItemDump) -> String {
         if OPTIONAL.contains(&k) && v.is_null() {
             continue;
         }
-        if let (Value::Array(ids), "related" | "origin" | "depends") = (&mut v, k) {
+        if let (Value::Array(ids), "related" | "origin" | "depends" | "labels") = (&mut v, k) {
             ids.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
         }
         let _ = writeln!(text, "{k}: {}", dumps_styled(&v, LINE));

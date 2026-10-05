@@ -6,13 +6,17 @@ use crate::item::Refused;
 use crate::text::py_repr;
 
 /// Every fact a project carries, in the order `docket skills` prints them, with its one-line meaning.
-pub const FACTS: [(&str, &str); 17] = [
+pub const FACTS: [(&str, &str); 20] = [
     ("owner", "the owner's name, as the skills address them"),
     (
         "worktree",
         "the command that makes a worktree for item B14 on branch audit/b14-$n",
     ),
     ("merge", "the command that merges audit/b14-$n back"),
+    (
+        "publish",
+        "the local ref a squash writes the published history to and the remote ref the owner pushes it to, as \"published origin/main\"; unset, the project does not squash",
+    ),
     (
         "provision",
         "a shell command run in each job's new worktree before the job starts, such as linking node_modules; the job is refused when it fails",
@@ -66,6 +70,14 @@ pub const FACTS: [(&str, &str); 17] = [
         "the open asks and undecided questions the owner may hold at once; past it an ask is refused",
     ),
     (
+        "failure_limit",
+        "the failed attempts at one item before it is assigned to the owner",
+    ),
+    (
+        "prices",
+        "money per million tokens by model, as \"model=input:output ...\", for the cost of an agent attempt",
+    ),
+    (
         "flow",
         "the work model the project is on, set by its migration",
     ),
@@ -113,7 +125,7 @@ pub const AGENT_SETTINGS: [&str; 5] =
     ["models", "job_timeout", "stale_claim", "lead_lapse", "mode"];
 
 /// The value a fact takes when neither the project nor the owner sets one.
-pub const DEFAULTS: [(&str, &str); 8] = [
+pub const DEFAULTS: [(&str, &str); 9] = [
     ("models", DEFAULT_MODELS),
     ("owner", "the owner"),
     ("checkout", "."),
@@ -122,6 +134,7 @@ pub const DEFAULTS: [(&str, &str); 8] = [
     ("stale_claim", "120"),
     ("lead_lapse", "10"),
     ("owner_limit", "20"),
+    ("failure_limit", "2"),
 ];
 
 /// Facts docket writes itself, never set by hand.
@@ -267,13 +280,19 @@ pub fn known(skills: &BTreeMap<String, String>) -> BTreeMap<String, String> {
 pub const CHOICES: [(&str, &[&str]); 1] = [("mode", &["run", "drain", "pause"])];
 
 /// Facts that hold a whole number above 0.
-pub const COUNTS: [&str; 4] = ["stale_claim", "job_timeout", "lead_lapse", "owner_limit"];
+pub const COUNTS: [&str; 5] = [
+    "stale_claim",
+    "job_timeout",
+    "lead_lapse",
+    "owner_limit",
+    "failure_limit",
+];
 
 /// The keys a `models` entry may name: a build's complexity, then the audit, plan and lead roles.
 pub const MODEL_KEYS: [&str; 7] = ["high", "medium", "low", "unrated", "audit", "plan", "lead"];
 
 /// The runners a job can run on.
-pub const RUNNERS: [&str; 2] = ["claude", "codex"];
+pub const RUNNERS: [&str; 2] = crate::machine::RUNNERS;
 
 /// What `docket skills KEY` also answers, worked out rather than set, for scripts.
 pub const COMPUTED: [(&str, &str); 3] = [
@@ -338,7 +357,79 @@ fn check_shape(key: &str, value: &str) -> Result<(), Refused> {
     if key == "models" {
         models_of(value).map_err(|why| Refused(format!("models: {why}")))?;
     }
+    if key == "prices" {
+        prices_of(value).map_err(|why| Refused(format!("prices: {why}")))?;
+    }
+    if key == "publish" {
+        publish_of(value).map_err(|why| Refused(format!("publish: {why}")))?;
+    }
     Ok(())
+}
+
+/// Where a squash writes and where its result is pushed: the `publish` fact read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Publish {
+    /// The local ref a squash writes, such as `published`.
+    pub local: String,
+    /// The remote ref the owner pushes it to, as `REMOTE/BRANCH`, such as `origin/main`.
+    pub remote: String,
+}
+
+/// The project's `publish` fact read, `None` when it is unset or does not read: the project does
+/// not squash.
+#[must_use]
+pub fn publish(skills: &BTreeMap<String, String>) -> Option<Publish> {
+    skills
+        .get("publish")
+        .filter(|v| !v.trim().is_empty())
+        .and_then(|v| publish_of(v).ok())
+}
+
+/// The two refs of a `publish` value, or why it does not read.
+///
+/// # Errors
+/// It is not a local ref and a `REMOTE/BRANCH` ref, or either is no ref git takes.
+pub fn publish_of(value: &str) -> Result<Publish, String> {
+    let shape = || {
+        format!(
+            "{} is not a local ref and a remote ref, as 'published origin/main'",
+            py_repr(value)
+        )
+    };
+    let words: Vec<&str> = value.split_whitespace().collect();
+    let [local, remote] = words[..] else {
+        return Err(shape());
+    };
+    for name in [local, remote] {
+        if !is_ref_name(name) {
+            return Err(format!("{} is no ref git takes", py_repr(name)));
+        }
+    }
+    if !remote.contains('/') {
+        return Err(shape());
+    }
+    Ok(Publish {
+        local: local.to_string(),
+        remote: remote.to_string(),
+    })
+}
+
+/// A branch name git takes: no part empty or starting with a dot, no `..`, `@{`, control
+/// character, space or any of `~^:?*[\`, not starting with `-` or ending with `.`, and no part
+/// ending in `.lock`.
+fn is_ref_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('-')
+        && !name.ends_with('.')
+        && !name.contains("..")
+        && !name.contains("@{")
+        && name != "@"
+        && !name
+            .chars()
+            .any(|c| c.is_control() || c.is_whitespace() || "~^:?*[\\".contains(c))
+        && name.split('/').all(|part| {
+            !part.is_empty() && !part.starts_with('.') && part.strip_suffix(".lock").is_none()
+        })
 }
 
 /// Digits only, and not all of them zero.
@@ -346,6 +437,33 @@ fn is_count(value: &str) -> bool {
     !value.is_empty()
         && value.bytes().all(|b| b.is_ascii_digit())
         && value.bytes().any(|b| b != b'0')
+}
+
+/// Input and output price per million tokens, by model name.
+pub type Prices = BTreeMap<String, (f64, f64)>;
+
+/// The entries of a `prices` value, or why one does not read.
+///
+/// # Errors
+/// An entry is not `model=input:output` with two non-negative numbers.
+pub fn prices_of(value: &str) -> Result<Prices, String> {
+    let mut out = Prices::new();
+    for entry in value.split_whitespace() {
+        let shape = || format!("{} is not model=input:output", py_repr(entry));
+        let (model, rest) = entry.split_once('=').ok_or_else(shape)?;
+        let (input, output) = rest.split_once(':').ok_or_else(shape)?;
+        let price = |n: &str| {
+            n.parse::<f64>()
+                .ok()
+                .filter(|p| p.is_finite() && *p >= 0.0)
+                .ok_or_else(shape)
+        };
+        if model.is_empty() {
+            return Err(shape());
+        }
+        out.insert(model.to_string(), (price(input)?, price(output)?));
+    }
+    Ok(out)
 }
 
 /// What a job runs on: a runner, its model, and the effort when one is named.
@@ -445,6 +563,32 @@ pub fn model_without(
         .filter_map(|k| models.get(*k))
         .find(|m| !unavailable.contains(&m.runner.as_str()))
         .cloned()
+}
+
+/// What an audit runs on: the `models` entry for audits, unless its runner holds the most
+/// assignments under the plan, in which case the first entry on another runner that is available.
+/// `runs` counts the plan's assignments by runner. `None` as for `model_without`.
+#[must_use]
+pub fn audit_model(
+    project: &BTreeMap<String, String>,
+    owner: &BTreeMap<String, String>,
+    runs: &BTreeMap<String, usize>,
+    unavailable: &[&str],
+) -> Option<Model> {
+    let own = model_without(project, owner, Role::Audit, None, unavailable)?;
+    let most = runs.values().copied().max().unwrap_or(0);
+    if most == 0 || runs.get(&own.runner).copied().unwrap_or(0) < most {
+        return Some(own);
+    }
+    let (models, _) = layered(project, owner, "models")?;
+    let models = models_of(&models).ok()?;
+    let mut avoid: Vec<&str> = unavailable.to_vec();
+    avoid.push(own.runner.as_str());
+    let other = MODEL_KEYS
+        .iter()
+        .filter_map(|k| models.get(*k))
+        .find(|m| !avoid.contains(&m.runner.as_str()));
+    Some(other.cloned().unwrap_or(own))
 }
 
 /// The facts with one set or unset, as stored after the write.

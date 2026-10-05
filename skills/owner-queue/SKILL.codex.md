@@ -98,8 +98,7 @@ When they report:
 - **Cannot right now** (no device, no time): `docket ask ID "..."` again with
   the reason, and it drops to the end of its group.
 - **A tangent**: a defect, a cleanup, a question for later. File it with
-  `--release` by what it is (data loss, a crash or wrong numbers is `current` at
-  high priority; a feature or polish goes to a later release) and carry on,
+  `--release` as the docket block says and carry on,
   as `ask-questions` says.
 
 Notes and closes in a public repository carry the mechanism only: run

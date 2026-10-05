@@ -79,7 +79,7 @@ fn test_a_gated_plan_is_held_by_an_open_item_below_a_closed_one() {
         },
     ];
     let open = std::collections::HashSet::from([1, 3, 4]);
-    let edges = gate_edges(&ties, &[1], &open);
+    let edges = plan_edges(&ties, &[1], &open);
     assert_eq!(edges, [(1, 3)]);
     let rank = BTreeMap::from([(1, 0), (3, 1)]);
     assert_eq!(held_later(&holds(&edges), &rank), [(1, 3)]);
@@ -170,4 +170,54 @@ fn test_a_dropped_dependency_without_a_successor_satisfies_it_and_is_abandoned()
     assert!(satisfied(gone, &targets));
     assert!(abandoned(gone, &targets));
     assert!(satisfied(other, &targets), "a successor loop ends");
+}
+
+fn needs(pairs: &[(i64, i64)]) -> Vec<(i64, i64)> {
+    pairs.to_vec()
+}
+
+#[test]
+fn test_moving_a_plan_earlier_than_its_child_is_a_violation_listing_the_child() {
+    // Plan 1 held by child 2, both in the second release, and 3 held by that child too.
+    let held = needs(&[(1, 2), (3, 2)]);
+    let rank = BTreeMap::from([(1, 1), (2, 1), (3, 1)]);
+    let moved = BTreeMap::from([(1, 0)]);
+    assert_eq!(order::violations(&held, &rank, &moved), [(1, 2)]);
+    assert_eq!(order::introduced(&held, &rank, &moved), [(1, 2)]);
+}
+
+#[test]
+fn test_an_inversion_that_stood_before_the_write_is_not_introduced_by_it() {
+    let held = needs(&[(1, 2)]);
+    let rank = BTreeMap::from([(1, 0), (2, 1), (3, 0)]);
+    let moved = BTreeMap::from([(3, 1)]);
+    assert_eq!(order::violations(&held, &rank, &moved), [(1, 2)]);
+    assert!(order::introduced(&held, &rank, &moved).is_empty());
+}
+
+#[test]
+fn test_carrying_an_item_later_takes_what_it_holds_up_and_earlier_takes_what_holds_it() {
+    // 1 is held by 2, and 2 by 3: 3 must ship no later than 2, and 2 no later than 1.
+    let held = needs(&[(1, 2), (2, 3), (9, 8)]);
+    let flat = BTreeMap::from([(1, 0), (2, 0), (3, 0), (8, 0), (9, 0)]);
+    assert_eq!(
+        order::carry(&held, &flat, 3, 1),
+        BTreeMap::from([(1, 1), (2, 1), (3, 1)])
+    );
+    assert_eq!(order::carry(&held, &flat, 1, 2), BTreeMap::from([(1, 2)]));
+    let late = BTreeMap::from([(1, 2), (2, 2), (3, 2), (8, 0), (9, 0)]);
+    assert_eq!(
+        order::carry(&held, &late, 1, 0),
+        BTreeMap::from([(1, 0), (2, 0), (3, 0)])
+    );
+}
+
+#[test]
+fn test_carrying_a_plan_earlier_moves_its_child_with_it() {
+    let held = needs(&[(1, 2)]);
+    let rank = BTreeMap::from([(1, 1), (2, 2)]);
+    assert_eq!(
+        order::carry(&held, &rank, 1, 0),
+        BTreeMap::from([(1, 0), (2, 0)])
+    );
 }

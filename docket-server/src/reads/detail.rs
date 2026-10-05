@@ -6,16 +6,11 @@ use sea_orm::{DatabaseConnection, FromQueryResult};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use docket_core::word::{Facts, Kind, priority, word};
-
-use crate::reads::public::{Kinds, sql};
+use crate::reads::public::sql;
 use crate::reads::rows::{Extra, project_model, rows_with, shaped};
 use crate::reads::search::{Narrow, search_rows};
-use crate::store::{self, to_item};
+use crate::store::{self};
 use crate::verbs::Failure;
-use crate::verbs::graph::{
-    concepts_of, open_member_count, package_members, package_of, package_progress,
-};
 
 #[derive(Deserialize)]
 pub struct InProject {
@@ -188,8 +183,7 @@ pub async fn deps(
     Ok(Json(Value::Object(out)))
 }
 
-/// What `docket show` prints beside the row: the priority a package raised, a standing item's members
-/// by word, the package and its progress, a package's members, what waits on it, its concepts.
+/// What `docket show` prints beside the row: the priority tier, what waits on it, its area.
 ///
 /// # Errors
 /// 404 for an unknown project or item.
@@ -198,25 +192,9 @@ pub async fn context(
     Path(id): Path<String>,
     Query(q): Query<InProject>,
 ) -> Result<Json<Value>, Failure> {
-    let project = store::project(&db, &q.project).await?;
-    let model = project_model(&db, &q.project).await?;
-    let kinds = Kinds::of(&model);
+    store::project(&db, &q.project).await?;
     let r = store::item_of(&db, &q.project, &id).await?;
-    let kind = kinds.kind(&r.key);
-    let tier = priority(&r.tags);
-    let package = match package_of(&db, &project, r.rid).await? {
-        Some(p) => Some(json!({
-            "id": p.id, "title": p.title,
-            "progress": package_progress(&db, p.rid).await?,
-        })),
-        None => None,
-    };
-    let mut members = Vec::new();
-    if kind == Kind::Package {
-        for m in package_members(&db, r.rid, false).await? {
-            members.push(json!({ "id": m.id, "word": word_of(&db, &kinds, &m).await? }));
-        }
-    }
+    let tier = r.priority.as_str();
     let holds: Vec<String> = store::column(
         &db,
         "SELECT i.id FROM dependencies d JOIN items i ON i.rid=d.rid WHERE d.on_rid=? AND i.state='open' \
@@ -224,57 +202,11 @@ pub async fn context(
         vec![r.rid.into()],
     )
     .await?;
-    let standing = if kind.is_standing() {
-        Some(member_words(&db, &q.project, &kinds, r.rid).await?)
-    } else {
-        None
-    };
     Ok(Json(json!({
         "priority": tier,
-        "standing": standing,
-        "package": package,
-        "members": members,
         "holds": holds,
-        "concepts": concepts_of(&db, &project, r.rid).await?,
+        "area": crate::verbs::areas::name_of(&db, r.area_id).await?,
     })))
-}
-
-async fn word_of(
-    db: &DatabaseConnection,
-    kinds: &Kinds,
-    r: &docket_core::item::Item,
-) -> Result<String, Failure> {
-    let kind = kinds.kind(&r.key);
-    let open = if kind == Kind::Package && r.state == "open" {
-        open_member_count(db, r.rid).await?
-    } else {
-        0
-    };
-    let facts = Facts {
-        state: &r.state,
-        kind,
-        claimed: r.claim_branch.is_some(),
-        waiting: r.wait_on.is_some(),
-        turn: r.turn.as_deref(),
-    };
-    Ok(word(&facts, open).to_string())
-}
-
-/// How many items belong to a concept or central idea, and how many of them stand at each word.
-async fn member_words(
-    db: &DatabaseConnection,
-    slug: &str,
-    kinds: &Kinds,
-    rid: i64,
-) -> Result<Value, Failure> {
-    let rids = crate::reads::audit::members(db, slug, kinds, rid).await?;
-    let mut counts = Map::new();
-    for m in crate::reads::audit::by_rid_chunks(db, &rids).await? {
-        let w = word_of(db, kinds, &to_item(m)).await?;
-        let n = counts.get(&w).and_then(Value::as_u64).unwrap_or(0);
-        counts.insert(w, json!(n + 1));
-    }
-    Ok(json!({ "total": rids.len(), "words": counts }))
 }
 
 #[derive(Deserialize)]

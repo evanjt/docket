@@ -1,7 +1,7 @@
 <script lang="ts">
   import { api } from '../lib/api';
   import { project } from '../lib/context';
-  import { MOVE_KINDS, verbWord } from '../lib/flow';
+  import { MOVE_KINDS } from '../lib/flow';
   import { resource } from '../lib/live.svelte';
   import { day, epoch, stamp } from '../lib/time';
   import type { EventRow } from '../lib/types';
@@ -43,7 +43,7 @@
           {@const node = typeof e.rid === 'number' ? ctx.board?.byRid.get(e.rid) : undefined}
           <li>
             <span class="time" title={e.at}>{stamp(e.at).slice(-5)}</span>
-            <span class="verb" style="--c: var(--w-{verbWord(e.kind) ?? 'none'}, var(--ink))">{e.kind}</span>
+            <span class="verb">{e.kind}</span>
             <span class="what">
               {#if node}<a class="id" href={ctx.item(node.id)}>{node.id}</a> <span class="title">{node.title}</span>{/if}
               {#if e.note}<span class="note">{e.note}</span>{/if}

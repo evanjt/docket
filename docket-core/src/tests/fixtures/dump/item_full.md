@@ -23,7 +23,9 @@ complexity: "medium"
 group: "gürtel"
 theme: null
 rank: 3
-tags: ["high", "single"]
+type: "task"
+priority: "high"
+tags: ["single"]
 related: ["CON1", "T10", "T9"]
 parent: "A1"
 origin: ["I2", "Q4"]

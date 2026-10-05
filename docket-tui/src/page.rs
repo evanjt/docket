@@ -5,7 +5,8 @@ use std::collections::BTreeSet;
 
 use docket_core::api::LeadState;
 use docket_core::machine::Machine;
-use docket_core::pace::{Minute, Net, Pace};
+use docket_core::metrics::ReleaseRow;
+use docket_core::pace::Minute;
 use docket_core::rows::{Derived, EventRow, ItemRow, ProjectRow, Row, Shown, Status};
 
 use crate::doc::{Cursor, Listing};
@@ -94,13 +95,14 @@ pub struct ProjectData {
     pub minutes: Vec<Minute>,
     /// The moves shown are the newest ones, outside the window.
     pub stale: bool,
-    pub pace: Pace,
-    /// The current release's tickets closed against those opened in the last hour.
-    pub net: Net,
+    /// One row per unshipped release, the current first, as the server works them out.
+    pub releases: Vec<ReleaseRow>,
     pub now: i64,
     /// Who leads the project; `None` when the route could not be read.
     pub lead: Option<LeadState>,
     pub machines: Vec<Machine>,
+    /// The problems `check` finds; none when the route could not be read.
+    pub problems: Vec<serde_json::Value>,
     /// Opened and closed per day for the last week, oldest first.
     pub trend: Vec<(u64, u64)>,
 }
@@ -122,6 +124,10 @@ pub struct Entry {
     pub title: String,
     /// Why it stands where it does, or what tied it to the list.
     pub note: String,
+    /// The release it is in; empty for the backlog.
+    pub release: String,
+    /// The area it is in; empty when it has none.
+    pub area: String,
 }
 
 impl Entry {
@@ -144,11 +150,13 @@ impl Entry {
             word: r.word.clone(),
             title: r.title.clone(),
             note,
+            release: r.release.clone().unwrap_or_default(),
+            area: r.area.clone().unwrap_or_default(),
         }
     }
 
     #[must_use]
-    pub fn of_item(i: &ItemRow, word: String) -> Self {
+    pub fn of_item(i: &ItemRow, word: String, release: Option<&str>, area: Option<&str>) -> Self {
         let note = standing(
             i.claim_branch.as_ref(),
             i.claim_on.as_ref().or(i.claim_host.as_ref()),
@@ -161,6 +169,8 @@ impl Entry {
             word,
             title: i.title.clone(),
             note,
+            release: release.unwrap_or_default().to_string(),
+            area: area.unwrap_or_default().to_string(),
         }
     }
 
@@ -172,6 +182,8 @@ impl Entry {
             word: d.state.clone(),
             title: d.title.clone(),
             note: format!("{chose} (from {})", d.basis),
+            release: String::new(),
+            area: String::new(),
         }
     }
 }
@@ -259,6 +271,8 @@ pub struct PlanRow {
     pub total: u64,
     pub live: u64,
     pub folded: Option<bool>,
+    /// The area this row is, when it is one: it has no item to open.
+    pub area: Option<String>,
 }
 
 #[derive(Clone)]

@@ -3,7 +3,7 @@
   import { remainingHref } from '../lib/filter';
   import { releaseOf } from '../lib/releases';
   import { at, go, withParams } from '../lib/router.svelte';
-  import { GROUPINGS, byId, plans, tally } from '../lib/flow';
+  import { GROUPINGS, byId, planWord, plans, tally } from '../lib/flow';
   import Bar from '../components/Bar.svelte';
   import Word from '../components/Word.svelte';
 
@@ -40,9 +40,7 @@
 
   function under(id: string) {
     const b = ctx.board!;
-    const node = b.nodes.get(id);
-    const standing = node?.kind === 'concept' || node?.kind === 'idea';
-    const ids = (standing ? b.related.get(id) : b.children.get(id)) ?? [];
+    const ids = b.children.get(id) ?? [];
     return ids
       .map((i) => b.nodes.get(i)!)
       .filter((n) => n && (showClosed || (n.word !== 'done' && n.word !== 'dropped')))
@@ -113,7 +111,7 @@
                 {#if releaseOf(p.node.release, ctx.releases)}<span class="release faint">{releaseOf(p.node.release, ctx.releases)}</span>{/if}
                 <a class="remaining" href={remainingHref(ctx.slug, p.node.id)}>remaining work</a>
                 <span class="state">
-                  {#if p.due}<span class="badge">Audit due</span>{:else}<Word word={p.node.word} plain />{/if}
+                  {#if p.due}<span class="badge">Audit due</span>{:else if planWord(p)}<Word word={planWord(p) ?? ''} plain />{/if}
                 </span>
                 <span class="bar">{#if p.tally.total}<Bar tally={p.tally} wide />{:else}<span class="faint">nothing under it yet</span>{/if}</span>
               </div>
@@ -191,7 +189,7 @@
   }
 
   .plan.due {
-    box-shadow: inset 3px 0 0 var(--w-checking);
+    box-shadow: inset 3px 0 0 var(--w-audit-due);
   }
 
   .line {
@@ -229,7 +227,7 @@
   .badge {
     font-size: 12px;
     font-weight: 650;
-    color: var(--w-checking);
+    color: var(--w-audit-due);
   }
 
   .bar {

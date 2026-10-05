@@ -7,18 +7,20 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde_json::Value;
 
+use docket_core::label::{self, Label};
+
 use crate::cmd::show::progress_line;
 use crate::ctx::{Ctx, id};
 use crate::fail::{Fail, Result};
 use crate::local::{self, expand};
 use crate::py::{Py, cut, or_none};
 
-const SECTIONS: [&str; 8] = [
-    "ready", "building", "checking", "blocked", "parked", "standing", "done", "dropped",
+const SECTIONS: [&str; 7] = [
+    "ready", "building", "checking", "blocked", "parked", "done", "dropped",
 ];
 
-/// The words that are not open: standing for good, or closed.
-const NOT_OPEN: [&str; 3] = ["standing", "done", "dropped"];
+/// The words that are not open.
+const NOT_OPEN: [&str; 2] = ["done", "dropped"];
 
 /// The rows under each of the words, in the order the sections are printed.
 #[must_use]
@@ -42,7 +44,7 @@ pub fn section<'a, 'b>(sections: &'a [(&str, Vec<&'b Value>)], word: &str) -> &'
         .map_or(&[], |(_, v)| v.as_slice())
 }
 
-/// How many rows are open: every word but standing, done and dropped.
+/// How many rows are open: every word but done and dropped.
 #[must_use]
 pub fn open_count(sections: &[(&str, Vec<&Value>)]) -> usize {
     sections
@@ -217,16 +219,18 @@ pub struct Target<'a> {
     pub id: Option<&'a String>,
     pub group: Option<&'a String>,
     pub theme: Option<&'a String>,
-    pub orphans: bool,
+    pub area: Option<&'a String>,
 }
 
 /// # Errors
-/// No id, group, theme or orphans is named, the project cannot be resolved, or the id is unknown.
+/// No id, group, theme or area is named, the project cannot be resolved, or the id is unknown.
 pub fn audit(ctx: &mut Ctx, t: &Target) -> Result<i32> {
     let slug = ctx.project()?;
     let given = |v: Option<&String>| v.filter(|s| !s.is_empty()).cloned();
     let item = match given(t.id) {
-        Some(x) if !t.orphans && given(t.group).is_none() && given(t.theme).is_none() => {
+        Some(x)
+            if given(t.group).is_none() && given(t.theme).is_none() && given(t.area).is_none() =>
+        {
             Some(id(&x)?)
         }
         _ => None,
@@ -234,9 +238,9 @@ pub fn audit(ctx: &mut Ctx, t: &Target) -> Result<i32> {
     let a = ctx.read(
         "/audit",
         &[
-            ("orphans", t.orphans.then(|| "true".to_string())),
             ("group", given(t.group)),
             ("theme", given(t.theme)),
+            ("area", given(t.area)),
             ("id", item),
         ],
     )?;
@@ -279,8 +283,8 @@ pub fn audit(ctx: &mut Ctx, t: &Target) -> Result<i32> {
 }
 
 fn heading(a: &Value, t: &Target) -> String {
-    if t.orphans {
-        return "Open items that belong to no concept".into();
+    if let Some(name) = t.area.filter(|n| !n.is_empty()) {
+        return format!("Area {}", a["area"]["name"].as_str().unwrap_or(name));
     }
     if let Some(g) = t.group.filter(|g| !g.is_empty()) {
         return format!("Group {g}");
@@ -295,7 +299,20 @@ fn heading(a: &Value, t: &Target) -> String {
     )
 }
 
-/// The lines under the head: a package's progress and files, or where a concept's members sit.
+/// The area an audit is of or an item sits in: its description, then its priority when it has one.
+#[must_use]
+pub fn area_lines(area: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(about) = area["description"].as_str().filter(|d| !d.is_empty()) {
+        out.push(about.to_string());
+    }
+    if let Some(p) = area["priority"].as_str() {
+        out.push(format!("priority: {p}"));
+    }
+    out
+}
+
+/// The lines under the head: a package's progress and files.
 #[must_use]
 pub fn breakdown_lines(b: &Value) -> Vec<String> {
     let mut out = Vec::new();
@@ -314,32 +331,6 @@ pub fn breakdown_lines(b: &Value) -> Vec<String> {
                 touches.join(", ")
             ));
         }
-    }
-    for label in ["by plan", "by package"] {
-        let parts: Vec<String> = b[label]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .map(|p| {
-                format!(
-                    "{} {} ({} open)",
-                    p[0].as_str().unwrap_or_default(),
-                    p[1].as_u64().unwrap_or(0),
-                    p[2].as_u64().unwrap_or(0)
-                )
-            })
-            .collect();
-        if !parts.is_empty() {
-            out.push(format!("{label}: {}", parts.join(", ")));
-        }
-    }
-    if let Some(n) = b["shared"].as_u64() {
-        let what = if b["of"] == "concept" {
-            "concepts"
-        } else {
-            "central ideas"
-        };
-        out.push(format!("{n} of these belong to other {what} too"));
     }
     out
 }
@@ -449,8 +440,10 @@ impl Report<'_> {
                 ),
             ),
             ("principles".into(), Py::Dict(principles)),
+            ("labels".into(), Py::strs(&self.labels())),
             ("bound".into(), Py::Dict(bound)),
             ("breakdown".into(), Py::strs(self.breakdown)),
+            ("area".into(), Py::from_value(&self.a["area"]["name"])),
         ])
     }
 
@@ -461,6 +454,14 @@ impl Report<'_> {
             .as_str()
             .map_or(String::new(), |w| format!(", {w}"));
         println!("{head}\n{} items, {open} open{shown}", self.rows.len());
+        if !target.is_null()
+            && let Some(name) = self.a["area"]["name"].as_str()
+        {
+            println!("  area: {name}");
+        }
+        for line in area_lines(&self.a["area"]) {
+            println!("  {line}");
+        }
         for line in self.breakdown {
             println!("  {line}");
         }
@@ -470,7 +471,7 @@ impl Report<'_> {
                 continue;
             }
             println!("  {k:<9}{:>4}", items.len());
-            if matches!(*k, "done" | "dropped" | "standing") && !(package && *k != "standing") {
+            if matches!(*k, "done" | "dropped") && !package {
                 continue;
             }
             for r in items {
@@ -515,7 +516,26 @@ impl Report<'_> {
             );
         }
         self.print_principles(target["id"].as_str().unwrap_or_default());
+        self.print_labels();
         self.print_bound();
+    }
+
+    /// The labels the target carries, each with its description.
+    fn labels(&self) -> Vec<String> {
+        let found: Vec<Label> =
+            serde_json::from_value(self.a["labels"].clone()).unwrap_or_default();
+        found.iter().map(label::line).collect()
+    }
+
+    fn print_labels(&self) {
+        let labels = self.labels();
+        if labels.is_empty() {
+            return;
+        }
+        println!("\nlabels");
+        for l in labels {
+            println!("  {l}");
+        }
     }
 
     fn print_principles(&self, target: &str) {
@@ -549,11 +569,7 @@ impl Report<'_> {
             .flatten()
             .filter_map(|b| Some((b[0].as_str()?, &b[1])))
             .collect();
-        for (kind, label) in [
-            ("idea", "central ideas"),
-            ("story", "stories"),
-            ("concept", "concepts"),
-        ] {
+        for (kind, label) in [("idea", "central ideas"), ("story", "stories")] {
             let Some(list) = bound
                 .get(kind)
                 .and_then(|l| l.as_array())
@@ -785,9 +801,98 @@ pub fn gone_branches(cited: &[(String, String)], dirs: &[PathBuf]) -> Vec<(Strin
         .collect()
 }
 
+static JOB_BRANCH: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(?:lead|audit)/([a-z]+\d+)-").unwrap());
+
+/// The item a job branch is for: `lead/b57-78530` is for `B57`.
+#[must_use]
+pub fn job_branch_item(branch: &str) -> Option<String> {
+    JOB_BRANCH
+        .captures(branch)
+        .and_then(|m| m.get(1))
+        .map(|m| m.as_str().to_uppercase())
+}
+
+/// A job branch that no live claim or job needs.
+#[derive(Debug, PartialEq, Eq)]
+pub struct StaleBranch {
+    pub name: String,
+    /// Why it is stale: its item is closed or dropped, or nothing names the branch.
+    pub why: String,
+    /// Commits on it whose patch is not on the work ref.
+    pub unique: usize,
+}
+
+/// The `lead/` and `audit/` branches in these directories whose item is closed or dropped, or that
+/// no claim or job names, with how many commits each holds that the work ref lacks. A commit
+/// whose patch is on the work ref under another sha is not counted. A branch whose item is open
+/// and which a claim or job names is not stale. `state_of` gives an item's state word.
+#[must_use]
+pub fn stale_job_branches(
+    dirs: &[PathBuf],
+    work_ref: Option<&str>,
+    state_of: impl Fn(&str) -> Option<String>,
+    named: &HashSet<String>,
+) -> Vec<StaleBranch> {
+    let target = work_ref.filter(|r| !r.is_empty()).unwrap_or("HEAD");
+    let mut out: Vec<StaleBranch> = Vec::new();
+    for d in dirs {
+        let listed = local::git(
+            &[
+                "for-each-ref",
+                "--format=%(refname:short)",
+                "refs/heads/lead",
+                "refs/heads/audit",
+            ],
+            d,
+        )
+        .unwrap_or_default();
+        for name in listed.lines().filter(|n| JOB_BRANCH.is_match(n)) {
+            if out.iter().any(|b| b.name == name) {
+                continue;
+            }
+            let closed = job_branch_item(name)
+                .and_then(|i| state_of(&i))
+                .filter(|s| NOT_OPEN.contains(&s.as_str()));
+            let why = match closed {
+                Some(s) => format!("its item is {s}"),
+                None if !named.contains(name) => "no claim or job names it".to_string(),
+                None => continue,
+            };
+            let unique = local::git(&["cherry", target, name], d)
+                .map_or(0, |o| o.lines().filter(|l| l.starts_with('+')).count());
+            out.push(StaleBranch {
+                name: name.to_string(),
+                why,
+                unique,
+            });
+        }
+    }
+    out
+}
+
+/// Delete the stale branches that hold nothing the work ref lacks, and give the names of the rest.
+/// A branch git will not delete, as one checked out in a worktree, is kept.
+#[must_use]
+pub fn prune_job_branches(dirs: &[PathBuf], stale: &[StaleBranch]) -> Vec<String> {
+    let mut kept = Vec::new();
+    for b in stale {
+        let removed = b.unique == 0
+            && dirs.iter().any(|d| {
+                let r = format!("refs/heads/{}", b.name);
+                local::git(&["rev-parse", "--verify", "-q", &r], d).is_some()
+                    && local::git(&["branch", "-D", &b.name], d).is_some()
+            });
+        if !removed {
+            kept.push(b.name.clone());
+        }
+    }
+    kept
+}
+
 /// # Errors
 /// The project has no root on this machine, or the server refuses.
-pub fn stale(ctx: &mut Ctx, open_only: bool) -> Result<i32> {
+pub fn stale(ctx: &mut Ctx, open_only: bool, prune: bool) -> Result<i32> {
     let slug = ctx.project()?;
     let project = ctx.project_row(&slug)?;
     let roots: Vec<String> = ctx
@@ -862,7 +967,79 @@ pub fn stale(ctx: &mut Ctx, open_only: bool) -> Result<i32> {
     let closed = closed_off_integration(ctx, &slug, &project)?;
     print_stale(ctx, &found_none, &gone, search.len());
     print_closed(ctx, &closed);
+    job_branches(ctx, &slug, &project, prune)?;
     Ok(0)
+}
+
+/// Report the job branches nothing needs, and with `prune` delete those holding no unlanded work.
+fn job_branches(ctx: &mut Ctx, slug: &str, project: &Value, prune: bool) -> Result<()> {
+    let dirs = repo_dirs(ctx, slug, project);
+    if dirs.is_empty() {
+        return Ok(());
+    }
+    let filter = serde_json::json!({ "project": slug }).to_string();
+    let items = ctx.api.get(
+        "/items",
+        &[("filter", filter), ("range", "[0,99999]".to_string())],
+    )?;
+    let states: HashMap<String, String> = items
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| {
+            Some((
+                r["id"].as_str()?.to_string(),
+                r["state"].as_str()?.to_string(),
+            ))
+        })
+        .collect();
+    let mut named: HashSet<String> = HashSet::new();
+    let claims: Value = ctx.api.get("/wip", &[("project", slug.to_string())])?;
+    for r in claims.as_array().into_iter().flatten() {
+        if let Some(b) = r["claim_branch"].as_str() {
+            named.insert(b.to_string());
+        }
+    }
+    for (r, _) in crate::job::rows(&crate::job::state_root(), crate::job::now()) {
+        if r.project == slug {
+            named.insert(r.branch);
+        }
+    }
+    let stale = stale_job_branches(
+        &dirs,
+        project["integration_ref"].as_str(),
+        |i| states.get(i).cloned(),
+        &named,
+    );
+    if stale.is_empty() {
+        return Ok(());
+    }
+    let kept = if prune {
+        prune_job_branches(&dirs, &stale)
+    } else {
+        Vec::new()
+    };
+    if ctx.json {
+        return Ok(());
+    }
+    println!("\nJob branches nothing needs:");
+    for b in &stale {
+        let held = if b.unique == 0 {
+            "no commits the work ref lacks".to_string()
+        } else {
+            format!("{} commits the work ref lacks", b.unique)
+        };
+        let done = if prune && !kept.contains(&b.name) {
+            ", removed"
+        } else {
+            ""
+        };
+        println!("  {}  {}; {held}{done}", b.name, b.why);
+    }
+    if !prune {
+        println!("docket stale --prune removes those with no commits the work ref lacks.");
+    }
+    Ok(())
 }
 
 /// The done work items whose closing sha is not on the integration branch, with where it is.

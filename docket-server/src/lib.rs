@@ -8,6 +8,7 @@ pub mod import;
 mod lead;
 mod machines;
 mod private;
+mod publications;
 pub mod reads;
 pub mod show;
 pub mod simplify;
@@ -119,6 +120,7 @@ fn routes(db: &DatabaseConnection, keys: Keys, stopping: watch::Receiver<bool>) 
         .merge(machines::router())
         .merge(lead::router())
         .merge(private::router())
+        .merge(publications::router())
         .nest("/do", verbs::router())
         .with_state(db.clone())
         .merge(changes::router(db, stopping))

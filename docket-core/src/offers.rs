@@ -4,7 +4,6 @@
 use serde::Serialize;
 
 use crate::item::Item;
-use crate::rules::close_plan;
 use crate::word::Kind;
 
 /// One verb an item takes now.
@@ -19,9 +18,9 @@ pub struct Offer {
 
 /// The verbs the rules accept on the item as it stands, in the order a panel lists them. A verb on a
 /// claimed item carries the holder's branch, since `rules::require_hold` refuses any other. A plan's
-/// `open_under` ids and `due` flag are what `rules::close_plan` takes: `close` is left out where it refuses.
+/// `open_under` ids are what `rules::close` takes: `close` is left out where it refuses.
 #[must_use]
-pub fn offers(row: &Item, kind: Kind, open_under: &[String], due: bool) -> Vec<Offer> {
+pub fn offers(row: &Item, kind: Kind, open_under: &[String]) -> Vec<Offer> {
     let offer = |verb, needs: &[&'static str], branch: Option<&String>| Offer {
         verb,
         needs: needs.to_vec(),
@@ -29,9 +28,6 @@ pub fn offers(row: &Item, kind: Kind, open_under: &[String], due: bool) -> Vec<O
     };
     if row.state != "open" {
         return vec![offer("reopen", &["why"], None)];
-    }
-    if kind.is_standing() {
-        return vec![offer("drop", &["why"], None)];
     }
     let held = row.claim_branch.as_ref();
     let parked = row.turn.as_deref() == Some("user");
@@ -41,9 +37,6 @@ pub fn offers(row: &Item, kind: Kind, open_under: &[String], due: bool) -> Vec<O
     } else if parked {
         out.push(offer("reply", &["note"], None));
     }
-    if parked && held.is_none() {
-        out.push(offer("retry", &["note"], None));
-    }
     if held.is_none() && row.wait_on.is_none() && !parked && row.conflict == 0 {
         out.push(offer("start", &[], None));
     }
@@ -52,7 +45,7 @@ pub fn offers(row: &Item, kind: Kind, open_under: &[String], due: bool) -> Vec<O
     }
     let closable = match kind {
         Kind::Decision => row.decision.is_some(),
-        Kind::Audit => close_plan(row, open_under, due).is_ok(),
+        Kind::Audit => held.is_some() || open_under.is_empty(),
         _ => true,
     };
     if closable {

@@ -2,9 +2,11 @@
 
 pub mod audit;
 pub mod board;
+pub mod changelog;
 pub mod detail;
 pub mod dump;
 pub mod lists;
+pub mod metrics;
 pub(crate) mod public;
 pub mod queue;
 pub(crate) mod rows;
@@ -18,7 +20,12 @@ use sea_orm::DatabaseConnection;
 pub fn router() -> Router<DatabaseConnection> {
     Router::new()
         .route("/next", get(queue::next))
+        .route("/next/halt", get(queue::halt))
         .route("/releases", get(crate::verbs::releases::list))
+        .route("/areas", get(crate::verbs::areas::list))
+        .route("/labels", get(crate::verbs::labels::list))
+        .route("/changelog", get(changelog::changelog_of))
+        .route("/metrics", get(metrics::metrics))
         .route("/status", get(queue::status))
         .route("/todo", get(lists::todo))
         .route("/todo/waiting", get(lists::todo_waiting))

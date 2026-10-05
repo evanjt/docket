@@ -27,13 +27,62 @@ fn running(pairs: &[(&str, usize)]) -> BTreeMap<String, usize> {
 }
 
 #[test]
-fn test_role_follows_the_kind() {
-    assert_eq!(role_of("audit", true), "audit");
-    assert_eq!(role_of("audit", false), "plan");
-    assert_eq!(role_of("research", false), "plan");
-    assert_eq!(role_of("work", false), "build");
-    assert_eq!(role_of("decision", false), "plan");
-    assert_eq!(role_of("story", false), "build");
+fn test_the_role_is_the_ready_rows_unless_the_lead_names_one() {
+    let plan = serde_json::json!({ "id": "A1", "role": "plan" });
+    assert_eq!(role_for(Some(&plan), None, "A1").unwrap(), "plan");
+    assert_eq!(role_for(Some(&plan), Some("audit"), "A1").unwrap(), "audit");
+    assert_eq!(role_for(None, Some("build"), "T1").unwrap(), "build");
+    assert!(
+        role_for(None, None, "T1")
+            .unwrap_err()
+            .starts_with("T1 is not in the ready queue")
+    );
+}
+
+#[test]
+fn test_an_audits_runner_counts_come_from_its_ready_row() {
+    let row = serde_json::json!({ "audit_runners": { "claude": 3, "codex": 1 } });
+    assert_eq!(
+        runner_counts(Some(&row)),
+        running(&[("claude", 3), ("codex", 1)])
+    );
+    assert!(runner_counts(None).is_empty());
+}
+
+#[test]
+fn test_a_reported_end_is_the_claims_own_and_needs_an_end() {
+    let log = serde_json::json!([
+        {"kind": "job_reported", "branch": "lead/t1-1", "data": {"end": "2026-10-05T10:00:00Z", "exit": 0}},
+        {"kind": "job_reported", "branch": "lead/t1-2", "data": {"tokens_out": 3}},
+        {"kind": "claimed", "branch": "lead/t1-3", "data": null},
+    ]);
+    assert_eq!(ended_in(&log, "lead/t1-1").unwrap()["exit"], 0);
+    assert!(
+        ended_in(&log, "lead/t1-2").is_none(),
+        "no end in the report"
+    );
+    assert!(ended_in(&log, "lead/t1-3").is_none());
+    assert!(ended_in(&serde_json::json!([]), "lead/t1-1").is_none());
+}
+
+#[test]
+fn test_machines_are_read_only_once_a_report_is_overdue() {
+    use std::time::Duration;
+    let fallback = Duration::from_secs(300);
+    assert!(!read_machines_now(Duration::from_secs(299), fallback));
+    assert!(read_machines_now(Duration::from_secs(300), fallback));
+}
+
+#[test]
+fn test_a_waited_job_is_gone_when_its_machine_no_longer_shows_it_running() {
+    let waited = vec![("beta".to_string(), "lead-t1-1".to_string())];
+    let rows = |state: &str, machine: &str| {
+        vec![serde_json::json!({"machine": machine, "name": "lead-t1-1", "state": state})]
+    };
+    assert!(!gone(&waited, &rows("running", "beta")));
+    assert!(gone(&waited, &rows("done", "beta")));
+    assert!(gone(&waited, &rows("running", "alpha")));
+    assert!(gone(&waited, &[]));
 }
 
 #[test]
@@ -452,4 +501,25 @@ fn test_commit_change_refuses_without_the_submodule_and_leaves_no_worktree() {
         git_in(&lead, &["log", "--all", "--format=%s"]),
         "Pin lib\nStart"
     );
+}
+
+#[test]
+fn test_a_branch_pushed_to_a_machine_skips_the_pre_push_hook() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    let machine = tmp.path().join("machine.git");
+    std::fs::create_dir(&repo).unwrap();
+    git_in(&repo, &["init", "-q", "-b", "main"]);
+    git_in(&repo, &["commit", "-q", "--allow-empty", "-m", "one"]);
+    git_in(tmp.path(), &["init", "-q", "--bare", "machine.git"]);
+    let hook = repo.join(".git/hooks/pre-push");
+    std::fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let url = machine.display().to_string();
+    push_to_machine(&repo, &url, "main:refs/heads/job").unwrap();
+    git_in(&machine, &["rev-parse", "refs/heads/job"]);
+    push_to_machine(&repo, &url, ":refs/heads/job").unwrap();
 }

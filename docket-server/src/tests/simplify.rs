@@ -10,8 +10,6 @@ use crate::auth::Keys;
 
 use docket_migration::scratch::Scratch;
 
-const GATE: &str = "everything it opened is closed";
-
 /// A project mid-way through the package flow: open, done and reviewed packages, a plan that held its
 /// audit round, items in the inbox and later, and work held outside a release.
 const SEED: &str = r#"
@@ -47,7 +45,6 @@ INSERT INTO items (rid, project, key, num, title, state, turn, claim_branch, cla
   (5, 'o/p', 'PK', 3, 'Reviewed package', 'open', 'agent', 'audit/pk3-r1', 'devbox', 'c', '[]', '', 'o', 'u');
 INSERT INTO items (rid, project, key, num, title, state, resolution, tags, body, opened_at, updated_at) VALUES
   (19, 'o/p', 'T', 11, 'Reviewed work', 'done', 'aaa1111', '[]', '', 'o', 'u');
-UPDATE items SET wait_on='condition', wait_ref='everything it opened is closed', wait_since='w' WHERE rid IN (6, 8);
 UPDATE items SET parent_rid=1 WHERE rid=2;
 UPDATE items SET parent_rid=3 WHERE rid=4;
 UPDATE items SET parent_rid=5 WHERE rid=19;
@@ -57,11 +54,14 @@ INSERT INTO links (rid, kind, to_rid) VALUES (2, 'related', 15), (15, 'related',
 INSERT INTO events (uid, project, rid, at, host, kind, note, data) VALUES
   ('e1', 'o/p', 6, 'a1', 'devbox', 'released', 'audit: gaps: B1', '{"audit": "gaps", "gaps": ["B1"]}'),
   ('e2', 'o/p', 1, 'a2', 'devbox', 'released', 'audit: gaps: T1', '{"audit": "gaps", "gaps": ["T1"]}');
+UPDATE items SET priority='high' WHERE rid IN (3, 11);
+UPDATE items SET priority='critical' WHERE rid=14;
 "#;
 
 async fn seeded() -> Scratch {
     let s = Scratch::new(2).await;
     s.seed(SEED).await;
+    s.seed(crate::tests::TYPES_BY_KEY).await;
     s
 }
 
@@ -129,7 +129,6 @@ async fn test_a_dry_run_reports_the_write_and_writes_nothing() {
     assert_eq!(p.open_plans, 3);
     assert_eq!(ids(&p.released), ["PK3"]);
     assert_eq!(ids(&p.closed), ["A1"]);
-    assert_eq!(ids(&p.gated), ["PK1"]);
     assert_eq!(ids(&p.unscoped), ["T5", "T6"]);
     assert_eq!(ids(&p.lowered), ["T5"]);
     assert_eq!(p.release.as_deref(), Some("1.0 2026-10-01"));
@@ -156,7 +155,7 @@ async fn test_packages_become_plans_and_the_ceremony_closes_out() {
     assert_eq!(pk["kind"], "audit");
     assert_eq!(pk["meaning"], "packages");
 
-    assert_eq!(item(&s, "PK1").await["wait_ref"], GATE);
+    assert_eq!(item(&s, "PK1").await["wait_on"], Value::Null);
     assert_eq!(item(&s, "PK3").await["claim_branch"], Value::Null);
     assert_eq!(item(&s, "PK4").await["state"], "done");
     assert_eq!(item(&s, "A1").await["state"], "done");
@@ -166,7 +165,7 @@ async fn test_packages_become_plans_and_the_ceremony_closes_out() {
             .unwrap()
             .contains("simple model")
     );
-    assert_eq!(item(&s, "A2").await["wait_ref"], GATE);
+    assert_eq!(item(&s, "A2").await["wait_on"], Value::Null);
     assert_eq!(next(&s, "audit").await, ["PK2", "PK3"]);
     assert!(next(&s, "work").await.contains(&"B1".to_string()));
 
@@ -176,15 +175,16 @@ async fn test_packages_become_plans_and_the_ceremony_closes_out() {
     )
     .await;
     assert_eq!(scoped[0], 0);
-    assert_eq!(item(&s, "T5").await["tags"], serde_json::json!(["low"]));
-    assert_eq!(item(&s, "T6").await["tags"], serde_json::json!(["high"]));
-    assert_eq!(item(&s, "T7").await["tags"], serde_json::json!([]));
-    assert_eq!(item(&s, "T12").await["tags"], serde_json::json!([]));
-    assert_eq!(item(&s, "T8").await["tags"], serde_json::json!([]));
-    assert_eq!(
-        item(&s, "T9").await["tags"],
-        serde_json::json!(["critical"])
-    );
+    for (id, tier) in [
+        ("T5", "low"),
+        ("T6", "high"),
+        ("T7", "normal"),
+        ("T12", "normal"),
+        ("T8", "normal"),
+        ("T9", "critical"),
+    ] {
+        assert_eq!(item(&s, id).await["priority"], tier, "{id}");
+    }
     let skills = rows(&s, "SELECT skills FROM projects WHERE slug='o/p'").await;
     assert_eq!(
         skills[0],

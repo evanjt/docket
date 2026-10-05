@@ -7,6 +7,7 @@ use axum::{Json, Router};
 use sea_orm::{ConnectionTrait, DatabaseConnection};
 
 use docket_core::private::Private;
+use docket_core::word::ItemType;
 
 use crate::auth::Caller;
 use crate::store::{column, sql};
@@ -18,13 +19,7 @@ const OWNERS: &str = "SELECT DISTINCT skills->>'owner' FROM projects \
 const HOSTS: &str = "SELECT host FROM events UNION SELECT claim_host FROM items \
                      WHERE claim_host IS NOT NULL UNION SELECT host FROM leads ORDER BY 1";
 const TITLES: &str = "SELECT DISTINCT title FROM items WHERE length(title) >= $1 ORDER BY 1";
-const THEMES: &str = "SELECT t->>'name' FROM projects, jsonb_array_elements(themes) t \
-                      UNION SELECT theme FROM items WHERE theme IS NOT NULL ORDER BY 1";
-const GROUPS: &str = "SELECT DISTINCT group_name FROM items \
-                      WHERE group_name IS NOT NULL AND group_name <> '' ORDER BY 1";
-const RELEASES: &str = "SELECT DISTINCT name FROM releases ORDER BY 1";
-const KEYS: &str =
-    "SELECT DISTINCT k->>'key' FROM projects, jsonb_array_elements(keys) k ORDER BY 1";
+const KEYS: &str = "SELECT DISTINCT key FROM items ORDER BY 1";
 
 pub fn router() -> Router<DatabaseConnection> {
     Router::new().route("/private", get(read))
@@ -48,19 +43,16 @@ pub async fn read(
             ))
         })
         .collect();
+    let mut keys: Vec<String> = column(&db, KEYS, vec![]).await?;
+    keys.extend(ItemType::ALL.iter().map(|t| t.key().to_string()));
+    keys.sort();
+    keys.dedup();
     Ok(Json(Private {
         projects: column(&db, PROJECTS, vec![]).await?,
         owners: column(&db, OWNERS, vec![]).await?,
         machines,
         hosts: column(&db, HOSTS, vec![]).await?,
-        keys: column(&db, KEYS, vec![]).await?,
-        themes: column(&db, THEMES, vec![]).await?,
-        groups: column(&db, GROUPS, vec![]).await?,
-        releases: column::<_, String>(&db, RELEASES, vec![])
-            .await?
-            .into_iter()
-            .filter(|r| !r.is_empty())
-            .collect(),
+        keys,
         titles: column(
             &db,
             &TITLES.replace("$1", &docket_core::private::TITLE_LEAST.to_string()),

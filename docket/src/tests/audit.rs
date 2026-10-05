@@ -88,7 +88,7 @@ fn test_closed_work_is_sorted_by_its_best_sha() {
 }
 
 #[test]
-fn test_breakdown_lines_for_a_package_and_a_concept() {
+fn test_breakdown_lines_for_a_package() {
     let pkg =
         json!({"progress": {"done": 1, "total": 3, "live": 1}, "touches": ["a.rs", "b/c.rs"]});
     assert_eq!(
@@ -98,20 +98,12 @@ fn test_breakdown_lines_for_a_package_and_a_concept() {
             "touches, 2 files: a.rs, b/c.rs"
         ]
     );
-    let con = json!({"by plan": [["A1", 4, 1]], "shared": 2, "of": "concept"});
-    assert_eq!(
-        breakdown_lines(&con),
-        [
-            "by plan: A1 4 (1 open)",
-            "2 of these belong to other concepts too"
-        ]
-    );
 }
 
 #[test]
 fn test_sections_are_found_by_word_and_open_counts_the_flow_words() {
     let rows: Vec<Value> = [
-        "ready", "blocked", "blocked", "parked", "standing", "done", "dropped",
+        "ready", "blocked", "blocked", "parked", "ready", "done", "dropped",
     ]
     .iter()
     .enumerate()
@@ -121,7 +113,7 @@ fn test_sections_are_found_by_word_and_open_counts_the_flow_words() {
     assert_eq!(section(&sections, "done").len(), 1);
     assert_eq!(section(&sections, "done")[0]["id"], "T5");
     assert_eq!(section(&sections, "blocked").len(), 2);
-    assert_eq!(open_count(&sections), 4);
+    assert_eq!(open_count(&sections), 5);
     assert!(section(&sections, "inbox").is_empty());
 }
 
@@ -269,5 +261,57 @@ fn test_misattributed_lists_done_items_whose_commit_closes_another_item() {
     assert_eq!(
         misattributed(&done, &subject),
         [("B2".to_string(), "B1".to_string())]
+    );
+}
+
+#[test]
+fn test_area_lines_give_the_description_then_the_priority() {
+    let area = json!({"name": "kites", "description": "Things that fly", "priority": "high"});
+    assert_eq!(area_lines(&area), ["Things that fly", "priority: high"]);
+    assert!(area_lines(&json!({"name": "kites", "description": "", "priority": null})).is_empty());
+    assert!(area_lines(&Value::Null).is_empty());
+}
+
+#[test]
+fn test_prune_removes_stale_job_branches_without_unique_commits_and_names_the_rest() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    git_in(dir, &["init", "-b", "main"]);
+    commit_file(dir, "base", "base");
+    git_in(dir, &["checkout", "-b", "lead/a1-100"]);
+    commit_file(dir, "one", "1");
+    git_in(dir, &["checkout", "main"]);
+    git_in(dir, &["merge", "--ff-only", "lead/a1-100"]);
+    git_in(dir, &["checkout", "-b", "lead/a2-200"]);
+    let second = commit_file(dir, "two", "2");
+    git_in(dir, &["checkout", "main"]);
+    git_in(dir, &["cherry-pick", &second]);
+    git_in(dir, &["checkout", "-b", "lead/a3-300"]);
+    commit_file(dir, "three", "3");
+    git_in(dir, &["checkout", "main"]);
+    git_in(dir, &["checkout", "-b", "lead/a4-400"]);
+    commit_file(dir, "four", "4");
+    git_in(dir, &["checkout", "main"]);
+
+    let dirs = [dir.to_path_buf()];
+    let state = |item: &str| match item {
+        "A1" | "A2" => Some("done".to_string()),
+        _ => Some("building".to_string()),
+    };
+    // A4 is claimed by a live job; A3 is open and named by nothing.
+    let named: HashSet<String> = ["lead/a4-400".to_string()].into();
+    let found = stale_job_branches(&dirs, Some("main"), state, &named);
+    let summary: Vec<(&str, usize)> = found.iter().map(|b| (b.name.as_str(), b.unique)).collect();
+    assert_eq!(
+        summary,
+        [("lead/a1-100", 0), ("lead/a2-200", 0), ("lead/a3-300", 1)]
+    );
+
+    let kept = prune_job_branches(&dirs, &found);
+    assert_eq!(kept, ["lead/a3-300"]);
+    let left = git_in(dir, &["branch", "--format=%(refname:short)"]);
+    assert_eq!(
+        left.lines().collect::<Vec<_>>(),
+        ["lead/a3-300", "lead/a4-400", "main"]
     );
 }

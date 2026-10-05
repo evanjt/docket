@@ -4,7 +4,7 @@
   let { word, plain = false }: { word: string; plain?: boolean } = $props();
 </script>
 
-<span class="word" class:plain style="--c: var(--w-{word}, var(--faint))" title={MEANING[word] ?? word}>
+<span class="word" class:plain style="--c: var(--w-{word.replace(/ /g, '-')}, var(--faint))" title={MEANING[word] ?? word}>
   <i></i>{word}
 </span>
 

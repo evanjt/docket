@@ -152,16 +152,16 @@ pub fn holders(on: &[i64], targets: &BTreeMap<i64, Target>) -> Vec<i64> {
     out
 }
 
-/// The holds of each gated plan: an edge from the plan to every open item it opened, at any depth,
+/// The holds of each plan: an edge from the plan to every open item it opened, at any depth,
 /// through items already closed. `ties` are the opened and related ties, `open` the open items.
 #[must_use]
-pub fn gate_edges<S: BuildHasher>(
+pub fn plan_edges<S: BuildHasher>(
     ties: &[Tie],
-    gated: &[i64],
+    plans: &[i64],
     open: &HashSet<i64, S>,
 ) -> Vec<(i64, i64)> {
     let mut out = Vec::new();
-    for &plan in gated {
+    for &plan in plans {
         let mut members: Vec<i64> = descendants(ties, plan)
             .into_iter()
             .filter(|m| open.contains(m))
@@ -194,6 +194,79 @@ pub fn held_later(edges: &BTreeMap<i64, Vec<i64>>, rank: &BTreeMap<i64, usize>) 
 pub fn runs_later(releases: &[String], held: Option<&str>, holder: Option<&str>) -> bool {
     let rank = |r| release_rank(releases, r).unwrap_or(usize::MAX);
     rank(holder) > rank(held)
+}
+
+/// Release order between items: an item held by another ships in the same release or a later one.
+pub mod order {
+    use std::collections::BTreeMap;
+
+    /// Each `(held, holder)` pair, by item, whose holder ships after the item it holds, once `change`
+    /// has moved items to new places. `rank` is each item's place in the releases, the backlog last;
+    /// an item with no rank is the first release.
+    #[must_use]
+    pub fn violations(
+        needs: &[(i64, i64)],
+        rank: &BTreeMap<i64, usize>,
+        change: &BTreeMap<i64, usize>,
+    ) -> Vec<(i64, i64)> {
+        let at = |rid: &i64| {
+            change
+                .get(rid)
+                .or_else(|| rank.get(rid))
+                .copied()
+                .unwrap_or(0)
+        };
+        needs
+            .iter()
+            .filter(|(held, holder)| at(holder) > at(held))
+            .copied()
+            .collect()
+    }
+
+    /// The violations `change` adds: those out of order after it that were not before it, so
+    /// inversions that already stood do not block an unrelated write.
+    #[must_use]
+    pub fn introduced(
+        needs: &[(i64, i64)],
+        rank: &BTreeMap<i64, usize>,
+        change: &BTreeMap<i64, usize>,
+    ) -> Vec<(i64, i64)> {
+        let before = violations(needs, rank, &BTreeMap::new());
+        violations(needs, rank, change)
+            .into_iter()
+            .filter(|v| !before.contains(v))
+            .collect()
+    }
+
+    /// Every move that keeps the order when `rid` goes to place `to`: `rid` itself, and either each
+    /// item it holds up, at any depth, moved later with it, or each item holding it moved earlier
+    /// with it.
+    #[must_use]
+    pub fn carry(
+        needs: &[(i64, i64)],
+        rank: &BTreeMap<i64, usize>,
+        rid: i64,
+        to: usize,
+    ) -> BTreeMap<i64, usize> {
+        let mut moved = BTreeMap::from([(rid, to)]);
+        let later = to > rank.get(&rid).copied().unwrap_or(0);
+        loop {
+            let mut grew = false;
+            for &(held, holder) in needs {
+                let at = |r: &i64| moved.get(r).or_else(|| rank.get(r)).copied().unwrap_or(0);
+                let (h, o) = (at(&held), at(&holder));
+                if o <= h {
+                    continue;
+                }
+                let (item, place) = if later { (held, o) } else { (holder, h) };
+                moved.insert(item, place);
+                grew = true;
+            }
+            if !grew {
+                return moved;
+            }
+        }
+    }
 }
 
 /// The events that move an item forward. Edits, links, labels and release moves are bookkeeping and

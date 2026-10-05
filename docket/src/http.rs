@@ -46,6 +46,23 @@ impl Api {
 }
 
 impl Api {
+    /// The slug of every project the server holds.
+    ///
+    /// # Errors
+    /// The server cannot be reached, or refuses.
+    pub fn slugs(&self) -> Result<Vec<String>> {
+        let rows = self.client.projects().map_err(|e| failed(&self.base, &e))?;
+        Ok(rows.into_iter().map(|p| p.slug).collect())
+    }
+
+    /// The server's change stream.
+    ///
+    /// # Errors
+    /// The server cannot be reached, or refuses.
+    pub fn changes(&self) -> Result<docket_client::Changes> {
+        self.client.changes().map_err(|e| failed(&self.base, &e))
+    }
+
     /// # Errors
     /// The server cannot be reached, or refuses.
     pub fn facts(&self, slug: &str) -> Result<Facts> {

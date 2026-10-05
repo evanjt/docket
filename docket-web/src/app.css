@@ -17,12 +17,13 @@
 
   --w-ready: #2f8f5b;
   --w-building: #b87700;
-  --w-checking: #2a7bc0;
+  --w-in-progress: #b87700;
+  --w-audit-due: #2a7bc0;
   --w-blocked: #c8433a;
-  --w-parked: #8a4fd0;
+  --w-waiting-on-owner: #8a4fd0;
   --w-done: #9aa2b1;
   --w-dropped: #b3b8c2;
-  --w-standing: #6b7486;
+  --w-parked: #6b7486;
 
   --font: 'Public Sans Variable', system-ui, sans-serif;
   --mono: ui-monospace, 'SF Mono', 'Cascadia Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
@@ -48,12 +49,13 @@
     --danger: #e2665c;
     --w-ready: #3a9e66;
     --w-building: #c08a1e;
-    --w-checking: #3d8bd0;
+    --w-in-progress: #c08a1e;
+    --w-audit-due: #3d8bd0;
     --w-blocked: #d45a4e;
-    --w-parked: #9c6be6;
+    --w-waiting-on-owner: #9c6be6;
     --w-done: #6b7489;
     --w-dropped: #555e70;
-    --w-standing: #8c95a8;
+    --w-parked: #8c95a8;
     color-scheme: dark;
   }
 }
@@ -74,12 +76,13 @@
   --danger: #e2665c;
   --w-ready: #3a9e66;
   --w-building: #c08a1e;
-  --w-checking: #3d8bd0;
+  --w-in-progress: #c08a1e;
+  --w-audit-due: #3d8bd0;
   --w-blocked: #d45a4e;
-  --w-parked: #9c6be6;
+  --w-waiting-on-owner: #9c6be6;
   --w-done: #6b7489;
   --w-dropped: #555e70;
-  --w-standing: #8c95a8;
+  --w-parked: #8c95a8;
   color-scheme: dark;
 }
 

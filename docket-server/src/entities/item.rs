@@ -58,8 +58,15 @@ pub struct Model {
     pub theme: Option<String>,
     #[crudcrate(filterable)]
     pub release_id: Option<i64>,
+    #[crudcrate(filterable)]
+    pub area_id: Option<i64>,
     #[crudcrate(sortable)]
     pub rank: Option<i64>,
+    #[sea_orm(column_name = "type")]
+    #[crudcrate(filterable)]
+    pub item_type: String,
+    #[crudcrate(filterable)]
+    pub priority: String,
     pub tags: serde_json::Value,
     #[crudcrate(exclude(list))]
     pub body: String,

@@ -1,10 +1,11 @@
 <script lang="ts">
   import { api } from '../lib/api';
   import { project } from '../lib/context';
-  import { MOVE_KINDS, daily, moves, plans, verbWord } from '../lib/flow';
+  import { MOVE_KINDS, daily, moves, plans } from '../lib/flow';
   import { jobLine, leadLine, machineUse } from '../lib/fleet';
-  import { releaseRows } from '../lib/releases';
+  import { checkByRelease, checkCounts, forecastLine, releaseTally, staleClaims } from '../lib/releases';
   import { clock, resource } from '../lib/live.svelte';
+  import { ITEM_KEYS } from '../lib/newitem';
   import { session } from '../lib/session.svelte';
   import { href } from '../lib/route';
   import { ago, duration, epoch, stamp } from '../lib/time';
@@ -43,15 +44,21 @@
     const seen = new Set<string>();
     return [...(todo.data ?? []), ...(questions.data ?? [])].filter((r) => !seen.has(r.id) && seen.add(r.id));
   });
-  const open = $derived(status.data ? Object.entries(status.data.by_word).filter(([w]) => !['done', 'dropped', 'standing'].includes(w)).reduce((a, [, n]) => a + n, 0) : null);
+  const open = $derived(status.data ? Object.entries(status.data.by_word).filter(([w]) => !['done', 'dropped'].includes(w)).reduce((a, [, n]) => a + n, 0) : null);
   const days = $derived(span.data ? daily(span.data, DAYS, now, span.data.length < MOST) : []);
   const closedWeek = $derived(days.slice(-7).reduce((a, d) => a + d.closed, 0));
   const recent = $derived(
     events.data && ctx.board ? moves(events.data, (rid) => ctx.board?.byRid.get(rid)?.id).slice(0, MOVES) : [],
   );
   const plansOpen = $derived(ctx.board ? plans(ctx.board, 'audit') : []);
-  const releases = $derived(ctx.board && ctx.releases.length ? releaseRows(ctx.board.nodes.values(), ctx.releases) : []);
-  const OPEN_WORDS = ['ready', 'building', 'blocked', 'parked'];
+  const measures = resource(() => (ctx.releases.length ? api.releases(ctx.slug) : null));
+  const releases = $derived((measures.data ?? []).map((m, i) => releaseTally(m, i === 0)));
+  const forecast = $derived(measures.data?.[0]?.forecast);
+  const summary = resource(() => api.summary(ctx.slug));
+  const stale = $derived(staleClaims(summary.data?.claims));
+  const problems = $derived(checkByRelease(summary.data?.problems ?? [], ctx.releases));
+  const counts = $derived(checkCounts(summary.data?.problems ?? [], ctx.slug));
+  const OPEN_WORDS = ['ready', 'building', 'waiting on owner', 'blocked', 'held later'];
   const host = (h: string | null | undefined) => (h ?? '').split('.')[0];
   const use = $derived(machines.data && wip.data ? machineUse(machines.data, wip.data, session.me?.host ?? '', now) : []);
   const COUNTED = ['claimed', 'released'];
@@ -86,6 +93,7 @@
                 <a class="id" href={ctx.item(r.id)}>{r.id}</a>
                 <a class="title" href={ctx.item(r.id)}>{r.title}</a>
                 <span class="where"><span class="id branch">{r.claim_branch}</span> on {host(r.claim_on ?? r.claim_host)}{#if jobLine(r)}<span class="job">{jobLine(r)}</span>{/if}</span>
+                {#if stale.get(r.id)}<span class="stale" title="No forward event for longer than the stale limit">{stale.get(r.id)}</span>{/if}
                 <span class="since" title={r.claim_since ?? ''}>{since ? duration(now - since) : ''}</span>
               </li>
             {/each}
@@ -122,7 +130,7 @@
             {#each next.data as r (r.id)}<ItemRow row={r} href={ctx.item(r.id)} />{/each}
           </ul>
         {:else if next.data}
-          <p class="empty">Nothing is ready. What is left is blocked or parked on you.</p>
+          <p class="empty">Nothing is ready. What is left is blocked or waiting on you.</p>
         {/if}
       </section>
 
@@ -153,7 +161,7 @@
           </ul>
           {#if yours.length > 6}<a class="more below" href={href(ctx.slug, 'yours')}>{yours.length - 6} more</a>{/if}
         {:else if todo.data}
-          <p class="empty">Nothing is parked on you and no question is open.</p>
+          <p class="empty">Nothing is waiting on you and no question is open.</p>
         {/if}
       </section>
 
@@ -163,6 +171,7 @@
             <h2>Releases</h2>
             <a class="more" href={href(ctx.slug, 'settings')}>Order</a>
           </header>
+          {#if forecast}<p class="forecast faint">{forecastLine(forecast)}</p>{/if}
           <ul class="list compact">
             {#each releases as r (r.name)}
               <li class="release">
@@ -175,6 +184,28 @@
               </li>
             {/each}
           </ul>
+        </section>
+      {/if}
+
+      {#if counts.length}
+        <section>
+          <header><h2>Check</h2></header>
+          <ul class="list compact">
+            {#each counts as c (c.kind)}
+              <li><a href={c.href}>{c.line}</a></li>
+            {/each}
+          </ul>
+          {#each problems as g (g.release)}
+            <h3 class="faint">{g.release}</h3>
+            <ul class="list compact">
+              {#each g.problems as p (`${p.id}${p.by}`)}
+                <li>
+                  <a class="id" href={ctx.item(p.id ?? '')}>{p.id}</a>
+                  <span>held by <a class="id" href={ctx.item(p.by ?? '')}>{p.by}</a> in {p.later}</span>
+                </li>
+              {/each}
+            </ul>
+          {/each}
         </section>
       {/if}
 
@@ -211,7 +242,7 @@
                 <span class="when" title={stamp(m.at)}>{ago(m.at, now)}</span>
                 <span class="verbs">
                   {#each m.verbs as [verb, ids] (verb)}
-                    <span class="verb" style="--c: var(--w-{verbWord(verb) ?? 'none'}, var(--ink))">
+                    <span class="verb">
                       <span class="v">{verb}</span>
                       {#if COUNTED.includes(verb)}{ids.length}{:else}
                         {#each ids as id (id)}<a class="id" href={ctx.item(id)}>{id}</a>{' '}{/each}
@@ -227,16 +258,16 @@
         {/if}
       </section>
 
-      {#if ctx.row?.keys.length}
+      {#if ctx.row}
         <section>
           <header><h2>Kinds</h2></header>
           <ul class="keys">
-            {#each ctx.row.keys as k (k.key)}
+            {#each ITEM_KEYS as k (k.key)}
               {@const counts = status.data?.by_key[k.key]}
               {#if counts}
                 <li>
                   <span class="id">{k.key}</span>
-                  <span class="meaning">{k.meaning ?? k.kind}</span>
+                  <span class="meaning">{k.meaning}</span>
                   <span class="words">
                     {#each Object.entries(counts).filter(([w]) => !['done', 'dropped'].includes(w)) as [w, n] (w)}
                       <a href={href(ctx.slug, 'work', { word: w })} title="{n} {w}"><Word word={w} plain />{n}</a>
@@ -265,7 +296,7 @@
   }
 
   .lede .you {
-    color: var(--w-parked);
+    color: var(--w-waiting-on-owner);
     font-weight: 600;
   }
 
@@ -324,7 +355,7 @@
 
   .run {
     display: grid;
-    grid-template-columns: 58px 1fr auto auto;
+    grid-template-columns: 58px 1fr auto auto auto;
     align-items: baseline;
     gap: 12px;
     padding: 8px 0;
@@ -453,6 +484,11 @@
     font-style: italic;
   }
 
+  .stale {
+    font-size: 12.5px;
+    color: var(--w-blocked);
+  }
+
   .since {
     font-weight: 600;
     min-width: 6ch;
@@ -478,7 +514,7 @@
     justify-self: start;
     font-size: 12px;
     font-weight: 600;
-    color: var(--w-checking);
+    color: var(--w-audit-due);
   }
 
   .moves {
@@ -543,6 +579,11 @@
     display: inline-flex;
     gap: 5px;
     font-size: 12.5px;
+  }
+
+  .forecast {
+    margin: 4px 0;
+    font-size: 13.5px;
   }
 
   .empty {

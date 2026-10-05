@@ -1,15 +1,7 @@
-export type Kind = 'work' | 'decision' | 'research' | 'audit' | 'story' | 'concept' | 'idea' | 'package';
-
-export interface KeySpec {
-  key: string;
-  kind: Kind;
-  meaning?: string | null;
-  turn?: string | null;
-}
+export type Kind = 'work' | 'decision' | 'research' | 'audit' | 'story' | 'idea' | 'package';
 
 export interface ProjectRow {
   slug: string;
-  keys: KeySpec[];
   themes: { name: string; note?: string | null }[];
   skills: Record<string, string>;
   updated_at: string;
@@ -32,6 +24,8 @@ export interface Row {
   state: string;
   word: string;
   priority: string;
+  /** What the item is: task, bug, question, investigation or plan. */
+  type?: string;
   group?: string | null;
   superseded_by?: string | null;
   turn?: string | null;
@@ -54,6 +48,8 @@ export interface Row {
   theme?: string | null;
   /** The release it is in; none is the backlog. */
   release?: string | null;
+  /** The area it is in, by name. */
+  area?: string | null;
   rank?: number | null;
   tags: string[];
   body: string;
@@ -95,6 +91,31 @@ export interface Offers {
   verbs: Offer[];
   priorities: string[];
   levels: string[];
+}
+
+/** The forecast of a release as `/metrics` works it out. */
+export interface Forecast {
+  open: number;
+  burn: number;
+  converging: boolean;
+  p50: string | null;
+  p85: string | null;
+  target: string | null;
+  late: boolean | null;
+}
+
+/** One unshipped release as `/metrics?scope=releases` counts it. */
+export interface ReleaseCounts {
+  name: string;
+  open: number;
+  ready: number;
+  building: number;
+  waiting_owner: number;
+  blocked: number;
+  closed: number;
+  held_later: number;
+  pace: number;
+  forecast: Forecast;
 }
 
 export interface Status {
@@ -173,9 +194,11 @@ export interface GraphNode {
   state: string;
   theme: string | null;
   release?: string | null;
+  /** The area it is in, by name. */
+  area?: string | null;
   title: string;
   word: string;
-  /** What a plan, story, package, concept or idea holds, as the server counts it. */
+  /** What a plan, story, package or idea holds, as the server counts it. */
   progress?: Progress;
   /** A plan due for its audit, as the server decides it. */
   due?: boolean;
@@ -201,18 +224,43 @@ export interface Deps {
   same_files?: (Row & { shared?: number })[];
 }
 
-export interface Context {
-  concepts: string[];
-  holds: string[];
-  members: string[];
-  package: string | null;
-  priority: string;
-  raised_by: string | null;
-  standing: string | null;
+/** One area as `/areas` lists it. */
+export interface Area {
+  id: number;
+  name: string;
+  description: string | null;
+  position: number;
+  priority: string | null;
 }
 
 export interface FactSet {
   project: string;
   key: string;
   skills: Record<string, string>;
+}
+
+/** One integrity problem of `/check`, with the fields its kind carries. */
+export interface Problem {
+  kind: string;
+  id?: string;
+  by?: string;
+  release?: string;
+  later?: string;
+  [field: string]: unknown;
+}
+
+/** A claim of `/summary`: its flag when nothing has moved on it for longer than the stale limit. */
+export interface Claim {
+  id: string;
+  title: string;
+  branch: string | null;
+  host: string;
+  since: number | null;
+  flag: string | null;
+}
+
+/** `/summary`: the claims with their stale flags, beside the plans and the check. */
+export interface Summary {
+  claims: Claim[];
+  problems: Problem[];
 }

@@ -120,7 +120,7 @@ fn test_check_refuses_an_unknown_key_naming_every_fact() {
         "{why}"
     );
     assert!(
-        why.ends_with("stale_claim, lead_lapse, owner_limit, flow"),
+        why.ends_with("stale_claim, lead_lapse, owner_limit, failure_limit, prices, flow"),
         "{why}"
     );
 }
@@ -307,7 +307,7 @@ fn test_with_sets_and_unsets() {
 #[test]
 fn test_releases_are_rows_never_set_as_a_fact() {
     assert_eq!(
-        refusal(check("releases", "1.0 1.1")),
+        refusal(check("releases", "1.0.0 1.1.0")),
         "releases are rows: docket releases add, move and ship change them"
     );
     assert_eq!(check("releases", ""), Ok(()));
@@ -415,4 +415,72 @@ fn test_owner_limit_defaults_to_twenty_and_is_a_count() {
     assert_eq!(default_of("owner_limit"), Some("20"));
     assert_eq!(check("owner_limit", "5"), Ok(()));
     assert!(check("owner_limit", "0").is_err());
+}
+
+#[test]
+fn test_an_audit_skips_the_runner_with_the_most_assignments_under_the_plan() {
+    let set = skills(&[("models", MODELS_SET)]);
+    let own = skills(&[]);
+    let runs =
+        |c: usize, x: usize| BTreeMap::from([("claude".to_string(), c), ("codex".to_string(), x)]);
+    assert_eq!(
+        audit_model(&set, &own, &runs(0, 0), &[]),
+        Some(model("codex", "gpt-x", Some("high")))
+    );
+    assert_eq!(
+        audit_model(&set, &own, &runs(1, 4), &[]),
+        Some(model("claude", "opus-x", Some("high")))
+    );
+    assert_eq!(
+        audit_model(&set, &own, &runs(4, 1), &[]),
+        Some(model("codex", "gpt-x", Some("high")))
+    );
+    let only = skills(&[("models", "high=codex:gpt-x audit=codex:gpt-x")]);
+    assert_eq!(
+        audit_model(&only, &own, &runs(0, 4), &[]),
+        Some(model("codex", "gpt-x", None))
+    );
+}
+
+#[test]
+fn test_publish_names_the_published_ref_and_the_remote_ref_it_is_pushed_to() {
+    let meaning = meaning("publish").unwrap();
+    assert!(meaning.contains("published origin/main"), "{meaning}");
+    assert!(meaning.contains("unset"), "{meaning}");
+    assert_eq!(
+        publish_of("published origin/main"),
+        Ok(Publish {
+            local: "published".into(),
+            remote: "origin/main".into(),
+        })
+    );
+    assert_eq!(
+        publish(&skills(&[("publish", "out/clean  upstream/trunk")])),
+        Some(Publish {
+            local: "out/clean".into(),
+            remote: "upstream/trunk".into(),
+        })
+    );
+    assert_eq!(publish(&skills(&[])), None);
+    assert_eq!(publish(&skills(&[("publish", "")])), None);
+}
+
+#[test]
+fn test_check_refuses_a_publish_that_does_not_name_two_refs() {
+    assert!(check("publish", "published origin/main").is_ok());
+    assert!(check("publish", "").is_ok());
+    for bad in [
+        "published",
+        "published origin",
+        "published origin/",
+        "published /main",
+        "a b/c d",
+        "-x origin/main",
+        "pub..lished origin/main",
+        "published origin/ma:in",
+        "published.lock origin/main",
+    ] {
+        let why = refusal(check("publish", bad));
+        assert!(why.starts_with("publish: "), "{bad}: {why}");
+    }
 }

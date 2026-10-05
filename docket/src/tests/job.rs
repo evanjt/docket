@@ -235,12 +235,29 @@ fn test_only_the_leads_verbs_are_refused_in_a_job() {
 }
 
 #[test]
-fn test_a_job_reads_the_releases_and_never_changes_them() {
-    let why = releases_refusal("ship", Some("t14-1")).unwrap();
+fn test_a_job_reads_the_releases_and_areas_and_never_changes_them() {
+    let why = owner_plan_refusal("releases", "ship", Some("t14-1")).unwrap();
     assert!(why.contains("the owner's"), "{why}");
-    assert!(releases_refusal("add", Some("t14-1")).is_some());
-    assert!(releases_refusal("list", Some("t14-1")).is_none());
-    assert!(releases_refusal("ship", None).is_none());
+    assert!(owner_plan_refusal("releases", "add", Some("t14-1")).is_some());
+    assert!(owner_plan_refusal("releases", "list", Some("t14-1")).is_none());
+    assert!(owner_plan_refusal("releases", "ship", None).is_none());
+    for action in ["add", "edit", "move", "rm"] {
+        let why = owner_plan_refusal("areas", action, Some("t14-1")).unwrap();
+        assert!(
+            why.starts_with(&format!("docket areas {action} is refused")),
+            "{why}"
+        );
+    }
+    assert!(owner_plan_refusal("areas", "list", Some("t14-1")).is_none());
+}
+
+#[test]
+fn test_a_job_installs_nothing_outside_its_worktree() {
+    let why = install_refusal("install", Some("t1-1")).unwrap();
+    assert!(why.contains("t1-1"), "{why}");
+    assert!(install_refusal("install", Some("")).is_none());
+    assert!(install_refusal("diff", Some("t1-1")).is_none());
+    assert!(install_refusal("install", None).is_none());
 }
 
 #[test]
@@ -309,6 +326,10 @@ impl Machine {
             effort: Some("high".into()),
             role: "build".into(),
             provision: None,
+            launch: Launch {
+                reporter: None,
+                cap: Cap::Rlimit(u32::MAX),
+            },
         }
     }
 }
@@ -330,7 +351,7 @@ fn test_run_starts_the_session_in_its_worktree_and_reads_its_report() {
     .unwrap();
     assert!(started.child.wait().unwrap().success());
     assert_eq!(started.name, "lead-t14-1");
-    let wt = m.tmp.path().join("sample-lead-t14-1");
+    let wt = m.tmp.path().join("sample-slot1");
     let ran = fs::read_to_string(wt.join("ran")).unwrap();
     assert!(ran.ends_with(" lead-t14-1\n"), "{ran}");
     let real = fs::canonicalize(&wt).unwrap();
@@ -490,31 +511,46 @@ fn test_a_brief_keeps_a_routine_choice_out_of_the_questions() {
 }
 
 #[test]
-fn test_a_job_files_nothing_without_naming_its_release_and_names_the_backlog_as_empty() {
-    let why = unreleased("new", Some("lead-t14-7"), None).unwrap();
+fn test_a_job_files_nothing_without_naming_its_release_and_its_area_or_plan() {
+    let why = unfiled("new", Some("lead-t14-7"), None, Some("kites"), None).unwrap();
     assert!(why.contains("--release"), "{why}");
     assert_eq!(
-        unreleased("add", Some("lead-t14-7"), None),
+        unfiled("add", Some("lead-t14-7"), None, Some("kites"), None),
         Some(why.replace("new", "add"))
     );
-    assert_eq!(unreleased("add", Some("lead-t14-7"), Some("")), None);
-    assert_eq!(unreleased("new", Some("lead-t14-7"), Some("current")), None);
-    assert_eq!(unreleased("new", None, None), None);
-    assert_eq!(unreleased("new", Some(""), None), None);
+    let why = unfiled("new", Some("lead-t1-1"), Some("current"), None, None).unwrap();
+    assert!(why.contains("--area"), "{why}");
+    assert!(why.contains("--parent"), "{why}");
+    assert_eq!(
+        unfiled("add", Some("lead-t14-7"), Some(""), Some("kites"), None),
+        None
+    );
+    assert_eq!(
+        unfiled("new", Some("lead-t14-7"), Some("current"), None, Some("A3")),
+        None
+    );
+    assert_eq!(unfiled("new", None, None, None, None), None);
+    assert_eq!(unfiled("new", Some(""), None, None, None), None);
+}
+
+#[test]
+fn test_every_brief_that_files_names_the_area_or_the_plan_beside_the_release() {
+    for role in ["build", "plan", "audit"] {
+        let text = brief(role, "T14", "lead/t14-7").unwrap();
+        assert!(text.contains("--area"), "{role}");
+    }
+    for role in ["build", "plan"] {
+        let text = brief(role, "T14", "lead/t14-7").unwrap();
+        assert!(text.contains("--parent"), "{role}");
+    }
 }
 
 #[test]
 fn test_every_brief_triages_a_filing_by_what_it_is() {
     for (role, _) in BRIEFS {
         let text = brief(role, "T14", "lead/t14-7").unwrap();
-        let nature = text.find("Its nature").unwrap_or(usize::MAX);
-        let serves = text.find("What it serves").unwrap_or(usize::MAX);
-        let otherwise = text.find("Otherwise").unwrap_or(usize::MAX);
-        assert!(
-            nature < serves && serves < otherwise && otherwise < usize::MAX,
-            "{role}"
-        );
-        assert!(text.contains("--release current"), "{role}");
+        assert!(!text.contains("Its nature"), "{role}");
+        assert!(text.contains("takes the plan's release"), "{role}");
         assert!(text.contains("**Release.**"), "{role}");
     }
 }
@@ -581,7 +617,7 @@ fn test_run_refuses_and_leaves_nothing_when_provisioning_fails() {
         why.contains("provision") && why.contains("no space"),
         "{why}"
     );
-    assert!(!m.tmp.path().join("sample-lead-t14-1").exists());
+    assert!(!m.tmp.path().join("sample-slot1").exists());
     assert!(rows(&m.state(), now()).is_empty());
 }
 
@@ -667,4 +703,183 @@ fn test_removing_a_lead_job_leaves_the_checkout_and_its_branch() {
     assert!(m.checkout().join(".git").exists());
     let branch = git(&m.checkout(), &["branch", "--show-current"]).unwrap();
     assert_eq!(branch, "main");
+}
+
+#[test]
+fn test_a_removed_job_parks_its_worktree_and_the_next_job_reuses_it() {
+    let m = Machine::new();
+    let program = m.runner("true");
+    let mut first = run(
+        &Machine::spec("lead/t14-1"),
+        &m.checkout(),
+        &m.state(),
+        &[],
+        &program,
+    )
+    .unwrap();
+    first.child.wait().unwrap();
+    fs::create_dir_all(first.worktree.join("target")).unwrap();
+    fs::write(first.worktree.join("target/built"), "x").unwrap();
+    fs::write(first.worktree.join(".gitignore"), "target\n").unwrap();
+    fs::write(first.worktree.join("stray"), "x").unwrap();
+    remove(&first.dir, false).unwrap();
+    assert!(
+        first.worktree.is_dir(),
+        "the worktree is parked, not removed"
+    );
+    assert!(!first.worktree.join("stray").exists());
+    assert!(first.worktree.join("target/built").exists());
+
+    git(&m.checkout(), &["branch", "lead/t15-2"]).unwrap();
+    let mut second = run(
+        &Machine::spec("lead/t15-2"),
+        &m.checkout(),
+        &m.state(),
+        &[],
+        &program,
+    )
+    .unwrap();
+    second.child.wait().unwrap();
+    assert_eq!(second.worktree, first.worktree);
+    let on = git(&second.worktree, &["branch", "--show-current"]).unwrap();
+    assert_eq!(on, "lead/t15-2");
+    assert!(second.worktree.join("target/built").exists());
+}
+
+#[test]
+fn test_a_running_jobs_worktree_is_not_handed_to_another_job() {
+    let m = Machine::new();
+    let program = m.runner("true");
+    let one = run(
+        &Machine::spec("lead/t14-1"),
+        &m.checkout(),
+        &m.state(),
+        &[],
+        &program,
+    )
+    .unwrap();
+    git(&m.checkout(), &["branch", "lead/t15-2"]).unwrap();
+    let two = run(
+        &Machine::spec("lead/t15-2"),
+        &m.checkout(),
+        &m.state(),
+        &[],
+        &program,
+    )
+    .unwrap();
+    assert_ne!(one.worktree, two.worktree);
+}
+
+/// A reporter standing in for `docket`: it records its arguments and whether the exit file was
+/// already there, then exits as `$REPORTER_EXIT`.
+const REPORTER: &str = r#"#!/bin/sh
+echo "$@" > "$(dirname "$3")/reported-args"
+[ -f "$3/exit" ] && echo seen > "$(dirname "$3")/exit-first"
+exit "${REPORTER_EXIT:-0}"
+"#;
+
+fn reporter(m: &Machine) -> std::path::PathBuf {
+    let path = m.tmp.path().join("reporter");
+    fs::write(&path, REPORTER).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+#[test]
+fn test_a_job_that_ends_writes_its_exit_then_calls_the_reporter_with_its_directory() {
+    let m = Machine::new();
+    let mut spec = Machine::spec("lead/t14-1");
+    spec.launch.reporter = Some(reporter(&m));
+    let mut started = run(&spec, &m.checkout(), &m.state(), &[], &m.runner("exit 3")).unwrap();
+    assert!(started.child.wait().unwrap().success());
+    assert_eq!(
+        fs::read_to_string(started.dir.join("exit")).unwrap().trim(),
+        "3"
+    );
+    let parent = started.dir.parent().unwrap();
+    let args = fs::read_to_string(parent.join("reported-args")).unwrap();
+    assert_eq!(args.trim(), format!("job report {}", started.dir.display()));
+    assert!(
+        parent.join("exit-first").exists(),
+        "the exit file came after the report"
+    );
+}
+
+#[test]
+fn test_a_reporter_that_fails_changes_nothing_about_the_job() {
+    let m = Machine::new();
+    let mut spec = Machine::spec("lead/t14-1");
+    spec.launch.reporter = Some(reporter(&m));
+    let program = m.runner(r#"printf '%s\n' '{"type":"result","result":"NOTE n\nDONE abc","usage":{"output_tokens":1}}'"#);
+    let mut started = run(
+        &spec,
+        &m.checkout(),
+        &m.state(),
+        &[("REPORTER_EXIT", "1")],
+        &program,
+    )
+    .unwrap();
+    assert!(started.child.wait().unwrap().success());
+    let rows = rows(&m.state(), now());
+    let [(r, _)] = rows.as_slice() else {
+        panic!("{rows:?}")
+    };
+    assert_eq!(r.state, State::Done);
+}
+
+#[test]
+fn test_a_job_without_a_reporter_calls_nothing() {
+    let m = Machine::new();
+    assert!(Launch::default().reporter.is_none());
+    let mut started = run(
+        &Machine::spec("lead/t14-1"),
+        &m.checkout(),
+        &m.state(),
+        &[],
+        &m.runner("true"),
+    )
+    .unwrap();
+    assert!(started.child.wait().unwrap().success());
+    assert!(started.dir.join("exit").exists());
+}
+
+#[test]
+fn test_the_process_cap_is_systemd_where_a_user_manager_runs_and_rlimit_where_not() {
+    assert_eq!(Cap::choose(true, true, 2000), Cap::Systemd(2000));
+    assert_eq!(Cap::choose(true, false, 2000), Cap::Rlimit(2000));
+    assert_eq!(Cap::choose(false, true, 2000), Cap::Rlimit(2000));
+}
+
+#[test]
+fn test_a_systemd_cap_runs_the_wrapper_inside_a_scope_with_a_task_limit() {
+    let words = vec!["sh".to_string(), "-c".to_string(), "x".to_string()];
+    let (program, args) = Cap::Systemd(2000).command(&words);
+    assert_eq!(program, "systemd-run");
+    assert_eq!(
+        args,
+        [
+            "--user",
+            "--scope",
+            "--quiet",
+            "-p",
+            "TasksMax=2000",
+            "--",
+            "sh",
+            "-c",
+            "x"
+        ]
+    );
+    let (program, args) = Cap::Rlimit(2000).command(&words);
+    assert_eq!((program.as_str(), args), ("sh", words[1..].to_vec()));
+}
+
+#[test]
+fn test_a_job_that_forks_past_an_rlimit_cap_has_its_processes_refused() {
+    let m = Machine::new();
+    let mut spec = Machine::spec("lead/t14-1");
+    spec.launch.cap = Cap::Rlimit(1);
+    let program = m.runner("touch forked");
+    let mut started = run(&spec, &m.checkout(), &m.state(), &[], &program).unwrap();
+    started.child.wait().unwrap();
+    assert!(!started.worktree.join("forked").exists());
 }

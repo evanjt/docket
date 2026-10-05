@@ -20,10 +20,10 @@ export function caption(shown: number, total: number | null): string {
 }
 
 const WORD_LISTS: Record<string, string> = {
-  building: 'wip',
+  'in progress': 'wip',
   ready: 'next',
   blocked: 'waiting',
-  parked: 'todo',
+  'waiting on owner': 'todo',
   done: 'done',
   dropped: 'dropped',
 };
@@ -33,9 +33,9 @@ export function wordList(word: string): string | null {
   return WORD_LISTS[word] ?? null;
 }
 
-const GROUPING_KINDS: Kind[] = ['audit', 'story', 'package', 'concept', 'idea'];
+const GROUPING_KINDS: Kind[] = ['audit', 'story', 'package', 'idea'];
 
-/** The graph nodes of one word that are queue items: plans, packages and standing kinds are shown on the Plans page. */
+/** The graph nodes of one word that are queue items: plans and packages are shown on the Plans page. */
 export function queueNodes(b: Board, word: string): GraphNode[] {
   return [...b.nodes.values()].filter((n) => n.word === word && !GROUPING_KINDS.includes(n.kind));
 }

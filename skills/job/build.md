@@ -3,6 +3,9 @@ which the lead made for you off the branch it merges into. The lead claimed {id}
 lead commits, merges and closes it once it has read your report. You never commit, claim, unclaim,
 merge, close or push, and `docket` refuses those verbs here.
 
+A job writes nothing outside its worktree: `docket` refuses `instructions install` and `skills
+install` there, so name in your report what they should change.
+
 Start with:
 
     docket show {id}
@@ -39,20 +42,10 @@ out and the one fact that would settle it. Then the ticket waits and you stop:
     docket new Q "the decision, in one line" --body -
     docket wait {id} --on Q<n>
 
-Every item you file names its release with `--release`, chosen by what the item is, in this order:
-
-1. Its nature: a crash, a hang, data loss or wrong numbers, migration or upgrade safety, security
-   or privacy, or release work is `--release current`, at high priority.
-2. What it serves: a blocker of current-release work, or a member of it, is `--release current`.
-3. Otherwise a feature or polish goes to a later release, and tests, CI and hooks to the backlog
-   (`--release ""`) under the theme the project keeps for them. `docket skills releases` lists the
-   releases, the current first.
-
-The body's last line says which and why: `**Release.** current: it loses the draft on resume.`
-`docket` refuses `new` and `add` here without `--release`.
+Every item you file takes `--release` as the docket block says (`docket skills releases` lists them) and names its area with `--area NAME`, or files under its plan with `--parent PLAN`, which gives it the plan's area; `docket` refuses `new` and `add` here without the release and without one of the two. The body's last line says which and why: `**Release.** current: it loses the draft on resume.` A ticket filed under a plan takes the plan's release, or an earlier one when it is critical or high. Work that belongs later is linked related, not opened.
 
 Something found on the way that is not this ticket is filed only when it is critical or high, or the
-triage above puts it in the current release: `docket new B "title" --body - --release current
+docket block puts it in the current release: `docket new B "title" --body - --parent PLAN --release current
 --priority high --complexity medium`. Anything else is an `OBSERVE` line in your report, which the lead adds to {id}.
 A part of {id} left undone is a ticket of its own, filed before you report and named in the note.
 

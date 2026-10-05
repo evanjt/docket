@@ -66,6 +66,8 @@ pub enum Listing {
     Ties(String),
     /// The items of one group.
     Group(String),
+    /// The items the problems of one kind name.
+    Problems(String),
 }
 
 impl Listing {
@@ -81,6 +83,7 @@ impl Listing {
             },
             Listing::Ties(id) => id.clone(),
             Listing::Group(name) => format!("group {name}"),
+            Listing::Problems(kind) => format!("check {kind}"),
         }
     }
 }

@@ -19,6 +19,8 @@ complexity: null
 group: null
 theme: "ui"
 rank: null
+type: "bug"
+priority: "normal"
 tags: []
 related: []
 opened_at: "2026-02-01T00:00:00Z"

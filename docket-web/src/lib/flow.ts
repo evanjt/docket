@@ -2,20 +2,21 @@ import type { EventRow, Graph, GraphNode, Kind, Progress } from './types';
 import { day, epoch } from './time';
 
 /** The flow read left to right, then the words that sit beside it. */
-export const FLOW = ['ready', 'building', 'checking'] as const;
-export const ASIDE = ['blocked', 'parked'] as const;
+export const FLOW = ['ready', 'in progress', 'building', 'audit due'] as const;
+export const ASIDE = ['blocked', 'waiting on owner', 'parked'] as const;
 export const CLOSED = ['done', 'dropped'];
 
 /** What each word means, as the TUI's help words it. */
 export const MEANING: Record<string, string> = {
   ready: 'waiting for an agent to take it',
-  building: 'a job or a person is working on it now, or a plan whose tickets are open',
-  checking: 'an old package under its review',
-  blocked: 'waiting on another item or a condition',
-  parked: 'waiting on you: something only you can do',
+  'in progress': 'a job or a person is working on it now',
+  building: 'a plan whose tickets are open',
+  'audit due': 'a plan whose tickets are all closed, waiting for its audit',
+  blocked: 'held by a dependency that is not yet satisfied',
+  'waiting on owner': 'waiting on you: something only you can do',
+  parked: 'set aside, in no queue',
   done: 'closed',
   dropped: 'dropped',
-  standing: 'a concept or idea, open for good',
 };
 
 /** The groupings a plans page shows, plans first: the simple model keeps only plans in the queue. */
@@ -23,9 +24,12 @@ export const GROUPINGS: { kind: Kind; title: string }[] = [
   { kind: 'audit', title: 'Plans' },
   { kind: 'story', title: 'Stories' },
   { kind: 'package', title: 'Packages' },
-  { kind: 'concept', title: 'Concepts' },
-  { kind: 'idea', title: 'Central ideas' },
 ];
+
+/** The custom property that colours a word; a word of several is joined with dashes. */
+export function wordVar(word: string): string {
+  return `var(--w-${word.replace(/ /g, '-')})`;
+}
 
 export function isClosed(word: string): boolean {
   return CLOSED.includes(word);
@@ -91,6 +95,11 @@ export interface PlanRow {
   tally: Tally;
   /** The server holds the plan due for its audit. */
   due: boolean;
+}
+
+/** The word drawn beside a plan: none while it is building, where its tally is the whole state. */
+export function planWord(row: PlanRow): string | null {
+  return row.node.word === 'building' ? null : row.node.word;
 }
 
 /** The open items of one kind with their progress, the due ones first, then the nearest done. */
@@ -174,17 +183,3 @@ export const MOVE_KINDS = [
   'opened', 'reopened', 'closed', 'dropped', 'claimed', 'released', 'claim_lost',
   'asked', 'replied', 'decided', 'waited', 'resumed',
 ];
-
-/** The word a verb leads to, for its colour, as the TUI tints it. */
-export function verbWord(kind: string): string | null {
-  switch (kind) {
-    case 'closed': return 'done';
-    case 'released': case 'replied': case 'resumed': case 'reopened': case 'opened': return 'ready';
-    case 'claimed': return 'building';
-    case 'asked': return 'parked';
-    case 'decided': return 'checking';
-    case 'waited': return 'blocked';
-    case 'dropped': case 'claim_lost': return 'dropped';
-    default: return null;
-  }
-}

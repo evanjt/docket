@@ -33,3 +33,28 @@ export const WORDING: Record<Verb, { label: string; done: string }> = {
   reopen: { label: 'Reopen', done: 'Reopened' },
   drop: { label: 'Drop', done: 'Dropped' },
 };
+
+/** What the edit form held when it opened. */
+export interface Opened {
+  title: string;
+  body: string;
+  updated_at: string;
+}
+
+/**
+ * The edit verb's request, or null when nothing changed. The title and body are compared with the
+ * copy taken when the form opened, not the live item, and a body carries that copy's `updated_at`
+ * so the server refuses it against a newer row.
+ */
+export function editRequest(
+  opened: Opened,
+  title: string,
+  body: string,
+  id: string,
+  common: { project: string; branch: string | null },
+): object | null {
+  const set = title.trim() && title.trim() !== opened.title ? [{ field: 'title', value: title.trim() }] : [];
+  const changed = body !== opened.body;
+  if (!set.length && !changed) return null;
+  return { ...common, id, set, body: changed ? body : null, expect_updated_at: changed ? opened.updated_at : null };
+}

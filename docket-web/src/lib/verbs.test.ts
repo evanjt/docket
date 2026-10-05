@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { verbs } from './verbs';
+import { editRequest, verbs } from './verbs';
 import type { Shown } from './types';
 
 const item = (over: Partial<Shown>): Shown => ({
@@ -34,5 +34,26 @@ describe('verbs', () => {
 
   it('offers nothing on a standing item', () => {
     expect(verbs(item({ word: 'standing' }), 'concept', true)).toEqual([]);
+  });
+});
+
+describe('editRequest', () => {
+  const opened = { title: 'Old', body: 'first', updated_at: 'u1' };
+  const common = { project: 'o/p', branch: null };
+
+  it('sends no body on a title-only edit after the item changed under the form', () => {
+    expect(editRequest(opened, 'New', 'first', 'T1', common)).toEqual({
+      ...common, id: 'T1', set: [{ field: 'title', value: 'New' }], body: null, expect_updated_at: null,
+    });
+  });
+
+  it('sends the edited body with the stamp the form opened on', () => {
+    expect(editRequest(opened, 'Old', 'second', 'T1', common)).toEqual({
+      ...common, id: 'T1', set: [], body: 'second', expect_updated_at: 'u1',
+    });
+  });
+
+  it('sends nothing when nothing changed', () => {
+    expect(editRequest(opened, 'Old', 'first', 'T1', common)).toBeNull();
   });
 });

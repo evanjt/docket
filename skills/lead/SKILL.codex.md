@@ -28,7 +28,10 @@ starts from it and every merge goes back into it.
     docket machines
     docket lead take --session lead-$RANDOM
 
-`docket skills` must show `models`; without it, say so in one line and stop.
+`docket skills` shows `models` with the level it came from (project, owner or
+default); name that level in your first report line. A project sets `models` only
+when it differs from the owner's: `docket skills set --all-projects models "..."`
+writes the owner level.
 `docket machines` marks the machine you run on; every other one is reached over
 ssh by `docket`, never by you. A refused `lead take` means another lead holds
 the project: say who in one line and stop.
@@ -57,6 +60,11 @@ nothing, see the running jobs through, then stop. run: carry on.
 `docket jobs` shows every machine's jobs; `docket machines` their slots.
 
 ### 3. Dispatch until the slots are full
+
+Land before you dispatch. Every job that reported DONE is merged and on your
+branch (step 4) before any new job starts, so a claim shown as building is
+always a job that is running. When several end together, land them as one
+batch with one gate run rather than one gate run each.
 
 Audits first (they close plans), then plans and investigations, then tickets,
 each list in the order `next` gives it (most urgent first):
@@ -100,24 +108,41 @@ checkout's clone of it, on a branch of the job's name, and the job's commit
 points at it: push it nowhere. A collect that cannot commit keeps the job, so
 fix what it names and collect again.
 
-Merge it into your branch through a worktree, so your checkout only ever
-fast-forwards:
+Check the branch moved past your branch (`git log --oneline -1 <the job's
+branch>`): a report of DONE with no commit is a lost change, sent back as
+FAILED.
 
-    git worktree add ../merge-t14 <the job's branch>
-    git -C ../merge-t14 rebase <your branch>
+Collect every job that ended, then merge them all into one batch branch in a
+worktree, so your checkout only ever fast-forwards:
 
-If the rebase moved it, run the project's gates in `../merge-t14`. Then:
+    git worktree add ../merge-batch -b lead/batch <your branch>
+    git -C ../merge-batch merge --no-ff --no-edit <each job's branch>
 
-    git merge --ff-only <the job's branch>
-    git worktree remove ../merge-t14
-    docket --branch <the job's branch> close T14 <sha now on your branch>
+**A conflict is yours to resolve, there and then.** Read both sides and the
+items behind them, keep what each change meant, finish the merge and go on to
+the next branch. Never leave a finished build waiting for a job to rebase it.
 
-Check content, not reachability: `git show HEAD:<a file it touched>`. Delete
-the job's branch once merged. A rebase that conflicts, or gates that fail
-after the rebase: `git rebase --abort`, remove the worktree, and give the
-ticket back to run again from the new head:
+Then land the batch with the project's merge command (`docket skills` prints
+it), which runs the gates, or with the gates by hand and
+`git merge --ff-only lead/batch`. When a gate fails:
 
-    docket --branch <the job's branch> release T14 "conflicts with <what> after <sha>: rerun on the new head"
+- On your resolution, or on something mechanical (formatting, a generated
+  file): fix it in the batch with a commit of its own and land again.
+- On a build's own behaviour: drop that one branch from the batch, land the
+  rest, and send it back with the failing lines in the item:
+
+      docket edit T14 --append "fails <gate> on <sha>: <the failing lines>"
+      docket --branch <the job's branch> release T14 "fails <gate> on <sha>: fix on the new head"
+      docket dispatch T14
+
+Once landed, close each item with its own commit, now on your branch, and
+delete the merged branches and the worktree:
+
+    docket --branch <the job's branch> close T14 <its sha>
+    git branch -d <the job's branch> lead/batch
+    git worktree remove ../merge-batch
+
+Check content, not reachability: `git show HEAD:<a file it touched>`.
 
 **DONE, for an audit.** Close the plan with the job's note:
 
@@ -153,8 +178,11 @@ every item left is blocked, parked on the owner or held by another session.
 
 ## Rules
 
-- Never build, fix, review or answer anything yourself: a job does it. A
-  merge conflict goes back as a fresh job, never resolved by hand.
+- Never build a ticket, review or answer anything yourself: a job does it.
+  Merging is yours, including every conflict and the mechanical fixes a gate
+  asks of a merge. Only a build whose own behaviour fails goes back to a job.
+- Every claim is a running job. A finished build is landed or given back in
+  the same pass, never held while more jobs run.
 - Never push. Never `--force` a claim, and never release one you did not make.
 - Never kill a running job unless it outruns `job_timeout` minutes: `docket
   job kill NAME` on its machine, then as FAILED.

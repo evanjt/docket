@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
+use docket_core::api::Facts;
 use docket_core::api::{Common, EditRequest, ReleaseRequest, StartRequest, Started};
 use docket_core::fact::{self, Model, Role};
 use docket_core::machine::Machine;
@@ -24,6 +25,7 @@ pub struct Ask<'a> {
     pub model: Option<&'a str>,
     pub effort: Option<&'a str>,
     pub role: Option<&'a str>,
+    pub force: bool,
 }
 
 /// Claim an item on a fresh branch, push the base to a machine and start its job there.
@@ -49,11 +51,12 @@ pub fn dispatch(ctx: &mut Ctx, ask: &Ask) -> Result<i32> {
         Some(r) => r.to_string(),
         None => role_of(&kind_of(&ctx.project_row(&slug)?, key)).to_string(),
     };
-    let skills = ctx.api.facts(&slug)?.skills;
-    let model = model(ask, &skills, &role, item["complexity"].as_str())?;
+    let facts = ctx.api.facts(&slug)?;
+    let model = model(ask, &facts, &role, item["complexity"].as_str())?;
     let machines = machines(ctx)?;
-    let running = running(&machines, &here);
-    let m = pick(&machines, &running, ask.on, &model.runner, &here)?;
+    refuse_a_running_group(ctx, &item, &machines, &here, ask.force)?;
+    let (running, unread) = running(&machines, &here);
+    let m = pick(&machines, &running, &unread, ask.on, &model.runner, &here)?;
     let via = Via::of(m, &here);
     let checkout = via
         .docket(&strings(&["-p", &slug, "job", "where"]))
@@ -457,12 +460,7 @@ fn start(
 
 /// The model the job runs on: the one asked for, else the `models` fact's for its role and
 /// complexity.
-fn model(
-    ask: &Ask,
-    skills: &BTreeMap<String, String>,
-    role: &str,
-    complexity: Option<&str>,
-) -> Result<Model> {
+fn model(ask: &Ask, facts: &Facts, role: &str, complexity: Option<&str>) -> Result<Model> {
     if let (Some(runner), Some(model)) = (ask.runner, ask.model) {
         return Ok(Model {
             runner: runner.to_string(),
@@ -475,7 +473,7 @@ fn model(
         "plan" => Role::Plan,
         _ => Role::Build,
     };
-    let Some(mut m) = fact::model_for(skills, role_of, complexity) else {
+    let Some(mut m) = fact::model_for(&facts.skills, &facts.owner, role_of, complexity) else {
         return Err(Fail::refused(
             "no model for this job: set the models fact (docket skills set models \"high=claude:MODEL:high ...\") \
              or pass --runner and --model",
@@ -509,6 +507,7 @@ fn machines(ctx: &mut Ctx) -> Result<Vec<Machine>> {
 fn pick<'a>(
     machines: &'a [Machine],
     running: &BTreeMap<String, usize>,
+    unread: &BTreeMap<String, String>,
     on: Option<&str>,
     runner: &str,
     here: &str,
@@ -516,7 +515,8 @@ fn pick<'a>(
     let Some(name) = on else {
         return choose(machines, running, runner, here).ok_or_else(|| {
             Fail::refused(format!(
-                "no machine has {runner} and a free slot: docket jobs shows what runs"
+                "no machine has {runner} and a free slot: docket jobs shows what runs{}",
+                unread_note(unread)
             ))
         });
     };
@@ -527,6 +527,13 @@ fn pick<'a>(
         return Err(Fail::refused(format!("{name} has no {runner}")));
     }
     if crate::dispatch::free(m, running) == 0 {
+        if let Some(why) = unread.get(name) {
+            return Err(Fail::refused(format!(
+                "{name} cannot be read: {}{}",
+                first_line(why),
+                update_hint(why)
+            )));
+        }
         return Err(Fail::refused(format!(
             "{name} runs {} jobs, its slots: docket jobs",
             m.slots
@@ -535,17 +542,58 @@ fn pick<'a>(
     Ok(m)
 }
 
-/// The jobs running on each machine, every project's; a machine that cannot be read counts as full.
-fn running(machines: &[Machine], here: &str) -> BTreeMap<String, usize> {
-    machines
-        .iter()
-        .map(|m| {
-            let n = read(m, here, None).map_or(usize::MAX, |rows| {
-                rows.iter().filter(|r| r["state"] == "running").count()
-            });
-            (m.name.clone(), n)
-        })
-        .collect()
+/// The jobs running on each machine, every project's, and the reason for each machine that could
+/// not be read, which counts as full.
+fn running(
+    machines: &[Machine],
+    here: &str,
+) -> (BTreeMap<String, usize>, BTreeMap<String, String>) {
+    let mut counts = BTreeMap::new();
+    let mut unread = BTreeMap::new();
+    for m in machines {
+        match read(m, here, None) {
+            Ok(rows) => {
+                counts.insert(
+                    m.name.clone(),
+                    rows.iter().filter(|r| r["state"] == "running").count(),
+                );
+            }
+            Err(why) => {
+                counts.insert(m.name.clone(), usize::MAX);
+                unread.insert(m.name.clone(), why);
+            }
+        }
+    }
+    (counts, unread)
+}
+
+fn first_line(why: &str) -> &str {
+    why.lines().next().unwrap_or_default()
+}
+
+/// A remote whose docket has no `job` command answers with a usage error naming it.
+fn update_hint(why: &str) -> &'static str {
+    let lower = why.to_lowercase();
+    if lower.contains("job") && (lower.contains("unrecognized") || lower.contains("unknown")) {
+        " (its docket has no job command: update its client)"
+    } else {
+        ""
+    }
+}
+
+/// One line per machine that could not be read, to follow a refusal.
+fn unread_note(unread: &BTreeMap<String, String>) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    for (name, why) in unread {
+        let _ = write!(
+            out,
+            "\n{name} cannot be read: {}{}",
+            first_line(why),
+            update_hint(why)
+        );
+    }
+    out
 }
 
 /// One machine's jobs, each with the machine's name added.
@@ -571,10 +619,57 @@ fn read_all(machines: &[Machine], here: &str, slug: Option<&str>) -> Vec<Value> 
     for m in machines {
         match read(m, here, slug) {
             Ok(rows) => out.extend(rows),
-            Err(why) => eprintln!("docket jobs: {} cannot be read: {why}", m.name),
+            Err(why) => eprintln!(
+                "docket jobs: {} cannot be read: {}{}",
+                m.name,
+                first_line(&why),
+                update_hint(&why)
+            ),
         }
     }
     out
+}
+
+/// Refuse an item whose group has another member with a job running, naming that job.
+fn refuse_a_running_group(
+    ctx: &mut Ctx,
+    item: &Value,
+    machines: &[Machine],
+    here: &str,
+    force: bool,
+) -> Result<()> {
+    let Some(group) = item["group"].as_str().filter(|g| !g.is_empty() && !force) else {
+        return Ok(());
+    };
+    let slug = ctx.project()?;
+    let id = item["id"].as_str().unwrap_or_default();
+    let listed: Value = ctx.api.get(
+        "/groups",
+        &[("project", slug.clone()), ("name", group.to_string())],
+    )?;
+    let others: BTreeSet<&str> = listed
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| r["id"].as_str())
+        .filter(|m| *m != id)
+        .collect();
+    let rows = read_all(machines, here, Some(&slug));
+    if let Some(job) = running_member(&rows, &others) {
+        return Err(Fail::refused(format!(
+            "{id} is in group {group}, whose member {} runs as {} on {}: give the group to that job, or --force",
+            job["id"].as_str().unwrap_or("?"),
+            job["name"].as_str().unwrap_or("?"),
+            job["machine"].as_str().unwrap_or("?")
+        )));
+    }
+    Ok(())
+}
+
+/// The running job of one of `members`, if any.
+fn running_member<'a>(rows: &'a [Value], members: &BTreeSet<&str>) -> Option<&'a Value> {
+    rows.iter()
+        .find(|r| r["state"] == "running" && r["id"].as_str().is_some_and(|i| members.contains(i)))
 }
 
 fn running_of(rows: &[Value]) -> BTreeSet<(String, String)> {

@@ -22,15 +22,18 @@ fn model(runner: &str, name: &str, effort: Option<&str>) -> Model {
 #[test]
 fn test_gaps_name_the_mode_and_a_missing_models() {
     assert_eq!(
-        gaps(&skills(&[("mode", "pause")])),
-        ["mode is pause", "no models"]
+        gaps(&skills(&[("mode", "pause")]), &skills(&[])),
+        ["mode is pause"]
     );
-    assert_eq!(gaps(&skills(&[("mode", "drain")]))[0], "mode is drain");
+    assert_eq!(
+        gaps(&skills(&[("mode", "drain")]), &skills(&[]))[0],
+        "mode is drain"
+    );
 }
 
 #[test]
 fn test_gaps_empty_when_a_lead_can_dispatch() {
-    assert!(gaps(&skills(&[("models", "medium=claude:m")])).is_empty());
+    assert!(gaps(&skills(&[("models", "medium=claude:m")]), &skills(&[])).is_empty());
 }
 
 #[test]
@@ -39,7 +42,9 @@ fn test_value_tells_set_default_and_unset_apart() {
     assert_eq!(value(&set, "gates"), Value::Set("make test".into()));
     // An empty value is unset, so the default shows.
     assert_eq!(value(&set, "owner"), Value::Default("the owner"));
-    assert_eq!(value(&set, "models"), Value::Unset);
+    assert_eq!(value(&set, "models"), Value::Default(DEFAULT_MODELS));
+    assert_eq!(value(&set, "gates"), Value::Set("make test".into()));
+    assert_eq!(value(&skills(&[]), "gates"), Value::Unset);
     assert_eq!(value(&set, "mode"), Value::Default("run"));
 }
 
@@ -85,7 +90,14 @@ fn test_the_old_loops_facts_are_retired() {
             format!("{key} was a fact of the old loop and is no longer read")
         );
     }
-    for key in ["mode", "stale_claim", "job_timeout", "checkout", "models"] {
+    for key in [
+        "mode",
+        "stale_claim",
+        "job_timeout",
+        "checkout",
+        "models",
+        "provision",
+    ] {
         assert!(meaning(key).is_some(), "{key}");
     }
 }
@@ -193,15 +205,15 @@ fn test_check_refuses_a_models_entry_naming_it() {
 fn test_model_for_a_build_follows_its_complexity() {
     let set = skills(&[("models", MODELS_SET)]);
     assert_eq!(
-        model_for(&set, Role::Build, Some("high")),
+        model_for(&set, &skills(&[]), Role::Build, Some("high")),
         Some(model("claude", "opus-x", Some("high")))
     );
     assert_eq!(
-        model_for(&set, Role::Build, Some("medium")),
+        model_for(&set, &skills(&[]), Role::Build, Some("medium")),
         Some(model("codex", "gpt-x", Some("medium")))
     );
     assert_eq!(
-        model_for(&set, Role::Build, Some("low")),
+        model_for(&set, &skills(&[]), Role::Build, Some("low")),
         Some(model("claude", "haiku-x", None))
     );
 }
@@ -210,16 +222,16 @@ fn test_model_for_a_build_follows_its_complexity() {
 fn test_model_for_unrated_falls_back_to_unrated_then_medium() {
     let set = skills(&[("models", MODELS_SET)]);
     assert_eq!(
-        model_for(&set, Role::Build, None),
+        model_for(&set, &skills(&[]), Role::Build, None),
         Some(model("codex", "gpt-y", None))
     );
     let no_unrated = skills(&[("models", "medium=codex:gpt-x:medium high=claude:o")]);
     assert_eq!(
-        model_for(&no_unrated, Role::Build, None),
+        model_for(&no_unrated, &skills(&[]), Role::Build, None),
         Some(model("codex", "gpt-x", Some("medium")))
     );
     assert_eq!(
-        model_for(&no_unrated, Role::Build, Some("unrated")),
+        model_for(&no_unrated, &skills(&[]), Role::Build, Some("unrated")),
         Some(model("codex", "gpt-x", Some("medium")))
     );
 }
@@ -228,16 +240,16 @@ fn test_model_for_unrated_falls_back_to_unrated_then_medium() {
 fn test_model_for_audit_and_plan_use_their_entries_then_high() {
     let set = skills(&[("models", MODELS_SET)]);
     assert_eq!(
-        model_for(&set, Role::Audit, Some("low")),
+        model_for(&set, &skills(&[]), Role::Audit, Some("low")),
         Some(model("codex", "gpt-x", Some("high")))
     );
     assert_eq!(
-        model_for(&set, Role::Plan, None),
+        model_for(&set, &skills(&[]), Role::Plan, None),
         Some(model("claude", "opus-x", Some("max")))
     );
     let builds_only = skills(&[("models", "high=claude:opus-x:high")]);
     assert_eq!(
-        model_for(&builds_only, Role::Audit, None),
+        model_for(&builds_only, &skills(&[]), Role::Audit, None),
         Some(model("claude", "opus-x", Some("high")))
     );
 }
@@ -246,26 +258,37 @@ fn test_model_for_audit_and_plan_use_their_entries_then_high() {
 fn test_model_for_a_lead_uses_its_entry_then_high() {
     let set = skills(&[("models", MODELS_SET)]);
     assert_eq!(
-        model_for(&set, Role::Lead, None),
+        model_for(&set, &skills(&[]), Role::Lead, None),
         Some(model("claude", "opus-x", Some("high")))
     );
     let no_lead = skills(&[("models", "high=codex:gpt-x:xhigh low=claude:h")]);
     assert_eq!(
-        model_for(&no_lead, Role::Lead, Some("low")),
+        model_for(&no_lead, &skills(&[]), Role::Lead, Some("low")),
         Some(model("codex", "gpt-x", Some("xhigh")))
     );
     assert_eq!(
-        model_for(&skills(&[("models", "low=claude:h")]), Role::Lead, None),
+        model_for(
+            &skills(&[("models", "low=claude:h")]),
+            &skills(&[]),
+            Role::Lead,
+            None
+        ),
         None
     );
 }
 
 #[test]
 fn test_model_for_is_none_without_an_entry() {
-    assert_eq!(model_for(&skills(&[]), Role::Build, Some("high")), None);
+    assert_eq!(
+        model_for(&skills(&[]), &skills(&[]), Role::Build, Some("high")),
+        Some(model("claude", DEFAULT_MODEL, None))
+    );
     let set = skills(&[("models", "high=claude:o")]);
-    assert_eq!(model_for(&set, Role::Build, Some("low")), None);
-    assert_eq!(model_for(&set, Role::Build, None), None);
+    assert_eq!(
+        model_for(&set, &skills(&[]), Role::Build, Some("low")),
+        None
+    );
+    assert_eq!(model_for(&set, &skills(&[]), Role::Build, None), None);
 }
 
 #[test]
@@ -309,5 +332,80 @@ fn test_a_release_names_the_theme_an_item_is_filed_under() {
     assert_eq!(
         refusal(release_theme("", &listed, false)),
         "a release is current, one of 1.0 1.1, or a theme items already carry"
+    );
+}
+
+#[test]
+fn test_model_for_reads_the_owner_level_when_the_project_sets_none() {
+    let owner = skills(&[("models", MODELS_SET)]);
+    assert_eq!(
+        model_for(&skills(&[]), &owner, Role::Build, Some("high")),
+        Some(model("claude", "opus-x", Some("high")))
+    );
+}
+
+#[test]
+fn test_model_for_a_project_value_wins_over_the_owner_and_the_default() {
+    let owner = skills(&[("models", MODELS_SET)]);
+    let project = skills(&[("models", "high=codex:gpt-z")]);
+    assert_eq!(
+        model_for(&project, &owner, Role::Build, Some("high")),
+        Some(model("codex", "gpt-z", None))
+    );
+    assert_eq!(model_for(&project, &owner, Role::Build, Some("low")), None);
+}
+
+#[test]
+fn test_model_for_with_no_value_at_any_level_is_the_built_in_default() {
+    for complexity in [Some("high"), Some("medium"), Some("low"), None] {
+        assert_eq!(
+            model_for(&skills(&[]), &skills(&[]), Role::Build, complexity),
+            Some(model("claude", DEFAULT_MODEL, None))
+        );
+    }
+    for role in [Role::Audit, Role::Plan, Role::Lead] {
+        assert_eq!(
+            model_for(&skills(&[]), &skills(&[]), role, None),
+            Some(model("claude", DEFAULT_MODEL, None))
+        );
+    }
+}
+
+#[test]
+fn test_the_built_in_models_default_reads() {
+    assert_eq!(check("models", DEFAULT_MODELS), Ok(()));
+}
+
+#[test]
+fn test_layer_of_names_where_each_value_came_from() {
+    let project = skills(&[("mode", "drain")]);
+    let owner = skills(&[("mode", "pause"), ("job_timeout", "60"), ("gates", "x")]);
+    assert_eq!(
+        layered(&project, &owner, "mode"),
+        Some(("drain".into(), Layer::Project))
+    );
+    assert_eq!(
+        layered(&project, &owner, "job_timeout"),
+        Some(("60".into(), Layer::Owner))
+    );
+    assert_eq!(
+        layered(&project, &owner, "stale_claim"),
+        Some(("120".into(), Layer::Default))
+    );
+    // Only agent settings have an owner level.
+    assert_eq!(layered(&project, &owner, "gates"), None);
+}
+
+#[test]
+fn test_only_agent_settings_are_set_for_all_projects() {
+    assert_eq!(check_owner("models", MODELS_SET), Ok(()));
+    assert_eq!(check_owner("mode", ""), Ok(()));
+    assert_eq!(
+        refusal(check_owner("gates", "make")),
+        "gates is a project fact: --all-projects takes one of models, job_timeout, stale_claim, lead_lapse, mode"
+    );
+    assert_eq!(
+        refusal(check_owner("mode", "go")),
+        "mode is one of run, drain, pause, not 'go'"
     );
 }

@@ -6,13 +6,17 @@ use crate::item::Refused;
 use crate::text::py_repr;
 
 /// Every fact a project carries, in the order `docket skills` prints them, with its one-line meaning.
-pub const FACTS: [(&str, &str); 15] = [
+pub const FACTS: [(&str, &str); 16] = [
     ("owner", "the owner's name, as the skills address them"),
     (
         "worktree",
         "the command that makes a worktree for item B14 on branch audit/b14-$n",
     ),
     ("merge", "the command that merges audit/b14-$n back"),
+    (
+        "provision",
+        "a shell command run in each job's new worktree before the job starts, such as linking node_modules; the job is refused when it fails",
+    ),
     (
         "traps",
         "what breaks in a fresh worktree here, in a sentence or two",
@@ -91,8 +95,22 @@ pub const RETIRED: [&str; 23] = [
     "last_tick",
 ];
 
-/// The value a fact takes when the project sets none.
-pub const DEFAULTS: [(&str, &str); 6] = [
+/// The `models` entry's model name that leaves the choice to the runner: no model flag is passed.
+pub const DEFAULT_MODEL: &str = "default";
+
+/// The built-in `models`: the `claude` runner with its default model for every complexity and role.
+pub const DEFAULT_MODELS: &str = "high=claude:default medium=claude:default low=claude:default \
+                                  unrated=claude:default audit=claude:default plan=claude:default \
+                                  lead=claude:default";
+
+/// The facts that describe the owner's runners and pace, not the project: each resolves from the
+/// project's value, then the owner-level value held on the server, then the built-in default.
+pub const AGENT_SETTINGS: [&str; 5] =
+    ["models", "job_timeout", "stale_claim", "lead_lapse", "mode"];
+
+/// The value a fact takes when neither the project nor the owner sets one.
+pub const DEFAULTS: [(&str, &str); 7] = [
+    ("models", DEFAULT_MODELS),
     ("owner", "the owner"),
     ("checkout", "."),
     ("mode", "run"),
@@ -134,6 +152,75 @@ pub fn value(skills: &BTreeMap<String, String>, key: &str) -> Value {
     }
 }
 
+/// Which level a fact's value came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Layer {
+    Project,
+    Owner,
+    Default,
+}
+
+impl Layer {
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Layer::Project => "project",
+            Layer::Owner => "owner",
+            Layer::Default => "default",
+        }
+    }
+}
+
+/// A fact's value and the level it came from: the project's, for an agent setting the owner-level
+/// one, else the built-in default. `None` when no level has one.
+#[must_use]
+pub fn layered(
+    project: &BTreeMap<String, String>,
+    owner: &BTreeMap<String, String>,
+    key: &str,
+) -> Option<(String, Layer)> {
+    let set = |m: &BTreeMap<String, String>| m.get(key).filter(|v| !v.is_empty()).cloned();
+    if let Some(v) = set(project) {
+        return Some((v, Layer::Project));
+    }
+    if AGENT_SETTINGS.contains(&key)
+        && let Some(v) = set(owner)
+    {
+        return Some((v, Layer::Owner));
+    }
+    default_of(key).map(|v| (v.to_string(), Layer::Default))
+}
+
+/// The project's facts with the owner-level agent settings it does not set itself.
+#[must_use]
+pub fn merged(
+    project: &BTreeMap<String, String>,
+    owner: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let mut out = project.clone();
+    for key in AGENT_SETTINGS {
+        if let Some((v, Layer::Owner)) = layered(project, owner, key) {
+            out.insert(key.to_string(), v);
+        }
+    }
+    out
+}
+
+/// Refuses an owner-level value that is not an agent setting or that the setting cannot hold. An
+/// empty value unsets it.
+///
+/// # Errors
+/// The key is no agent setting, or the value is outside what the setting holds.
+pub fn check_owner(key: &str, value: &str) -> Result<(), Refused> {
+    if !AGENT_SETTINGS.contains(&key) {
+        return Err(Refused(format!(
+            "{key} is a project fact: --all-projects takes one of {}",
+            AGENT_SETTINGS.join(", ")
+        )));
+    }
+    check(key, value)
+}
+
 /// The value as the loop reads it, set or default.
 #[must_use]
 pub fn effective(skills: &BTreeMap<String, String>, key: &str) -> Option<String> {
@@ -146,7 +233,8 @@ pub fn effective(skills: &BTreeMap<String, String>, key: &str) -> Option<String>
 
 /// Why a lead dispatches nothing, a phrase per reason; empty when the facts let it run.
 #[must_use]
-pub fn gaps(skills: &BTreeMap<String, String>) -> Vec<String> {
+pub fn gaps(project: &BTreeMap<String, String>, owner: &BTreeMap<String, String>) -> Vec<String> {
+    let skills = &merged(project, owner);
     let mut out = Vec::new();
     let mode = effective(skills, "mode").unwrap_or_default();
     if mode != "run" {
@@ -358,16 +446,18 @@ fn models_of(value: &str) -> Result<BTreeMap<String, Model>, String> {
     Ok(out)
 }
 
-/// What a job runs on, from the project's `models`: a build by its ticket's complexity, an unrated
+/// What a job runs on, from `models` at the project, owner or built-in level: a build by its ticket's complexity, an unrated
 /// one by `unrated` then `medium`; an audit, a plan or a lead by its own entry, then `high`. `None` when no
 /// entry applies or `models` does not read.
 #[must_use]
 pub fn model_for(
-    skills: &BTreeMap<String, String>,
+    project: &BTreeMap<String, String>,
+    owner: &BTreeMap<String, String>,
     role: Role,
     complexity: Option<&str>,
 ) -> Option<Model> {
-    let models = models_of(skills.get("models")?).ok()?;
+    let (models, _) = layered(project, owner, "models")?;
+    let models = models_of(&models).ok()?;
     let order: &[&str] = match (role, complexity) {
         (Role::Audit, _) => &["audit", "high"],
         (Role::Plan, _) => &["plan", "high"],

@@ -3,6 +3,7 @@
 
 mod m20261001_000001_schema;
 mod m20261002_000001_machines_and_leads;
+mod m20261005_000001_owner_facts;
 #[cfg(any(test, feature = "scratch"))]
 pub mod scratch;
 
@@ -24,6 +25,7 @@ impl MigratorTrait for Migrator {
         vec![
             Box::new(m20261001_000001_schema::Migration),
             Box::new(m20261002_000001_machines_and_leads::Migration),
+            Box::new(m20261005_000001_owner_facts::Migration),
         ]
     }
 }

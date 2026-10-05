@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use axum::Json;
 use axum::http::StatusCode;
 use sea_orm::{
-    ColumnTrait, DatabaseConnection, DbErr, EntityTrait, FromQueryResult, QueryFilter, Statement,
+    ColumnTrait, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait, FromQueryResult,
+    QueryFilter, Statement,
 };
 use serde_json::{Map, Value, json};
 
@@ -105,7 +106,7 @@ pub async fn item_of(
         .ok_or_else(|| failure(StatusCode::NOT_FOUND, &format!("no item {id} in {slug}")))
 }
 
-pub async fn id_of(db: &DatabaseConnection, rid: i64) -> Result<Option<String>, DbErr> {
+pub async fn id_of<C: ConnectionTrait>(db: &C, rid: i64) -> Result<Option<String>, DbErr> {
     Ok(item::Entity::find_by_id(rid).one(db).await?.map(|i| i.id))
 }
 
@@ -116,7 +117,10 @@ struct Count {
 }
 
 /// `{package rid: open members}` for every package of a project, in one query.
-pub async fn open_members(db: &DatabaseConnection, slug: &str) -> Result<HashMap<i64, u64>, DbErr> {
+pub async fn open_members<C: ConnectionTrait>(
+    db: &C,
+    slug: &str,
+) -> Result<HashMap<i64, u64>, DbErr> {
     let stmt = sql(
         "SELECT l.to_rid AS prid, COUNT(*) AS n FROM links l JOIN items i ON i.rid=l.rid \
          JOIN items p ON p.rid=l.to_rid WHERE l.kind='opened' AND i.state='open' AND p.project=? \
@@ -143,8 +147,8 @@ pub fn facts(row: &item::Model, kind: Kind) -> Facts<'_> {
 
 /// A row as `--json` prints it: ids instead of rids, `group` not `group_name`, with its word and
 /// priority. Only a package's word reads `open_members`; `tier` overrides the priority its own tags name.
-pub async fn public(
-    db: &DatabaseConnection,
+pub async fn public<C: ConnectionTrait>(
+    db: &C,
     kind: Kind,
     row: item::Model,
     open_members: u64,
@@ -179,8 +183,8 @@ pub async fn public(
 ///
 /// # Errors
 /// The database.
-pub async fn public_rows(
-    db: &DatabaseConnection,
+pub async fn public_rows<C: ConnectionTrait>(
+    db: &C,
     project: &project::Model,
     rows: Vec<item::Model>,
 ) -> Result<Vec<Value>, Failure> {
@@ -205,8 +209,8 @@ pub async fn public_rows(
 ///
 /// # Errors
 /// The database.
-pub async fn items_where(
-    db: &DatabaseConnection,
+pub async fn items_where<C: ConnectionTrait>(
+    db: &C,
     slug: &str,
     tail: &str,
     values: Vec<sea_orm::Value>,

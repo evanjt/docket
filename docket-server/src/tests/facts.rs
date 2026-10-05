@@ -82,7 +82,7 @@ async fn test_read_returns_the_stored_facts_without_the_retired_ones() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         out,
-        json!({ "project": SLUG, "skills": { "owner": "Ana" } })
+        json!({ "project": SLUG, "skills": { "owner": "Ana" }, "owner": {} })
     );
 }
 
@@ -187,4 +187,46 @@ async fn test_set_refuses_a_value_the_fact_does_not_hold_and_changes_nothing() {
         stored(&db.db).await,
         json!({"owner": "Ana", "pool": "local=2"})
     );
+}
+
+#[tokio::test]
+async fn test_an_all_projects_set_holds_an_agent_setting_for_every_project() {
+    let (db, app) = scratch().await;
+    let body =
+        json!({ "project": SLUG, "key": "models", "value": "high=claude:m", "all_projects": true });
+    let (status, out) = send(&app, Method::POST, "/do/fact", "ownerkey", Some(body)).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["owner"], json!({"models": "high=claude:m"}));
+    assert_eq!(out["skills"], json!({"owner": "Ana"}));
+    assert_eq!(
+        stored(&db.db).await,
+        json!({"owner": "Ana", "pool": "local=2"}),
+        "the project's own facts are untouched"
+    );
+    let (_, read) = send(
+        &app,
+        Method::GET,
+        "/facts?project=test/proj",
+        "agentkey",
+        None,
+    )
+    .await;
+    assert_eq!(read["owner"], json!({"models": "high=claude:m"}));
+    let unset = json!({ "project": SLUG, "key": "models", "value": "", "all_projects": true });
+    let (_, out) = send(&app, Method::POST, "/do/fact", "ownerkey", Some(unset)).await;
+    assert_eq!(out["owner"], json!({}));
+}
+
+#[tokio::test]
+async fn test_an_all_projects_set_refuses_a_project_fact_and_a_bad_value() {
+    let (_db, app) = scratch().await;
+    for (key, value, why) in [
+        ("gates", "make", "gates is a project fact"),
+        ("mode", "go", "mode is one of run, drain, pause, not 'go'"),
+    ] {
+        let body = json!({ "project": SLUG, "key": key, "value": value, "all_projects": true });
+        let (status, out) = send(&app, Method::POST, "/do/fact", "ownerkey", Some(body)).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{out}");
+        assert!(out["refused"].as_str().unwrap().starts_with(why), "{out}");
+    }
 }

@@ -34,15 +34,24 @@ use crate::entities::{event::Event, item::Item, link::Link, project::Project};
 pub use docket_migration::migrate;
 
 const CONNECTIONS: u32 = 8;
+const PING_AFTER_IDLE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// The pool's options: a connection is health-checked only after it has idled for `PING_AFTER_IDLE`,
+/// not before every statement.
+fn options(url: &str) -> ConnectOptions {
+    let mut options = ConnectOptions::new(docket_migration::postgres_url(url));
+    options
+        .max_connections(CONNECTIONS)
+        .test_before_acquire_if_idle_for(PING_AFTER_IDLE);
+    options
+}
 
 /// A pool over the Postgres database at `url`. Each write holds one connection for its transaction.
 ///
 /// # Errors
 /// The database cannot be reached, or the URL names another kind of database.
 pub async fn connect(url: &str) -> Result<DatabaseConnection, DbErr> {
-    let mut options = ConnectOptions::new(docket_migration::postgres_url(url));
-    options.max_connections(CONNECTIONS);
-    let db = Database::connect(options).await?;
+    let db = Database::connect(options(url)).await?;
     if db.get_database_backend() != DbBackend::Postgres {
         return Err(DbErr::Custom(
             "the URL does not name a Postgres database".into(),

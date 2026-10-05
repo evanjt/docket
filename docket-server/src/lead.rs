@@ -63,7 +63,7 @@ async fn held<C: ConnectionTrait>(c: &C, slug: &str) -> Result<Option<Lead>, Fai
 
 /// The project's `lead_lapse` in minutes, its default when unset or unreadable. A 404 for no project.
 async fn lapse<C: ConnectionTrait>(c: &C, slug: &str) -> Result<i64, Failure> {
-    let skills = stored(c, slug).await?;
+    let skills = fact::merged(&stored(c, slug).await?, &crate::facts::owner(c).await?);
     Ok(fact::effective(&skills, "lead_lapse")
         .and_then(|v| v.parse().ok())
         .filter(|m: &i64| *m > 0)

@@ -14,6 +14,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use docket_core::fact::DEFAULT_MODEL;
+
 /// The runners a job can be started on.
 pub const RUNNERS: [&str; 2] = ["claude", "codex"];
 
@@ -122,7 +124,10 @@ pub fn args(
     let s = |v: &str| v.to_string();
     let mut out = Vec::new();
     if runner == "codex" {
-        out.extend([s("exec"), s("--json"), s("-m"), s(model)]);
+        out.extend([s("exec"), s("--json")]);
+        if model != DEFAULT_MODEL {
+            out.extend([s("-m"), s(model)]);
+        }
         if let Some(e) = effort {
             out.extend([s("-c"), format!("model_reasoning_effort=\"{e}\"")]);
         }
@@ -135,7 +140,10 @@ pub fn args(
             s(brief),
         ]);
     } else {
-        out.extend([s("-p"), s(brief), s("--model"), s(model)]);
+        out.extend([s("-p"), s(brief)]);
+        if model != DEFAULT_MODEL {
+            out.extend([s("--model"), s(model)]);
+        }
         if let Some(e) = effort {
             out.extend([s("--effort"), s(e)]);
         }
@@ -223,6 +231,17 @@ fn report_line(line: &str) -> Option<Report> {
     }
 }
 
+/// The text after a report marker at the start of a line, trimmed, with the marker optionally
+/// wrapped in `**`: `MESSAGE text` and `**MESSAGE** text` both give `text`. None for another
+/// line, and for a marker with nothing after it.
+fn marked<'a>(line: &'a str, marker: &str) -> Option<&'a str> {
+    let line = line.strip_prefix("**").unwrap_or(line);
+    let rest = line.strip_prefix(marker)?;
+    let rest = rest.strip_prefix("**").unwrap_or(rest);
+    let rest = rest.strip_prefix(' ')?.trim();
+    (!rest.is_empty()).then_some(rest)
+}
+
 /// The report and note of a final message: the report is its last line that says something (a
 /// code fence aside), and the note the last line starting `NOTE `.
 #[must_use]
@@ -234,8 +253,9 @@ pub fn report(text: &str) -> (Option<Report>, Option<String>) {
     let note = text
         .lines()
         .map(str::trim)
-        .rfind(|l| l.starts_with("NOTE "))
-        .map(|l| l["NOTE ".len()..].trim().to_string());
+        .rev()
+        .find_map(|l| marked(l, "NOTE"))
+        .map(str::to_string);
     (last.and_then(report_line), note)
 }
 
@@ -245,8 +265,7 @@ pub fn report(text: &str) -> (Option<Report>, Option<String>) {
 pub fn observations(text: &str) -> Vec<String> {
     text.lines()
         .map(str::trim)
-        .filter_map(|l| l.strip_prefix("OBSERVE "))
-        .map(str::trim)
+        .filter_map(|l| marked(l, "OBSERVE"))
         .filter(|o| !o.is_empty())
         .map(str::to_string)
         .collect()
@@ -267,9 +286,9 @@ pub fn observed(job: &str, observations: &[String]) -> String {
 pub fn message(text: &str) -> Option<String> {
     text.lines()
         .map(str::trim)
-        .rfind(|l| l.starts_with("MESSAGE "))
-        .map(|l| l["MESSAGE ".len()..].trim().to_string())
-        .filter(|m| !m.is_empty())
+        .rev()
+        .find_map(|l| marked(l, "MESSAGE"))
+        .map(str::to_string)
 }
 
 /// What a session's event stream says: its final message and the output tokens it spent.
@@ -523,6 +542,8 @@ pub struct Spec {
     pub model: String,
     pub effort: Option<String>,
     pub role: String,
+    /// A shell command run in the new worktree before the session starts.
+    pub provision: Option<String>,
 }
 
 /// A job started: its name, its directory, and the process the caller may wait on or leave.
@@ -607,6 +628,7 @@ pub fn run(
             &spec.branch,
         ],
     )?;
+    provision(checkout, &worktree, spec.provision.as_deref())?;
     fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let meta = Meta {
         name: name.clone(),
@@ -648,6 +670,44 @@ pub fn run(
         worktree,
         child,
     })
+}
+
+/// The project's provision command, run in the worktree; when it fails the worktree is removed and
+/// the error carries its output.
+fn provision(checkout: &Path, worktree: &Path, cmd: Option<&str>) -> Result<(), String> {
+    let Some(cmd) = cmd.filter(|c| !c.trim().is_empty()) else {
+        return Ok(());
+    };
+    let out = Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .current_dir(worktree)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("provision: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let _ = git(
+        checkout,
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            &worktree.display().to_string(),
+        ],
+    );
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    Err(format!(
+        "provision failed in {} ({}): {}",
+        worktree.display(),
+        out.status,
+        text.trim()
+    ))
 }
 
 /// The session under the recording shell, in a new session and process group, reading nothing.

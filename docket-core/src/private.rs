@@ -20,6 +20,15 @@ pub struct Private {
     /// Every item title long enough to be its own, which a copied sentence would carry.
     #[serde(default)]
     pub titles: Vec<String>,
+    /// Every theme a project lists or an item carries.
+    #[serde(default)]
+    pub themes: Vec<String>,
+    /// Every group name an item carries.
+    #[serde(default)]
+    pub groups: Vec<String>,
+    /// Every release name a project's `releases` fact lists.
+    #[serde(default)]
+    pub releases: Vec<String>,
 }
 
 /// A title this long or longer is the item's own, not a phrase any text might share.
@@ -88,7 +97,7 @@ pub fn ssh_hosts(config: &str) -> Vec<String> {
 const SHORTEST: usize = 3;
 
 /// The terms to look for: each slug and its parts, each owner and their names, each machine and the
-/// user and host in its address, each host and its first label, and what `local` adds (this machine's
+/// user and host in its address, each host and its first label, each theme, group and release name, and what `local` adds (this machine's
 /// user name and home). A term `allowed` names, in any case, is left out. Longest first.
 #[must_use]
 pub fn terms(private: &Private, local: &[String], allowed: &[String]) -> Vec<String> {
@@ -115,6 +124,9 @@ pub fn terms(private: &Private, local: &[String], allowed: &[String]) -> Vec<Str
     for host in &private.hosts {
         out.extend(host_terms(host));
     }
+    out.extend(private.themes.iter().cloned());
+    out.extend(private.groups.iter().cloned());
+    out.extend(private.releases.iter().cloned());
     out.extend(local.iter().cloned());
     let allowed: Vec<String> = allowed.iter().map(|a| a.to_lowercase()).collect();
     out.retain(|t| t.chars().count() >= SHORTEST && !allowed.contains(&t.to_lowercase()));

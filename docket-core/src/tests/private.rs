@@ -11,6 +11,9 @@ fn private() -> Private {
         hosts: vec!["gamma.example.org".into()],
         keys: vec!["T".into(), "A".into(), "PK".into()],
         titles: vec![],
+        themes: vec!["Lanterns".into()],
+        groups: vec!["harbour-lights".into()],
+        releases: vec!["2.4".into(), "saffron".into()],
     }
 }
 
@@ -120,4 +123,12 @@ fn test_shapes_find_private_addresses_and_tokens() {
 fn test_ssh_hosts_are_every_alias_but_patterns() {
     let config = "Host alpha alpha-vpn\n  HostName 203.0.113.7\nHost *.lan\nhost beta\nMatch all\n";
     assert_eq!(ssh_hosts(config), ["alpha", "alpha-vpn", "beta"]);
+}
+
+#[test]
+fn test_terms_take_themes_groups_and_releases() {
+    let t = terms(&private(), &[], &[]);
+    for want in ["Lanterns", "harbour-lights", "2.4", "saffron"] {
+        assert!(t.iter().any(|x| x == want), "{want} missing from {t:?}");
+    }
 }

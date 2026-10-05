@@ -3,6 +3,7 @@
   import { project } from '../lib/context';
   import { ASIDE, FLOW, PRIORITIES, byId } from '../lib/flow';
   import { resource } from '../lib/live.svelte';
+  import { SORTS, applies, filterChanges, nextParams, parseFilter, searchParams, sortRows } from '../lib/filter';
   import { caption, countOf, pageSize } from '../lib/lists';
   import { releaseOf } from '../lib/releases';
   import { at, go, withParams } from '../lib/router.svelte';
@@ -32,7 +33,9 @@
   const word = $derived(at.params.get('word'));
   const list = $derived(q || word ? null : (at.params.get('list') ?? 'next'));
   const selected = $derived(at.params.get('i'));
-  const release = $derived(at.params.get('release'));
+  const filter = $derived(parseFilter(at.params));
+  const release = $derived(filter.release);
+  const narrowed = $derived(Object.values({ ...filter, sort: '' }).some(Boolean));
 
   let typed = $state(at.params.get('q') ?? '');
   let searchBox: HTMLInputElement | undefined = $state();
@@ -42,16 +45,16 @@
   const status = resource(() => api.status(ctx.slug));
 
   const fetched = resource<Shape[]>(() => {
-    if (q) return api.search(ctx.slug, q);
+    if (q) return api.search(ctx.slug, q, 200, searchParams(filter));
     if (word) return null;
-    // With a release chosen, the whole queue is read: next lists the earlier releases first.
-    if (list === 'next') return api.next(ctx.slug, release ? 5000 : Math.max(200, pageSize(more, false)));
+    // With a filter chosen, the whole queue is read: next lists the earlier releases first.
+    if (list === 'next') return api.next(ctx.slug, narrowed ? 5000 : Math.max(200, pageSize(more, false)), nextParams(filter));
     if (list === 'derived') {
-      return api.derived(ctx.slug, pageSize(more, !!release)).then((ds) =>
+      return api.derived(ctx.slug, pageSize(more, narrowed)).then((ds) =>
         ds.map((d) => ({ id: d.id, title: d.title, word: d.state, turn_note: `${d.chose ?? ''} (from ${d.basis})` })),
       );
     }
-    return api.list(list ?? 'next', ctx.slug, pageSize(more, !!release)).then((rows) =>
+    return api.list(list ?? 'next', ctx.slug, pageSize(more, narrowed)).then((rows) =>
       list === 'groups' ? rows.map((r) => ({ ...r, aside: r.group ?? '' })) : rows,
     );
   });
@@ -68,15 +71,35 @@
     return fetched.data ?? [];
   });
 
-  /** The rows of the release chosen, each with its release when the project sets releases. */
+  /** Every item below the plan, story or concept the filter names, for the lists the server does not narrow by it. */
+  const below = $derived.by(() => {
+    if (!filter.under || !ctx.board) return null;
+    const seen = new Set<string>();
+    const walk = (id: string) => {
+      for (const c of [...(ctx.board!.children.get(id) ?? []), ...(ctx.board!.related.get(id) ?? [])]) {
+        if (!seen.has(c)) {
+          seen.add(c);
+          walk(c);
+        }
+      }
+    };
+    walk(filter.under);
+    return seen;
+  });
+
+  /** The rows that pass the filter, each with its release when the project sets releases, in the sort chosen. */
   const shown = $derived(
-    rows
-      .map((r) => ({ ...r, release: releaseOf(r.theme ?? ctx.board?.nodes.get(r.id)?.theme, ctx.releases) }))
-      .filter((r) => !release || r.release === release),
+    sortRows(
+      rows
+        .map((r) => ({ ...r, theme: r.theme ?? ctx.board?.nodes.get(r.id)?.theme }))
+        .map((r) => ({ ...r, release: releaseOf(r.theme, ctx.releases) }))
+        .filter((r) => applies(r, filter, ctx.releases) && (!below || list === 'next' || below.has(r.id))),
+      filter.sort,
+    ),
   );
 
-  const total = $derived(release || q || word || !list ? null : countOf(list, status.data));
-  const cut = $derived(!release && !q && !word && list !== 'next' && list !== 'groups' && list !== 'derived' && total !== null && total > shown.length);
+  const total = $derived(narrowed || q || word || !list ? null : countOf(list, status.data));
+  const cut = $derived(!narrowed && !q && !word && list !== 'next' && list !== 'groups' && list !== 'derived' && total !== null && total > shown.length);
 
   const loading = $derived(word ? !ctx.board : fetched.loading && !fetched.data);
   const heading = $derived(q ? `Search: ${q}` : word ? `Every item ${word}` : LISTS.find((l) => l.name === list)?.label);
@@ -93,9 +116,23 @@
     list;
     q;
     word;
-    release;
+    narrowed;
     more = 0;
   });
+
+  /** The keys the project's items carry, read from the board. */
+  const keys = $derived([...new Set([...(ctx.board?.nodes.values() ?? [])].map((n) => n.key))].sort());
+
+  const CHOICES = $derived<{ name: 'key' | 'priority' | 'complexity' | 'state'; label: string; options: readonly string[] }[]>([
+    { name: 'key', label: 'Any key', options: keys },
+    { name: 'priority', label: 'Any priority', options: PRIORITIES },
+    { name: 'complexity', label: 'Any complexity', options: ['high', 'medium', 'low'] },
+    { name: 'state', label: 'Any state', options: ['open', 'done', 'dropped'] },
+  ]);
+
+  function setFilter(changes: Record<string, string>) {
+    go(withParams({ ...changes, i: undefined }), true);
+  }
 
   function choose(id: string) {
     go(withParams({ i: id }), true);
@@ -186,6 +223,23 @@
           {/each}
         </nav>
       {/if}
+      <div class="filters" aria-label="Filters">
+        {#each CHOICES as c (c.name)}
+          <select aria-label={c.label} value={filter[c.name]} onchange={(e) => setFilter({ [c.name]: e.currentTarget.value })}>
+            <option value="">{c.label}</option>
+            {#each c.options as o (o)}<option value={o}>{o}</option>{/each}
+          </select>
+        {/each}
+        <select aria-label="Sort" value={filter.sort} onchange={(e) => setFilter({ sort: e.currentTarget.value })}>
+          {#each SORTS as o (o.name)}<option value={o.name}>{o.label}</option>{/each}
+        </select>
+        {#if filter.under}
+          <a class="chip" href={withParams({ under: undefined, i: undefined })}>under {filter.under} ×</a>
+        {/if}
+        {#if narrowed}
+          <a class="chip" href={withParams({ ...filterChanges(parseFilter(new URLSearchParams())), sort: filter.sort || undefined, i: undefined })}>clear filters</a>
+        {/if}
+      </div>
       <nav class="words" aria-label="Words">
         {#each [...FLOW, ...ASIDE, 'done', 'dropped'] as w (w)}
           <a href={withParams({ word: w, q: undefined, list: undefined, i: undefined })} class:active={word === w}
@@ -278,6 +332,27 @@
     display: flex;
     flex-wrap: wrap;
     gap: 4px;
+  }
+
+  .filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .filters select {
+    height: 26px;
+    border: 1px solid var(--rule-strong);
+    border-radius: var(--radius);
+    background: var(--surface);
+    font-size: 13px;
+  }
+
+  .chip {
+    padding: 3px 9px;
+    border-radius: 14px;
+    background: var(--accent-soft);
+    font-size: 13px;
   }
 
   .releases a {

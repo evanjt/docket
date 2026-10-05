@@ -24,7 +24,10 @@ starts from it and every merge goes back into it.
     docket machines
     docket lead take --session lead-$RANDOM
 
-`docket skills` must show `models`; without it, say so in one line and stop.
+`docket skills` shows `models` with the level it came from (project, owner or
+default); name that level in your first report line. A project sets `models` only
+when it differs from the owner's: `docket skills set --all-projects models "..."`
+writes the owner level.
 `docket machines` marks the machine you run on; every other one is reached over
 ssh by `docket`, never by you. A refused `lead take` means another lead holds
 the project: say who in one line and stop.
@@ -77,6 +80,10 @@ Read each answer:
 
 - `dispatched ...`: running.
 - `is held by`: another session has it. Take the next.
+- `is in group G, whose member ... runs`: a group is one job's work. Leave the
+  rest of G until that job is collected, then dispatch the next member, whose
+  worktree starts from the first member's landed change. `--force` only when
+  the members touch nothing in common.
 - `no machine has ... a free slot`: stop dispatching until a job ends.
 - `dispatch ... failed, the claim given back`: the reason is in the line.
   Note it, take the next, and count it as a failure.

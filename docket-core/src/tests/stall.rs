@@ -46,3 +46,13 @@ fn test_an_item_held_by_one_in_a_later_release_is_found() {
     ]);
     assert_eq!(held_later(&edges, &rank), [(10, 12), (20, 21)]);
 }
+
+#[test]
+fn test_a_hold_runs_into_a_later_release_only_when_the_holder_ships_after_the_held() {
+    let releases = ["0.4.1".to_string(), "0.4.2".to_string()];
+    assert!(runs_later(&releases, Some("0.4.1"), Some("0.4.2")));
+    assert!(!runs_later(&releases, Some("0.4.2"), Some("0.4.2")));
+    assert!(!runs_later(&releases, Some("0.4.2"), Some("0.4.1")));
+    assert!(runs_later(&releases, Some("upkeep"), Some("0.4.2")));
+    assert!(!runs_later(&[], Some("0.4.1"), Some("0.4.2")));
+}

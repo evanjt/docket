@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use sea_orm::{ConnectionTrait, DatabaseConnection, DbErr, FromQueryResult};
+use sea_orm::{ConnectionTrait, DbErr, FromQueryResult};
 use serde_json::{Map, Value};
 
 use crate::entities::{item, project};
@@ -16,8 +16,8 @@ pub type Extra = (item::Model, Map<String, Value>);
 ///
 /// # Errors
 /// The database.
-pub async fn rows_with(
-    db: &DatabaseConnection,
+pub async fn rows_with<C: ConnectionTrait>(
+    db: &C,
     text: &str,
     values: Vec<sea_orm::Value>,
     extras: &[&str],
@@ -39,8 +39,8 @@ pub async fn rows_with(
 ///
 /// # Errors
 /// The database.
-pub async fn rows(
-    db: &DatabaseConnection,
+pub async fn rows<C: ConnectionTrait>(
+    db: &C,
     text: &str,
     values: Vec<sea_orm::Value>,
 ) -> Result<Vec<item::Model>, DbErr> {
@@ -70,8 +70,8 @@ fn column(row: &sea_orm::QueryResult, name: &str) -> Value {
 ///
 /// # Errors
 /// The database.
-pub async fn shaped(
-    db: &DatabaseConnection,
+pub async fn shaped<C: ConnectionTrait>(
+    db: &C,
     project: &project::Model,
     rows: Vec<Extra>,
 ) -> Result<Vec<Value>, Failure> {
@@ -101,7 +101,10 @@ pub async fn shaped(
 ///
 /// # Errors
 /// 404 when the slug is unknown.
-pub async fn project_model(db: &DatabaseConnection, slug: &str) -> Result<project::Model, Failure> {
+pub async fn project_model<C: ConnectionTrait>(
+    db: &C,
+    slug: &str,
+) -> Result<project::Model, Failure> {
     use sea_orm::EntityTrait;
     project::Entity::find_by_id(slug)
         .one(db)

@@ -77,6 +77,7 @@ Then:
     docket priority T14 high            # critical, high, normal or low; normal is the default
     docket rate T14 medium              # complexity: high, medium or low
     docket edit T14 --set group=name    # tickets one session should take together
+    docket wait T15 --on T14            # T15 builds on T14, the owner ticket first
 
 Priority is the only order the queue reads. Complexity is rated apart from
 effort: high is architecture (a new data model, a migration, many dependants).

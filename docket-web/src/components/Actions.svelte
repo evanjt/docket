@@ -5,7 +5,7 @@
   import { panel } from '../lib/here.svelte';
   import { act, session } from '../lib/session.svelte';
   import type { Kind, Shown } from '../lib/types';
-  import { WORDING, verbs, type Verb } from '../lib/verbs';
+  import { WORDING, editRequest, verbs, type Opened, type Verb } from '../lib/verbs';
 
   let { item, kind, slug }: { item: Shown; kind: Kind; slug: string } = $props();
 
@@ -13,6 +13,7 @@
   let form = $state<Form | null>(null);
   let text = $state('');
   let extra = $state('');
+  let opened: Opened = { title: '', body: '', updated_at: '' };
   let choice = $state('');
   let busy = $state(false);
 
@@ -47,6 +48,7 @@
       return;
     }
     form = f;
+    opened = { title: item.title, body: item.body, updated_at: item.updated_at };
     text = f === 'edit' ? item.title : '';
     extra = f === 'edit' ? item.body : f === 'start' ? 'main' : '';
     choice = f === 'wait' ? 'until' : f === 'link' ? 'related' : '';
@@ -75,10 +77,8 @@
       case 'drop': return ['drop', { ...common(), id, why: given(text), superseded_by: given(extra)?.toUpperCase() ?? null }, 'Dropped'];
       case 'note': return ['edit', { ...common(), id, append: text.trim() }, 'Note added'];
       case 'edit': {
-        const set = text.trim() && text.trim() !== item.title ? [{ field: 'title', value: text.trim() }] : [];
-        const body = extra !== item.body ? extra : null;
-        if (!set.length && body === null) return null;
-        return ['edit', { ...common(), id, set, body }, 'Saved'];
+        const req = editRequest(opened, text, extra, id, common());
+        return req ? ['edit', req, 'Saved'] : null;
       }
       case 'link': return ['link', { ...common(), a: [id], kind: choice, b: text.trim().toUpperCase() }, 'Linked'];
     }

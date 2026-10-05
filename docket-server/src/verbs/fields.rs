@@ -8,10 +8,13 @@ use docket_core::api::{
     EditRequest, LinkRequest, Linked, Moved, MovedMany, PriorityRequest, RateRequest,
 };
 use docket_core::item::{Field, Item};
-use docket_core::rules::{prioritise, rate as rate_rule, set_tags};
+use docket_core::rules::{GATE, prioritise, rate as rate_rule, set_tags};
+use docket_core::word::Kind;
 
 use crate::auth::Caller;
-use crate::verbs::graph::settle_audits;
+use crate::verbs::graph::{
+    keys_of, refuse_later, refuse_later_after_theme, release_list, settle_audits,
+};
 use crate::verbs::view::{item_view, item_views};
 use crate::verbs::{Call, Failure};
 
@@ -85,10 +88,24 @@ pub async fn edit(
             "edit needs --set field=value, --append \"text\" or --body FILE|-.".to_string(),
         ));
     }
+    if let (Some(_), Some(seen)) = (&req.body, &req.expect_updated_at)
+        && *seen != r.updated_at
+    {
+        return Err(Failure::Refused(format!(
+            "{} changed since it was read; reload it before replacing its body.",
+            req.id
+        )));
+    }
     let mut cols = Vec::new();
     let mut notes = Vec::new();
     for kv in &req.set {
-        cols.push(set_field(&r, &kv.field, &kv.value)?);
+        let col = set_field(&r, &kv.field, &kv.value)?;
+        if let Field::Theme(theme) = &col
+            && !call.ctx.force
+        {
+            refuse_later_after_theme(&call.tx, &call.slug, &r, theme.as_deref()).await?;
+        }
+        cols.push(col);
         notes.push(format!("{}={}", kv.field, kv.value));
     }
     let mut body = r.body.clone();
@@ -181,6 +198,14 @@ pub async fn link(
             "{} cannot be linked to itself.",
             b.id
         )));
+    }
+    if req.kind == "opened" && !req.remove && b.state == "open" {
+        let listed = release_list(&call.tx.conn, &call.slug).await?;
+        let held = (b.wait_on.is_none() && keys_of(&call.project, &[Kind::Audit]).contains(&b.key))
+            || b.wait_ref.as_deref() == Some(GATE);
+        for a in many.iter().filter(|a| a.state == "open" && held) {
+            refuse_later(&listed, &b, a, call.ctx.force)?;
+        }
     }
     for a in &many {
         call.tx

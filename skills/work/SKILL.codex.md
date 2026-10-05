@@ -38,7 +38,8 @@ Run from the project root. Note the branch the session started on (`git branch
 3. `docket skills worktree` prints the worktree command; run it with your id
    and `$n`, from the branch the session started on. `docket skills traps`
    says what breaks in a fresh worktree. Write the failing test first, see it
-   fail, then fix. Never `git stash`. Run the gates `AGENTS.md` names.
+   fail, then name the one owner of the fact or its full inventory (every write
+   site, caller and copy), then fix through it. Never `git stash`. Run the gates `AGENTS.md` names.
 4. `docket skills merge` prints the merge; run it and read git's exit code.
    If another session merged first, rebase and merge again. Check content:
    `git show HEAD:<file> | grep <symbol>`. Never push. Then
@@ -77,7 +78,7 @@ which and why (`**Release.** current: ...`).
 
 A side finding is filed only when it is critical or high, or the order above
 puts it in the current release (`docket new B "..." --body - --release current
---priority high`); anything else is an observation on the ticket: `docket edit
+--priority high --complexity medium`); anything else is an observation on the ticket: `docket edit
 T14 --append "Observed: ..."`. Never weaken a test to avoid a question. Cite `file:line` from the working tree, not
 a document.
 

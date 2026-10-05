@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
-use docket_core::fact::{self, COMPUTED, DEFAULTS, FACTS};
+use docket_core::fact::{self, COMPUTED, FACTS};
 
 use crate::ctx::Ctx;
 use crate::fail::{Fail, Result};
@@ -73,6 +73,7 @@ pub fn skills(
     key: Option<&String>,
     value: Option<&String>,
     install: Install,
+    all_projects: bool,
 ) -> Result<i32> {
     let (what, key, value) = read_args(
         what.map(String::as_str),
@@ -90,7 +91,12 @@ pub fn skills(
             write_steps(&steps, &home.display().to_string(), install.yes)
         }
         "get" => get(ctx, key.as_deref()),
-        "set" => set(ctx, key.as_deref(), value.as_deref().unwrap_or_default()),
+        "set" => set(
+            ctx,
+            key.as_deref(),
+            value.as_deref().unwrap_or_default(),
+            all_projects,
+        ),
         _ => show(ctx),
     }
 }
@@ -140,12 +146,8 @@ fn get(ctx: &mut Ctx, key: Option<&str>) -> Result<i32> {
             all_facts()
         )));
     };
-    let skills = ctx.api.facts(&slug)?.skills;
-    let value = skills
-        .get(key)
-        .filter(|v| !v.is_empty())
-        .cloned()
-        .or_else(|| fact::default_of(key).map(str::to_string));
+    let facts = ctx.api.facts(&slug)?;
+    let value = fact::layered(&facts.skills, &facts.owner, key).map(|(v, _)| v);
     let Some(value) = value else {
         return Err(Fail::refused(format!(
             "{slug} has no {key} set, {meaning}: docket skills set {key} \"...\""
@@ -162,7 +164,7 @@ fn own_dir() -> Option<String> {
 }
 
 /// One fact set, or unset by an empty value, after the checks the server makes.
-fn set(ctx: &mut Ctx, key: Option<&str>, value: &str) -> Result<i32> {
+fn set(ctx: &mut Ctx, key: Option<&str>, value: &str, all_projects: bool) -> Result<i32> {
     let slug = ctx.project()?;
     let Some(key) = key.filter(|k| !k.is_empty()) else {
         return Err(Fail::refused(format!(
@@ -170,31 +172,40 @@ fn set(ctx: &mut Ctx, key: Option<&str>, value: &str) -> Result<i32> {
             all_facts()
         )));
     };
+    if all_projects {
+        fact::check_owner(key, value)?;
+        let out = ctx.api.set_fact(&slug, key, value, true)?;
+        let now = out.owner.get(key).map_or("(unset)", String::as_str);
+        println!("every project {key}: {now}");
+        println!("  recorded for the owner on the server; a project that sets {key} keeps its own");
+        return Ok(0);
+    }
     fact::check(key, value)?;
-    let out = ctx.api.set_fact(&slug, key, value)?;
+    let out = ctx.api.set_fact(&slug, key, value, false)?;
     let now = out.skills.get(key).map_or("(unset)", String::as_str);
     println!("{slug} {key}: {now}");
     println!("  recorded on the project and pushed; every machine reads it with docket skills");
     Ok(0)
 }
 
-/// Every fact's value: the set ones, the defaults, and a visible gap for the rest. A retired fact still
-/// stored is left out.
+/// Every fact's value: the project's, the owner-level and default ones with the level each agent setting
+/// came from, and a visible gap for the rest. A retired fact still stored is left out.
 #[must_use]
-pub fn values(skills: &BTreeMap<String, String>) -> BTreeMap<String, String> {
-    let mut out: BTreeMap<String, String> = DEFAULTS
-        .iter()
-        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
-        .collect();
-    for (k, v) in fact::known(skills)
-        .into_iter()
-        .filter(|(_, v)| !v.is_empty())
-    {
-        out.insert(k, v);
-    }
+pub fn values(
+    project: &BTreeMap<String, String>,
+    owner: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let project = fact::known(project);
+    let mut out = BTreeMap::new();
     for (k, _) in FACTS {
-        out.entry(k.to_string())
-            .or_insert_with(|| format!("(not set: docket skills set {k} \"...\")"));
+        let text = match fact::layered(&project, owner, k) {
+            Some((v, layer)) if fact::AGENT_SETTINGS.contains(&k) => {
+                format!("{v}  ({})", layer.name())
+            }
+            Some((v, _)) => v,
+            None => format!("(not set: docket skills set {k} \"...\")"),
+        };
+        out.insert(k.to_string(), text);
     }
     out
 }
@@ -221,7 +232,7 @@ fn show(ctx: &mut Ctx) -> Result<i32> {
         || "(no root bound on this host)".to_string(),
         |r| home_relative(&r, &home),
     );
-    let values = values(&facts.skills);
+    let values = values(&facts.skills, &facts.owner);
     println!(
         "{slug} on {}, root {root}\n\nThe facts the skills read with docket skills:\n",
         ctx.host()?
@@ -237,7 +248,10 @@ fn show(ctx: &mut Ctx) -> Result<i32> {
         };
         println!("  {tool:<7} {dir:<18} {have}");
     }
-    println!("\n  docket skills set KEY \"value\"    docket skills install    docket skills diff");
+    println!(
+        "\n  docket skills set KEY \"value\"    docket skills set --all-projects KEY \"value\"    \
+         docket skills install    docket skills diff"
+    );
     Ok(0)
 }
 

@@ -1,3 +1,4 @@
+use std::io::{Read, Write};
 use std::net::SocketAddr;
 use std::sync::mpsc;
 
@@ -174,10 +175,10 @@ fn test_facts_read_and_set_through_their_routes() {
         !facts.skills.contains_key("land"),
         "a retired fact is left out"
     );
-    let set = api.set_fact("o/p", "owner", "Ana").unwrap();
+    let set = api.set_fact("o/p", "owner", "Ana", false).unwrap();
     assert_eq!(set.skills["owner"], "Ana");
     assert_eq!(api.facts("o/p").unwrap().skills["owner"], "Ana");
-    match api.set_fact("o/p", "mode", "go") {
+    match api.set_fact("o/p", "mode", "go", false) {
         Err(Error::Refused(409, why)) => {
             assert_eq!(why, "mode is one of run, drain, pause, not 'go'");
         }
@@ -212,4 +213,36 @@ fn test_machines_and_the_lead_claim_round_trip() {
         api.lead_act("o/p", None, "renew", "lead-1"),
         Err(Error::Refused(409, _))
     ));
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct Needs {
+    #[allow(dead_code)]
+    missing: String,
+}
+
+#[test]
+fn test_a_landed_write_with_an_unreadable_answer_is_not_a_network_failure() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let thread = std::thread::spawn(move || {
+        let (mut sock, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 4096];
+        let _ = sock.read(&mut buf).unwrap();
+        let body = r#"{"id":"T1"}"#;
+        write!(
+            sock,
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+    });
+    let api = Api::new(&Config {
+        server: format!("http://{addr}"),
+        key: "k".into(),
+    })
+    .unwrap();
+    let e = api.post::<Needs>("new", &json!({})).unwrap_err();
+    thread.join().unwrap();
+    assert!(matches!(e, Error::Unreadable(_)), "{e:?}");
 }

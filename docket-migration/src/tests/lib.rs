@@ -2,9 +2,10 @@ use super::*;
 
 use crate::scratch::Scratch;
 
-const MIGRATIONS: [&str; 2] = [
+const MIGRATIONS: [&str; 3] = [
     "m20261001_000001_schema",
     "m20261002_000001_machines_and_leads",
+    "m20261005_000001_owner_facts",
 ];
 
 #[test]
@@ -48,7 +49,7 @@ async fn test_migrate_applies_once_then_nothing() {
         .query_one_raw(statement(
             "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN \
              ('projects', 'roots', 'items', 'events', 'links', 'search', 'pending_dump', 'chores', 'meta', \
-             'machines', 'leads')",
+             'machines', 'leads', 'owner_facts')",
             vec![],
         ))
         .await
@@ -56,7 +57,7 @@ async fn test_migrate_applies_once_then_nothing() {
         .unwrap()
         .try_get_by_index::<i64>(0)
         .unwrap();
-    assert_eq!(tables, 11);
+    assert_eq!(tables, 12);
 }
 
 #[tokio::test]

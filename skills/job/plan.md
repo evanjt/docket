@@ -21,6 +21,11 @@ Each ticket is one change that lands on its own:
     docket link T<n> opened {id}
     docket priority T<n> high
     docket rate T<n> medium
+    docket wait T<later> --on T<earlier>    # for each ticket that builds on another
+
+A ticket that builds on another waits on it, the one that owns the fact first: the instances come
+after their owner. Tickets meant for one session share `--set group=NAME`, and dispatch refuses a
+second member while one runs.
 
 The body holds the **Evidence** (`file:line` read from the tree, never quoted from a document), the
 **Fix**, and the **Failing case**. A defect is a `B`. Before filing, `docket search` the words: what

@@ -101,6 +101,7 @@ pub fn run(ctx: &mut Ctx, cmd: Option<&Cmd>) -> Result<i32> {
             claude,
             codex,
             yes,
+            all_projects,
         } => skills::skills(
             ctx,
             what.as_ref(),
@@ -111,6 +112,7 @@ pub fn run(ctx: &mut Ctx, cmd: Option<&Cmd>) -> Result<i32> {
                 codex: *codex,
                 yes: *yes,
             },
+            *all_projects,
         ),
         Cmd::Instructions { what, yes } => instructions::instructions(ctx, what, *yes),
         Cmd::Machines
@@ -154,6 +156,7 @@ fn run_lead(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             model,
             effort,
             role,
+            force,
         } => dispatch::dispatch(
             ctx,
             &dispatch::Ask {
@@ -163,6 +166,7 @@ fn run_lead(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
                 model: model.as_deref(),
                 effort: effort.as_deref(),
                 role: role.as_deref(),
+                force: *force,
             },
         ),
         Cmd::Jobs {

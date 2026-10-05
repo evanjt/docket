@@ -264,6 +264,7 @@ impl Machine {
             model: "m1".into(),
             effort: Some("high".into()),
             role: "build".into(),
+            provision: None,
         }
     }
 }
@@ -508,4 +509,55 @@ fn test_an_audit_files_only_critical_and_high_gaps() {
     );
     assert!(text.contains("    OBSERVE "));
     assert!(!text.contains("at the priority it earns"));
+}
+
+#[test]
+fn test_run_provisions_the_worktree_before_the_runner_starts() {
+    let m = Machine::new();
+    let program = m.runner("test -f provisioned && echo yes > saw");
+    let mut spec = Machine::spec("lead/t14-1");
+    spec.provision = Some("touch provisioned".into());
+    let mut started = run(&spec, &m.checkout(), &m.state(), &[], &program).unwrap();
+    assert!(started.child.wait().unwrap().success());
+    let saw = fs::read_to_string(started.worktree.join("saw")).unwrap();
+    assert_eq!(saw, "yes\n");
+}
+
+#[test]
+fn test_run_refuses_and_leaves_nothing_when_provisioning_fails() {
+    let m = Machine::new();
+    let program = m.runner("touch ran");
+    let mut spec = Machine::spec("lead/t14-1");
+    spec.provision = Some("echo no space >&2; exit 1".into());
+    let Err(why) = run(&spec, &m.checkout(), &m.state(), &[], &program) else {
+        panic!("started")
+    };
+    assert!(
+        why.contains("provision") && why.contains("no space"),
+        "{why}"
+    );
+    assert!(!m.tmp.path().join("sample-lead-t14-1").exists());
+    assert!(rows(&m.state(), now()).is_empty());
+}
+
+#[test]
+fn test_marker_lines_may_be_wrapped_in_bold() {
+    assert_eq!(
+        message("**MESSAGE** Fix the sync\nDONE"),
+        Some("Fix the sync".into())
+    );
+    assert_eq!(observations("**OBSERVE** x\nOBSERVE y"), ["x", "y"]);
+    assert_eq!(report("**NOTE** built it\nDONE").1, Some("built it".into()));
+}
+
+#[test]
+fn test_the_default_model_passes_no_model_flag() {
+    let (wt, last) = (Path::new("/w"), Path::new("/l"));
+    for (runner, flag) in [("claude", "--model"), ("codex", "-m")] {
+        let with = args(runner, "m1", None, "b", wt, last);
+        assert!(with.contains(&flag.to_string()), "{with:?}");
+        let without = args(runner, DEFAULT_MODEL, None, "b", wt, last);
+        assert!(!without.contains(&flag.to_string()), "{without:?}");
+        assert!(!without.contains(&DEFAULT_MODEL.to_string()), "{without:?}");
+    }
 }

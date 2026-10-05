@@ -4,7 +4,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::sync::LazyLock;
 
 use regex::Regex;
-use sea_orm::{ConnectionTrait, DbErr, Value};
+use sea_orm::{ConnectionTrait, DbErr, EntityTrait, Value};
 
 use docket_core::api::Progress;
 use docket_core::item::{Field, Item};
@@ -97,37 +97,19 @@ pub async fn package_progress<C: ConnectionTrait>(c: &C, prid: i64) -> Result<Pr
     })
 }
 
-/// Every item rid opened, and everything those opened, to any depth.
-pub async fn opened_under<C: ConnectionTrait>(c: &C, rid: i64) -> Result<BTreeSet<i64>, DbErr> {
-    let mut seen = BTreeSet::new();
-    let mut todo = vec![rid];
-    while let Some(cur) = todo.pop() {
-        let children: Vec<i64> = column(
-            c,
-            "SELECT rid FROM links WHERE kind='opened' AND to_rid=?",
-            vec![cur.into()],
-        )
-        .await?;
-        for child in children {
-            if child != rid && seen.insert(child) {
-                todo.push(child);
-            }
-        }
-    }
-    Ok(seen)
-}
-
 /// The open items under rid, by rid.
 pub async fn open_under<C: ConnectionTrait>(c: &C, rid: i64) -> Result<Vec<Item>, DbErr> {
-    let mut out = Vec::new();
-    for x in opened_under(c, rid).await? {
-        if let Some(r) = by_rid(c, x).await?
-            && r.state == "open"
-        {
-            out.push(r);
-        }
-    }
-    Ok(out)
+    items(
+        c,
+        "WITH RECURSIVE below(rid) AS (\
+             SELECT rid FROM links WHERE kind='opened' AND to_rid=? \
+             UNION \
+             SELECT l.rid FROM links l JOIN below b ON l.to_rid=b.rid WHERE l.kind='opened') \
+         SELECT i.* FROM items i JOIN below b ON b.rid=i.rid WHERE i.state='open' AND i.rid<>? \
+         ORDER BY i.rid",
+        vec![rid.into(), rid.into()],
+    )
+    .await
 }
 
 /// The open plans among rids, and every one that opened one of them.
@@ -458,4 +440,92 @@ pub async fn decided_like<C: ConnectionTrait>(
         .filter(|x| qkeys.contains(&x.key) && x.decision.is_some())
         .take(3)
         .collect())
+}
+
+/// The project's releases in the order they ship.
+pub async fn release_list<C: ConnectionTrait>(c: &C, slug: &str) -> Result<Vec<String>, Failure> {
+    let skills = crate::entities::project::Entity::find_by_id(slug)
+        .one(c)
+        .await?
+        .map(|p| p.skills)
+        .unwrap_or_default();
+    Ok(docket_core::fact::releases(skills["releases"].as_str()))
+}
+
+fn release_name(releases: &[String], theme: Option<&str>) -> String {
+    let at = docket_core::queue::release_rank(releases, theme);
+    releases.get(at).cloned().unwrap_or_default()
+}
+
+/// Refuse a hold of `held` by `holder` when the holder ships in a later release, naming both repairs.
+pub fn refuse_later(
+    releases: &[String],
+    held: &Item,
+    holder: &Item,
+    force: bool,
+) -> Result<(), Failure> {
+    let (held_in, holder_in) = (
+        release_name(releases, held.theme.as_deref()),
+        release_name(releases, holder.theme.as_deref()),
+    );
+    if force
+        || !docket_core::stall::runs_later(releases, held.theme.as_deref(), holder.theme.as_deref())
+    {
+        return Ok(());
+    }
+    Err(Failure::Refused(format!(
+        "{} ({held_in}) would be held by {} ({holder_in}), which ships later. Move {} to {held_in}, or move {} to {holder_in}, or pass --force.",
+        held.id, holder.id, holder.id, held.id
+    )))
+}
+
+/// Refuse giving `r` a new theme when that puts a hold it takes part in into a later release.
+pub async fn refuse_later_after_theme(
+    tx: &Tx,
+    slug: &str,
+    r: &Item,
+    theme: Option<&str>,
+) -> Result<(), Failure> {
+    let releases = release_list(&tx.conn, slug).await?;
+    if releases.len() < 2 {
+        return Ok(());
+    }
+    let rows = tx
+        .conn
+        .query_all_raw(sql(
+            "SELECT rid, wait_item FROM items WHERE project=? AND state='open' \
+               AND wait_on='item' AND wait_item IS NOT NULL AND (rid=? OR wait_item=?) \
+             UNION ALL SELECT c.rid, l.rid FROM items c JOIN links l ON l.to_rid=c.rid AND l.kind='opened' \
+               JOIN items m ON m.rid=l.rid AND m.state='open' \
+               WHERE c.project=? AND c.state='open' AND c.wait_on='condition' AND c.wait_ref=? \
+                 AND (c.rid=? OR l.rid=?) ORDER BY 1, 2",
+            vec![
+                slug.into(),
+                r.rid.into(),
+                r.rid.into(),
+                slug.into(),
+                GATE.into(),
+                r.rid.into(),
+                r.rid.into(),
+            ],
+        ))
+        .await?;
+    let after = |mut it: Item| {
+        if it.rid == r.rid {
+            it.theme = theme.map(str::to_string);
+        }
+        it
+    };
+    for row in &rows {
+        let (Some(held), Some(holder)) = (
+            by_rid(&tx.conn, row.try_get_by_index::<i64>(0)?).await?,
+            by_rid(&tx.conn, row.try_get_by_index::<i64>(1)?).await?,
+        ) else {
+            continue;
+        };
+        if refuse_later(&releases, &held, &holder, false).is_ok() {
+            refuse_later(&releases, &after(held), &after(holder), false)?;
+        }
+    }
+    Ok(())
 }

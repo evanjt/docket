@@ -371,6 +371,7 @@ impl<S: Source> App<S> {
             common,
             key: key.to_string(),
             value: value.to_string(),
+            all_projects: false,
         };
         let landed = self.send("fact", &body(&req));
         if let Page::Settings(s) = &mut self.page {

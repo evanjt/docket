@@ -4,11 +4,11 @@ use std::collections::{HashMap, HashSet};
 
 use axum::Json;
 use axum::extract::{Extension, Query, State};
-use sea_orm::{DatabaseConnection, FromQueryResult};
+use sea_orm::{ConnectionTrait, DatabaseConnection, FromQueryResult, TransactionTrait};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use docket_core::board::Board;
+use docket_core::board::{Board, GateProblem};
 use docket_core::clock::stamp;
 use docket_core::member::Tie;
 use docket_core::pace::epoch;
@@ -21,7 +21,7 @@ use crate::reads::public::{Kinds, facts, open_members, sql};
 use crate::reads::rows::{project_model, rows};
 use crate::store::{self, column, to_item};
 use crate::verbs::Failure;
-use crate::verbs::graph::{audits_over, live_overlaps, open_under};
+use crate::verbs::graph::live_overlaps;
 
 #[derive(Deserialize)]
 pub struct InProject {
@@ -83,8 +83,8 @@ fn bump(pairs: &mut Vec<(String, u64)>, word: &str) {
 }
 
 /// The word of every item of a project, by state then rid.
-async fn words(
-    db: &DatabaseConnection,
+async fn words<C: ConnectionTrait>(
+    db: &C,
     slug: &str,
     kinds: &Kinds,
 ) -> Result<Vec<(crate::entities::item::Model, String)>, Failure> {
@@ -169,7 +169,7 @@ pub async fn check(
 ///
 /// # Errors
 /// The database.
-pub async fn problems(db: &DatabaseConnection, slug: &str) -> Result<Vec<Value>, Failure> {
+pub async fn problems<C: ConnectionTrait>(db: &C, slug: &str) -> Result<Vec<Value>, Failure> {
     let project = store::project(db, slug).await?;
     let mut out = Vec::new();
     let conflicts: Vec<String> = column(
@@ -186,7 +186,7 @@ pub async fn problems(db: &DatabaseConnection, slug: &str) -> Result<Vec<Value>,
     out.extend(undefined_keys(db, slug, &project).await?);
     out.extend(database_checks(db).await?);
     out.extend(stalls(db, slug).await?);
-    out.extend(audits_held(db, slug, &project).await?);
+    out.extend(audits_held(db, slug).await?);
     let cutoff = stamp(now_secs().saturating_sub(30 * 86_400));
     let stale = rows(
         db,
@@ -226,8 +226,8 @@ struct KeyCount {
     n: i64,
 }
 
-async fn undefined_keys(
-    db: &DatabaseConnection,
+async fn undefined_keys<C: ConnectionTrait>(
+    db: &C,
     slug: &str,
     project: &store::ProjectRow,
 ) -> Result<Vec<Value>, Failure> {
@@ -257,7 +257,7 @@ async fn undefined_keys(
 
 /// The indexes Postgres cannot use and the check constraints it has not validated, by name; then the
 /// foreign keys it has not validated, which may hold rows that break them.
-async fn database_checks(db: &DatabaseConnection) -> Result<Vec<Value>, Failure> {
+async fn database_checks<C: ConnectionTrait>(db: &C) -> Result<Vec<Value>, Failure> {
     let mut out = Vec::new();
     let broken: Vec<String> = column(db, BROKEN, vec![]).await?;
     if !broken.is_empty() {
@@ -294,7 +294,7 @@ struct Hold {
 
 /// What stalls the queue for good: open items holding each other in a cycle, through an item's wait
 /// or a container's wait on its open members, and an item held by one in a later release.
-async fn stalls(db: &DatabaseConnection, slug: &str) -> Result<Vec<Value>, Failure> {
+async fn stalls<C: ConnectionTrait>(db: &C, slug: &str) -> Result<Vec<Value>, Failure> {
     let open = rows(
         db,
         "SELECT * FROM items WHERE project=? AND state='open' ORDER BY rid",
@@ -346,32 +346,17 @@ async fn stalls(db: &DatabaseConnection, slug: &str) -> Result<Vec<Value>, Failu
     Ok(out)
 }
 
-async fn audits_held(
-    db: &DatabaseConnection,
-    slug: &str,
-    project: &store::ProjectRow,
-) -> Result<Vec<Value>, Failure> {
-    let open: Vec<i64> = column(
-        db,
-        "SELECT rid FROM items WHERE project=? AND state='open' ORDER BY rid",
-        vec![slug.into()],
-    )
-    .await?;
-    let mut out = Vec::new();
-    for a in audits_over(db, project, &open).await? {
-        let pending = open_under(db, a.rid).await?;
-        let gated =
-            a.wait_on.as_deref() == Some("condition") && a.wait_ref.as_deref() == Some(GATE);
-        if gated && pending.is_empty() {
-            out.push(problem("held_gate", json!({ "id": a.id })));
-        } else if !pending.is_empty() && a.wait_on.is_none() && a.claim_branch.is_none() {
-            out.push(problem(
-                "open_audit",
-                json!({ "id": a.id, "n": pending.len() }),
-            ));
-        }
-    }
-    Ok(out)
+async fn audits_held<C: ConnectionTrait>(db: &C, slug: &str) -> Result<Vec<Value>, Failure> {
+    let model = project_model(db, slug).await?;
+    let board = core_board(db, &model).await?;
+    Ok(board
+        .gate_problems()
+        .into_iter()
+        .map(|g| match g {
+            GateProblem::HeldGate { id } => problem("held_gate", json!({ "id": id })),
+            GateProblem::OpenAudit { id, n } => problem("open_audit", json!({ "id": id, "n": n })),
+        })
+        .collect())
 }
 
 #[derive(FromQueryResult)]
@@ -450,8 +435,8 @@ fn holds(kind: Kind) -> bool {
 ///
 /// # Errors
 /// The database.
-pub async fn core_board(
-    db: &DatabaseConnection,
+pub async fn core_board<C: ConnectionTrait>(
+    db: &C,
     model: &crate::entities::project::Model,
 ) -> Result<Board, Failure> {
     let project = ProjectRow {
@@ -584,13 +569,13 @@ struct Stamp {
 }
 
 /// `{rid: flag}` for the claims with no event for longer than the project's `stale_claim` minutes.
-async fn idle_flags(
-    db: &DatabaseConnection,
+async fn idle_flags<C: ConnectionTrait>(
+    db: &C,
     slug: &str,
     model: &crate::entities::project::Model,
     claimed: &[crate::entities::item::Model],
 ) -> Result<HashMap<i64, String>, Failure> {
-    let limit = fact_int(model, "stale_claim", 120);
+    let limit = fact_int(db, model, "stale_claim", 120).await?;
     let mut last: HashMap<i64, i64> = HashMap::new();
     let stamps = Stamp::find_by_statement(sql(
         "SELECT rid, at FROM events WHERE project=? AND rid IS NOT NULL",
@@ -621,13 +606,27 @@ async fn idle_flags(
     Ok(out)
 }
 
-/// A numeric fact of the project, its default when unset or unreadable.
-fn fact_int(model: &crate::entities::project::Model, key: &str, default: i64) -> i64 {
-    model.skills[key]
-        .as_str()
-        .filter(|v| !v.is_empty())
-        .map_or(Some(default), |v| v.parse().ok())
-        .unwrap_or(default)
+/// A numeric agent setting: the project's, else the owner-level one, else the default, also when
+/// unreadable.
+async fn fact_int<C: ConnectionTrait>(
+    db: &C,
+    model: &crate::entities::project::Model,
+    key: &str,
+    default: i64,
+) -> Result<i64, Failure> {
+    let project: std::collections::BTreeMap<String, String> = model
+        .skills
+        .as_object()
+        .map(|m| {
+            m.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+    let owner = crate::facts::owner(db).await?;
+    Ok(docket_core::fact::layered(&project, &owner, key)
+        .and_then(|(v, _)| v.parse().ok())
+        .unwrap_or(default))
 }
 
 /// What the status text reads beside the flow and the queue: the pace, the claims, the plans under
@@ -639,6 +638,9 @@ pub async fn summary(
     State(db): State<DatabaseConnection>,
     Query(q): Query<InProject>,
 ) -> Result<Json<Value>, Failure> {
+    let db = db
+        .begin_with_config(None, Some(sea_orm::AccessMode::ReadOnly))
+        .await?;
     let model = project_model(&db, &q.project).await?;
     let project = store::project(&db, &q.project).await?;
     let board = core_board(&db, &model).await?;
@@ -673,8 +675,8 @@ struct MoveRow {
 }
 
 /// The closes and working seconds over the last twenty closes.
-async fn pace(
-    db: &DatabaseConnection,
+async fn pace<C: ConnectionTrait>(
+    db: &C,
     slug: &str,
     project: &store::ProjectRow,
     now: i64,
@@ -718,8 +720,8 @@ struct NetRow {
 
 /// The current release's tickets closed and opened since `since`, and the research closes that opened
 /// nothing.
-async fn net(
-    db: &DatabaseConnection,
+async fn net<C: ConnectionTrait>(
+    db: &C,
     model: &crate::entities::project::Model,
     since: i64,
 ) -> Result<docket_core::pace::Net, Failure> {
@@ -758,8 +760,8 @@ async fn net(
 
 /// Every claim in the project, oldest first: its branch, the host it was claimed on, since when, and
 /// a flag when nothing has moved on it for longer than `stale_claim`.
-async fn claims(
-    db: &DatabaseConnection,
+async fn claims<C: ConnectionTrait>(
+    db: &C,
     slug: &str,
     model: &crate::entities::project::Model,
 ) -> Result<Value, Failure> {

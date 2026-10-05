@@ -24,6 +24,7 @@ INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, compl
   (2, 'o/p', 'T', 2, 'Write two', 'open', 'agent', '[]', '', 'low', '2026-01-01T00:00:00Z', 'u'),
   (3, 'o/p', 'T', 3, 'Write three', 'open', 'agent', '[]', '', 'high', '2026-01-01T00:00:00Z', 'u'),
   (4, 'o/p', 'A', 1, 'A plan', 'open', 'agent', '[]', '', NULL, '2026-01-01T00:00:00Z', 'u');
+UPDATE items SET group_name = 'streams' WHERE rid IN (1, 2);
 "#;
 
 /// The stand-in for ssh: options skipped, the host's home put in place, the command run here.
@@ -487,4 +488,70 @@ fn test_a_patch_ending_in_a_blank_context_line_is_committed_whole() {
         ),
         sh(&alpha, "printf 'second\\n\\n' | od -c | head -1")
     );
+}
+
+#[test]
+fn test_a_second_member_of_a_group_is_refused_while_one_runs() {
+    let mut w = World::new();
+    w.does = "sleep 30".into();
+    let first = w.lead(&["dispatch", "T1", "--on", "beta"]);
+    assert!(first.status.success(), "{}", text(&first));
+    let name = w.show("T1")["claim_job"].as_str().unwrap().to_string();
+
+    let out = w.lead(&["dispatch", "T2", "--on", "beta"]);
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(
+        text(&out).contains("streams") && text(&out).contains(&name),
+        "{}",
+        text(&out)
+    );
+    assert!(w.show("T2")["claim_branch"].is_null());
+
+    let other = w.lead(&["dispatch", "T3", "--on", "alpha"]);
+    assert!(other.status.success(), "{}", text(&other));
+    let forced = w.lead(&["dispatch", "T2", "--on", "alpha", "--force"]);
+    assert!(forced.status.success(), "{}", text(&forced));
+    for (id, on) in [("T1", "beta"), ("T2", "alpha"), ("T3", "alpha")] {
+        let job = w.show(id)["claim_job"].as_str().unwrap().to_string();
+        let _ = w.docket(
+            on,
+            &w.home(on).join("src/p"),
+            &["-p", "o/p", "job", "kill", &job],
+        );
+    }
+}
+
+#[test]
+fn test_a_dispatch_names_the_machine_it_could_not_read_and_why() {
+    let w = World::new();
+    let add = w.lead(&[
+        "machine",
+        "set",
+        "gamma",
+        "--ssh",
+        "gamma",
+        "--slots",
+        "2",
+        "--runners",
+        "claude,codex",
+    ]);
+    assert!(add.status.success(), "{}", text(&add));
+    let out = w.lead(&["dispatch", "T1", "--on", "gamma"]);
+    assert!(!out.status.success());
+    let said = text(&out);
+    assert!(said.contains("gamma cannot be read"), "{said}");
+    assert!(said.contains("no host gamma"), "{said}");
+    assert!(w.show("T1")["claim_branch"].is_null());
+
+    for name in ["alpha", "beta"] {
+        let set = w.lead(&["machine", "set", name, "--runners", "codex"]);
+        assert!(set.status.success(), "{}", text(&set));
+    }
+    let set = w.lead(&["machine", "set", "gamma", "--runners", "claude"]);
+    assert!(set.status.success(), "{}", text(&set));
+    let out = w.lead(&["dispatch", "T1"]);
+    assert!(!out.status.success());
+    let said = text(&out);
+    assert!(said.contains("gamma cannot be read"), "{said}");
+    assert!(said.contains("no host gamma"), "{said}");
 }

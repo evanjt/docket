@@ -129,7 +129,7 @@ impl Source for Http {
 
     fn post(&self, verb: &str, body: &Value) -> Result<Value> {
         self.0.post(verb, body).map_err(|e| match e {
-            Error::Refused(_, why) | Error::Failed(why) => why,
+            Error::Refused(_, why) | Error::Failed(why) | Error::Unreadable(why) => why,
         })
     }
 }

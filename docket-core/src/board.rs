@@ -5,7 +5,17 @@ use std::collections::{HashMap, HashSet};
 
 use crate::member::{Tie, members_of, opened_under};
 use crate::rows::{ItemRow, Progress, ProjectRow};
+use crate::rules::GATE;
 use crate::word::{Facts, Kind, word};
+
+/// A plan whose gate disagrees with what it opened.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GateProblem {
+    /// Gated, yet everything it opened is closed.
+    HeldGate { id: String },
+    /// Open members under it, yet nothing holds it.
+    OpenAudit { id: String, n: usize },
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct Board {
@@ -191,6 +201,34 @@ impl Board {
             .into_iter()
             .filter(|p| self.due(p))
             .collect()
+    }
+
+    /// Open plans whose gate disagrees with their members, by key and number. Each plan's open
+    /// descendants are counted once, from the ties already in memory.
+    #[must_use]
+    pub fn gate_problems(&self) -> Vec<GateProblem> {
+        let mut out = Vec::new();
+        for plan in self.open_of(&[Kind::Audit]) {
+            let pending = self
+                .holds(plan)
+                .into_iter()
+                .filter_map(|r| self.by_rid(r))
+                .filter(|m| m.state == "open")
+                .count();
+            let gated = plan.wait_on.as_deref() == Some("condition")
+                && plan.wait_ref.as_deref() == Some(GATE);
+            if gated && pending == 0 {
+                out.push(GateProblem::HeldGate {
+                    id: plan.id.clone(),
+                });
+            } else if pending > 0 && plan.wait_on.is_none() && plan.claim_branch.is_none() {
+                out.push(GateProblem::OpenAudit {
+                    id: plan.id.clone(),
+                    n: pending,
+                });
+            }
+        }
+        out
     }
 
     /// Open items of the kinds, by key and number.

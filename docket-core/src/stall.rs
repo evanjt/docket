@@ -4,6 +4,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::queue::release_rank;
+
 /// Every item on a cycle of holds, a self-hold included. An item whose chain only runs into a cycle
 /// is not on it.
 #[must_use]
@@ -41,6 +43,13 @@ pub fn held_later(edges: &BTreeMap<i64, Vec<i64>>, rank: &BTreeMap<i64, usize>) 
         }
     }
     out
+}
+
+/// Whether a hold of an item in `held` by one in `holder` runs into a later release. A theme the
+/// releases do not list ranks with the current release.
+#[must_use]
+pub fn runs_later(releases: &[String], held: Option<&str>, holder: Option<&str>) -> bool {
+    release_rank(releases, holder) > release_rank(releases, held)
 }
 
 #[cfg(test)]

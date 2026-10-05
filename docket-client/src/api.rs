@@ -22,15 +22,17 @@ pub const PAGE: usize = 1000;
 pub enum Error {
     /// The server answered and said no: the status and its words.
     Refused(u16, String),
-    /// The server could not be reached, or the answer was not the shape expected.
+    /// The server could not be reached, or a read's answer was not the shape expected.
     Failed(String),
+    /// A write was answered 2xx in a shape this client cannot read, so it has landed.
+    Unreadable(String),
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::Refused(code, why) => write!(f, "{code}: {why}"),
-            Error::Failed(why) => write!(f, "{why}"),
+            Error::Failed(why) | Error::Unreadable(why) => write!(f, "{why}"),
         }
     }
 }
@@ -77,7 +79,7 @@ impl Api {
     /// A write verb, `POST /do/{verb}`, its answer read as `T`.
     ///
     /// # Errors
-    /// A refusal, the network, or an answer of another shape.
+    /// A refusal, the network, or an answer of another shape, which is `Unreadable`.
     pub fn post<T: DeserializeOwned>(&self, verb: &str, body: &impl Serialize) -> Result<T> {
         let resp = self
             .http
@@ -91,7 +93,7 @@ impl Api {
             return Err(refusal(resp));
         }
         let text = resp.text().map_err(|e| Error::Failed(e.to_string()))?;
-        serde_json::from_str(&text).map_err(|e| Error::Failed(format!("{verb}: {e}")))
+        serde_json::from_str(&text).map_err(|e| Error::Unreadable(format!("{verb}: {e}")))
     }
 
     /// One route's answer, read as `T`.
@@ -301,7 +303,13 @@ impl Api {
     ///
     /// # Errors
     /// As `post`.
-    pub fn set_fact(&self, slug: &str, key: &str, value: &str) -> Result<FactSet> {
+    pub fn set_fact(
+        &self,
+        slug: &str,
+        key: &str,
+        value: &str,
+        all_projects: bool,
+    ) -> Result<FactSet> {
         let req = FactRequest {
             common: Common {
                 project: slug.to_string(),
@@ -309,6 +317,7 @@ impl Api {
             },
             key: key.to_string(),
             value: value.to_string(),
+            all_projects,
         };
         self.post("fact", &req)
     }

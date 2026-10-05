@@ -82,3 +82,15 @@ async fn test_tx_item_locks_the_row_until_commit() {
     assert!(blocked.is_err(), "the row was not locked");
     tx.commit().await.unwrap();
 }
+
+/// Scenario: a pool hands out a connection that was used a moment ago.
+/// Expected behaviour: the connection is health-checked only once it has been idle for 30 s.
+#[test]
+fn test_options_ping_a_connection_only_after_it_has_idled() {
+    let o = crate::options("postgres://u:p@h/d");
+    assert_eq!(
+        o.get_test_before_acquire_if_idle_for(),
+        Some(Duration::from_secs(30))
+    );
+    assert!(!o.get_test_before_acquire());
+}

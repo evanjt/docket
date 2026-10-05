@@ -14,7 +14,8 @@ the owner can do. The project's `AGENTS.md` names its gates. Then `docket simila
 landed under another id is not written twice.
 
 Write the failing test first, at the lowest level that can fail for the right reason, and see it
-fail against the unfixed code. Then fix. Run the project's gates. Leave every change in this
+fail against the unfixed code. Then name the one owner of the fact, or its full inventory (every write site,
+caller and copy), and fix the listed items through it. Run the project's gates. Leave every change in this
 worktree and never commit: the lead takes your change and commits it on its own machine, the only
 place a commit is made. Never `git stash`, never rebase, never touch another worktree.
 
@@ -48,7 +49,7 @@ The body's last line says which and why: `**Release.** current: it loses the dra
 
 Something found on the way that is not this ticket is filed only when it is critical or high, or the
 triage above puts it in the current release: `docket new B "title" --body - --release current
---priority high`. Anything else is an `OBSERVE` line in your report, which the lead adds to {id}.
+--priority high --complexity medium`. Anything else is an `OBSERVE` line in your report, which the lead adds to {id}.
 A part of {id} left undone is a ticket of its own, filed before you report and named in the note.
 
 The repository may be public while the docket is private: code, tests, comments and commit

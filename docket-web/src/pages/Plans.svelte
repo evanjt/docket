@@ -1,5 +1,8 @@
 <script lang="ts">
   import { project } from '../lib/context';
+  import { remainingHref } from '../lib/filter';
+  import { releaseOf } from '../lib/releases';
+  import { at, go, withParams } from '../lib/router.svelte';
   import { GROUPINGS, byId, plans, tally } from '../lib/flow';
   import Bar from '../components/Bar.svelte';
   import Word from '../components/Word.svelte';
@@ -8,8 +11,21 @@
   let unfolded = $state(new Set<string>());
   let showClosed = $state(false);
 
+  const text = $derived((at.params.get('q') ?? '').trim().toLowerCase());
+  const release = $derived(at.params.get('release') ?? '');
+  let typed = $state(at.params.get('q') ?? '');
+
   const sections = $derived(
-    ctx.board ? GROUPINGS.map((g) => ({ ...g, rows: plans(ctx.board!, g.kind) })).filter((s) => s.rows.length) : [],
+    ctx.board
+      ? GROUPINGS.map((g) => ({
+          ...g,
+          rows: plans(ctx.board!, g.kind).filter(
+            (p) =>
+              (!text || `${p.node.id} ${p.node.title}`.toLowerCase().includes(text)) &&
+              (!release || releaseOf(p.node.theme, ctx.releases) === release),
+          ),
+        })).filter((s) => s.rows.length)
+      : [],
   );
 
   function fold(id: string) {
@@ -70,6 +86,16 @@
       <p class="muted">A plan is an <span class="id">A</span> item; the tickets it opens are linked to it, and its audit is due once they are all closed.</p>
     </div>
   {:else}
+    <div class="filters">
+      <input class="field" type="search" placeholder="Filter plans by id or title" aria-label="Filter plans" bind:value={typed}
+        oninput={() => go(withParams({ q: typed.trim() || undefined }), true)} />
+      {#if ctx.releases.length}
+        <a class="chip" class:active={!release} href={withParams({ release: undefined })}>every release</a>
+        {#each ctx.releases as r, i (r)}
+          <a class="chip" class:active={release === r} href={withParams({ release: r })}>{r}{i === 0 ? ' (current)' : ''}</a>
+        {/each}
+      {/if}
+    </div>
     <label class="toggle"><input type="checkbox" bind:checked={showClosed} /> Show closed items under each</label>
     {#each sections as s (s.kind)}
       <section>
@@ -84,6 +110,8 @@
                 </button>
                 <a class="id" href={ctx.item(p.node.id)}>{p.node.id}</a>
                 <a class="title" href={ctx.item(p.node.id)}>{p.node.title}</a>
+                {#if releaseOf(p.node.theme, ctx.releases)}<span class="release faint">{releaseOf(p.node.theme, ctx.releases)}</span>{/if}
+                <a class="remaining" href={remainingHref(ctx.slug, p.node.id)}>remaining work</a>
                 <span class="state">
                   {#if p.due}<span class="badge">Audit due</span>{:else}<Word word={p.node.word} plain />{/if}
                 </span>
@@ -102,6 +130,31 @@
   .plans {
     padding: 22px 28px 48px;
     max-width: 1200px;
+  }
+
+  .filters {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+
+  .chip {
+    padding: 3px 9px;
+    border-radius: 14px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .chip.active {
+    background: var(--ink);
+    color: var(--paper);
+  }
+
+  .release,
+  .remaining {
+    font-size: 12.5px;
   }
 
   .toggle {
@@ -143,7 +196,7 @@
 
   .line {
     display: grid;
-    grid-template-columns: 26px 60px 1fr auto 220px;
+    grid-template-columns: 26px 60px 1fr auto auto auto 220px;
     align-items: center;
     gap: 10px;
     padding: 9px 4px;
@@ -224,6 +277,8 @@
       grid-template-columns: 26px 54px 1fr;
     }
 
+    .release,
+    .remaining,
     .state,
     .bar {
       grid-column: 3;

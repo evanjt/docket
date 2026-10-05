@@ -433,6 +433,7 @@ pub fn edit(
         set,
         append,
         body: read_body(body)?,
+        expect_updated_at: None,
     };
     moved(ctx, "edit", &req)
 }

@@ -69,7 +69,9 @@ skills traps` before building anything: it says what breaks in a fresh
 worktree here.
 
 Write the failing test first, at the lowest level that can fail for the right
-reason, and see it fail against the unfixed code. Then fix. Never `git stash`;
+reason, and see it fail against the unfixed code. Then fix. Before fixing, name the one owner of the fact, or the full inventory
+of it (every write site, caller and copy), and fix the listed items through it.
+Never `git stash`;
 use a patch file. Run the project's gates (its `AGENTS.md` names them) before
 merging.
 
@@ -148,7 +150,8 @@ loses the draft on resume.`
 
 Something found on the way that is not this ticket is filed only when it is
 critical or high, or the order above puts it in the current release: `docket
-new B "title" --body - --release current --priority high`. Anything else is an
+new B "title" --body - --release current --priority high
+--complexity medium`. Anything else is an
 observation on the ticket, never a ticket of its own: `docket edit T14
 --append "Observed: ..."`.
 

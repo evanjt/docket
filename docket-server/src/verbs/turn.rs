@@ -15,7 +15,10 @@ use docket_core::item::Field;
 use docket_core::rules;
 
 use crate::auth::Caller;
-use crate::verbs::graph::{audits_over, is_standing, release_waiters, settle_audits, similar_rows};
+use crate::verbs::graph::{
+    audits_over, is_standing, refuse_later, release_list, release_waiters, settle_audits,
+    similar_rows,
+};
 use crate::verbs::view::{brief, item_view, kind};
 use crate::verbs::{Call, Failure, chars, given};
 
@@ -60,6 +63,8 @@ pub async fn wait(
                 t.id, r.id, r.id, t.id
             )));
         }
+        let listed = release_list(&call.tx.conn, &call.slug).await?;
+        refuse_later(&listed, &r, &t, call.ctx.force)?;
         (
             rules::wait(&r, &call.ctx, "item", Some(t.rid), &t.id)?,
             format!("on {}", t.id),

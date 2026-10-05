@@ -18,6 +18,12 @@ const OWNERS: &str = "SELECT DISTINCT skills->>'owner' FROM projects \
 const HOSTS: &str = "SELECT host FROM events UNION SELECT claim_host FROM items \
                      WHERE claim_host IS NOT NULL UNION SELECT host FROM leads ORDER BY 1";
 const TITLES: &str = "SELECT DISTINCT title FROM items WHERE length(title) >= $1 ORDER BY 1";
+const THEMES: &str = "SELECT t->>'name' FROM projects, jsonb_array_elements(themes) t \
+                      UNION SELECT theme FROM items WHERE theme IS NOT NULL ORDER BY 1";
+const GROUPS: &str = "SELECT DISTINCT group_name FROM items \
+                      WHERE group_name IS NOT NULL AND group_name <> '' ORDER BY 1";
+const RELEASES: &str = "SELECT DISTINCT regexp_split_to_table(skills->>'releases', '\\s+') \
+                        FROM projects WHERE skills->>'releases' IS NOT NULL ORDER BY 1";
 const KEYS: &str =
     "SELECT DISTINCT k->>'key' FROM projects, jsonb_array_elements(keys) k ORDER BY 1";
 
@@ -49,6 +55,13 @@ pub async fn read(
         machines,
         hosts: column(&db, HOSTS, vec![]).await?,
         keys: column(&db, KEYS, vec![]).await?,
+        themes: column(&db, THEMES, vec![]).await?,
+        groups: column(&db, GROUPS, vec![]).await?,
+        releases: column::<_, String>(&db, RELEASES, vec![])
+            .await?
+            .into_iter()
+            .filter(|r| !r.is_empty())
+            .collect(),
         titles: column(
             &db,
             &TITLES.replace("$1", &docket_core::private::TITLE_LEAST.to_string()),

@@ -594,6 +594,38 @@ async fn test_edit_fields_and_body() {
 }
 
 #[tokio::test]
+async fn test_a_body_replace_against_a_newer_row_is_refused() {
+    let s = Scratch::new().await;
+    s.open("B", "Thing").await;
+    let seen = "2000-01-01T00:00:00Z";
+    s.ok("edit", json!({ "id": "B1", "append": "written meanwhile" }))
+        .await;
+    assert_eq!(
+        s.refused(
+            "edit",
+            json!({ "id": "B1", "body": "stale copy", "expect_updated_at": seen })
+        )
+        .await,
+        "B1 changed since it was read; reload it before replacing its body."
+    );
+    assert!(
+        s.item("B1").await["body"]
+            .as_str()
+            .unwrap()
+            .contains("written meanwhile")
+    );
+    let now = s.item("B1").await["updated_at"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    s.ok(
+        "edit",
+        json!({ "id": "B1", "body": "fresh copy", "expect_updated_at": now }),
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn test_a_second_claim_on_another_branch_is_refused() {
     let s = Scratch::new().await;
     s.open("B", "contested").await;
@@ -1228,4 +1260,82 @@ async fn test_decide_appends_the_choice_and_its_basis() {
         .unwrap();
     assert_eq!(decided["note"], "Keep one owner.");
     assert_eq!(decided["data"], json!({"derived": "CID1"}));
+}
+
+async fn two_releases() -> Scratch {
+    let s = Scratch::new().await;
+    s.db.seed(&format!(
+        "UPDATE projects SET skills = '{{\"releases\": \"1.0 1.1\"}}' WHERE slug = '{SLUG}'"
+    ))
+    .await;
+    s
+}
+
+async fn filed(s: &Scratch, key: &str, release: &str) {
+    s.ok(
+        "new",
+        json!({ "key": key, "title": "Filed", "release": release }),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn test_a_wait_on_an_item_in_a_later_release_is_refused_unless_forced() {
+    let s = two_releases().await;
+    filed(&s, "T", "1.0").await;
+    filed(&s, "T", "1.1").await;
+    filed(&s, "T", "1.0").await;
+    assert_eq!(
+        s.refused("wait", json!({ "id": "T1", "on": "T2" })).await,
+        "T1 (1.0) would be held by T2 (1.1), which ships later. Move T2 to 1.0, or move T1 to 1.1, or pass --force."
+    );
+    s.ok("wait", json!({ "id": "T2", "on": "T1" })).await;
+    s.ok("wait", json!({ "id": "T3", "on": "T1" })).await;
+    s.ok("resume", json!({ "id": "T3" })).await;
+    s.ok("wait", json!({ "id": "T3", "on": "T2", "force": true }))
+        .await;
+    assert_eq!(s.item("T3").await["wait_item"], s.item("T2").await["rid"]);
+}
+
+#[tokio::test]
+async fn test_a_plan_is_not_linked_to_a_member_in_a_later_release_unless_forced() {
+    let s = two_releases().await;
+    filed(&s, "A", "1.0").await;
+    filed(&s, "T", "1.1").await;
+    assert_eq!(
+        s.refused("link", json!({ "a": ["T1"], "kind": "opened", "b": "A1" }))
+            .await,
+        "A1 (1.0) would be held by T1 (1.1), which ships later. Move T1 to 1.0, or move A1 to 1.1, or pass --force."
+    );
+    s.ok(
+        "link",
+        json!({ "a": ["T1"], "kind": "opened", "b": "A1", "force": true }),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn test_a_theme_edit_that_puts_a_hold_into_a_later_release_is_refused() {
+    let s = two_releases().await;
+    filed(&s, "T", "1.0").await;
+    filed(&s, "T", "1.0").await;
+    s.ok("wait", json!({ "id": "T1", "on": "T2" })).await;
+    assert_eq!(
+        s.refused(
+            "edit",
+            json!({ "id": "T2", "set": [{ "field": "theme", "value": "1.1" }] })
+        )
+        .await,
+        "T1 (1.0) would be held by T2 (1.1), which ships later. Move T2 to 1.0, or move T1 to 1.1, or pass --force."
+    );
+    s.ok(
+        "edit",
+        json!({ "id": "T1", "set": [{ "field": "theme", "value": "1.1" }] }),
+    )
+    .await;
+    s.ok(
+        "edit",
+        json!({ "id": "T2", "set": [{ "field": "theme", "value": "1.1" }] }),
+    )
+    .await;
 }

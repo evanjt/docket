@@ -44,7 +44,17 @@ fn test_templates_name_no_project() {
 #[test]
 fn test_each_skill_names_itself_and_its_role() {
     let names: Vec<&str> = SKILLS.iter().map(|s| s.name).collect();
-    assert_eq!(names, ["plan", "work", "audit", "lead"]);
+    assert_eq!(
+        names,
+        [
+            "plan",
+            "work",
+            "audit",
+            "lead",
+            "ask-questions",
+            "owner-queue"
+        ]
+    );
     for s in &SKILLS {
         for text in [s.claude, s.codex] {
             assert!(
@@ -52,12 +62,25 @@ fn test_each_skill_names_itself_and_its_role() {
                 "{}",
                 s.name
             );
-            let role = if s.name == "lead" {
-                "docket lead take".to_string()
-            } else {
-                format!("--role {}", s.name)
+            let role = match s.name {
+                "lead" => "docket lead take".to_string(),
+                "ask-questions" | "owner-queue" => "docket skills".to_string(),
+                _ => format!("--role {}", s.name),
             };
             assert!(text.contains(&role), "{}", s.name);
+        }
+    }
+}
+
+#[test]
+fn test_owner_skills_order_by_release_and_set_no_theme() {
+    for name in ["ask-questions", "owner-queue"] {
+        let s = SKILLS.iter().find(|s| s.name == name).unwrap();
+        for text in [s.claude, s.codex] {
+            assert!(!text.contains("--set theme="), "{name} sets a theme");
+            assert!(!text.contains("batch size"), "{name} cites a batch size");
+            assert!(!text.contains("background sync"), "{name} cites a sync");
+            assert!(text.contains("release"), "{name} does not order by release");
         }
     }
 }
@@ -115,6 +138,10 @@ fn test_install_on_a_scratch_home_lists_and_writes_exactly_the_skills() {
             "current .agents/skills/audit/SKILL.md",
             "new .claude/skills/lead/SKILL.md",
             "new .agents/skills/lead/SKILL.md",
+            "overwrite .claude/skills/ask-questions/SKILL.md",
+            "new .agents/skills/ask-questions/SKILL.md",
+            "new .claude/skills/owner-queue/SKILL.md",
+            "new .agents/skills/owner-queue/SKILL.md",
         ]
     );
     apply(&steps).unwrap();
@@ -143,7 +170,7 @@ fn test_install_for_one_tool_leaves_the_other_alone() {
     write(&h.join(".agents/skills/start-queue/SKILL.md"), "old loop");
     let steps = skill_steps(h, &["claude"]);
     assert!(steps.iter().all(|s| s.path.starts_with(h.join(".claude"))));
-    assert_eq!(steps.len(), 4);
+    assert_eq!(steps.len(), 6);
 }
 
 #[test]
@@ -235,5 +262,53 @@ fn test_the_audit_skill_files_only_critical_and_high_gaps() {
     for text in [audit.claude, audit.codex] {
         assert!(text.contains("critical or high gap"));
         assert!(text.contains("normal or low gap is an observation"));
+    }
+}
+
+#[test]
+fn test_both_lead_variants_land_in_a_batch_and_resolve_conflicts_themselves() {
+    let lead = SKILLS.iter().find(|s| s.name == "lead").unwrap();
+    for text in [lead.claude, lead.codex] {
+        assert!(text.contains("lead/batch"));
+        assert!(text.contains("A conflict is yours to resolve"));
+        assert!(!text.contains("never resolved by hand"));
+    }
+}
+
+fn work_texts() -> Vec<(String, &'static str)> {
+    let work = SKILLS.iter().find(|s| s.name == "work").unwrap();
+    vec![
+        ("work/SKILL.md".to_string(), work.claude),
+        ("work/SKILL.codex.md".to_string(), work.codex),
+        ("job/build.md".to_string(), crate::job::BRIEFS[0].1),
+    ]
+}
+
+#[test]
+fn test_work_and_build_name_the_one_owner_of_a_fact_before_fixing_it() {
+    for (name, text) in work_texts() {
+        assert!(text.contains("one owner"), "{name}");
+        assert!(text.contains("inventory"), "{name}");
+    }
+}
+
+#[test]
+fn test_a_side_finding_command_carries_a_complexity() {
+    for (name, text) in work_texts() {
+        let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let at = flat.find("docket new B").unwrap();
+        let command = flat[at..].split('`').next().unwrap();
+        assert!(command.contains("--complexity"), "{name}");
+    }
+}
+
+#[test]
+fn test_no_installed_text_names_a_retired_skill() {
+    let mut all = texts();
+    all.extend(crate::job::BRIEFS.iter().map(|(n, t)| (n.to_string(), *t)));
+    for (name, text) in all {
+        for old in RETIRED {
+            assert!(!text.contains(old), "{name} names {old}");
+        }
     }
 }

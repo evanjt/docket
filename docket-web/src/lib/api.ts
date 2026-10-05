@@ -93,6 +93,8 @@ export async function post<T = unknown>(verb: string, body: object): Promise<T> 
   return answer<T>(resp);
 }
 
+type Params = Record<string, string | undefined>;
+
 const of = (project: string) => ({ project });
 
 /** The most rows one page of a stored list carries. */
@@ -118,10 +120,10 @@ export const api = {
   projects: () => all<ProjectRow>('/projects', {}, '["slug","ASC"]'),
   counts: () => get<Count[]>('/counts'),
   status: (p: string) => get<Status>('/status', of(p)),
-  next: (p: string, n = 100, under?: string) => get<Row[]>('/next', { project: p, n, under }),
+  next: (p: string, n = 100, filter: Params = {}) => get<Row[]>('/next', { project: p, n, ...filter }),
   list: (route: string, p: string, n?: number) => get<Row[]>(`/${route}`, { project: p, n }),
   derived: (p: string, n?: number) => get<Derived[]>('/derived', { project: p, n }),
-  search: (p: string, q: string, n = 200) => get<Row[]>('/search', { project: p, q, n, state: 'any' }),
+  search: (p: string, q: string, n = 200, filter: Params = {}) => get<Row[]>('/search', { project: p, q, n, state: 'any', ...filter }),
   show: (p: string, id: string) => get<Shown>(`/show/${encodeURIComponent(id)}`, of(p)),
   log: (p: string, id: string) => get<EventRow[]>(`/log/${encodeURIComponent(id)}`, of(p)),
   context: (p: string, id: string) => get<Context>(`/context/${encodeURIComponent(id)}`, of(p)),

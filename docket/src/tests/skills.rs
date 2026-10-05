@@ -61,8 +61,9 @@ fn test_values_layer_set_over_default_and_mark_the_rest() {
     ]
     .into_iter()
     .collect();
-    let v = values(&set);
-    assert_eq!(v["job_timeout"], "30");
+    let v = values(&set, &BTreeMap::new());
+    assert_eq!(v["job_timeout"], "30  (project)");
+    assert_eq!(v["stale_claim"], "120  (default)");
     assert_eq!(v["owner"], "the owner");
     assert_eq!(v["gates"], "(not set: docket skills set gates \"...\")");
     assert_eq!(v.len(), FACTS.len());
@@ -76,14 +77,14 @@ fn test_values_leave_out_a_retired_fact_still_stored() {
     ]
     .into_iter()
     .collect();
-    let v = values(&set);
+    let v = values(&set, &BTreeMap::new());
     assert!(!v.contains_key("pool") && !v.contains_key("land"), "{v:?}");
     assert_eq!(v.len(), FACTS.len());
 }
 
 #[test]
 fn test_facts_text_hangs_a_value_s_lines_under_it() {
-    let mut v = values(&BTreeMap::new());
+    let mut v = values(&BTreeMap::new(), &BTreeMap::new());
     v.insert("traps".into(), "one\ntwo".into());
     let text = facts_text(&v);
     assert!(
@@ -94,7 +95,7 @@ fn test_facts_text_hangs_a_value_s_lines_under_it() {
         text.contains("  traps     one\n            two\n"),
         "{text}"
     );
-    assert!(text.contains("  stale_claim 120\n"), "{text}");
+    assert!(text.contains("  stale_claim 120  (default)\n"), "{text}");
 }
 
 #[test]
@@ -116,4 +117,20 @@ fn test_installed_lists_directories_holding_a_skill_sorted() {
     assert_eq!(installed(&dir), ["alpha", "zeta"]);
     assert!(installed(&dir.join("missing")).is_empty());
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_values_name_the_owner_level_an_agent_setting_came_from() {
+    let project: BTreeMap<String, String> = [("mode".to_string(), "drain".to_string())].into();
+    let owner: BTreeMap<String, String> = [
+        ("mode".to_string(), "pause".to_string()),
+        ("job_timeout".into(), "45".into()),
+        ("gates".into(), "ignored".into()),
+    ]
+    .into();
+    let v = values(&project, &owner);
+    assert_eq!(v["mode"], "drain  (project)");
+    assert_eq!(v["job_timeout"], "45  (owner)");
+    assert_eq!(v["gates"], "(not set: docket skills set gates \"...\")");
+    assert!(v["models"].ends_with("(default)"), "{}", v["models"]);
 }

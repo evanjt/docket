@@ -108,6 +108,7 @@ fn run(
     let mut ctx = Ctx::new(flags.json, flags.project.clone(), Some(branch.clone()))?;
     let slug = ctx.project()?;
     let checkout = checkout(&mut ctx, &slug)?;
+    let provision = ctx.api.facts(&slug)?.skills.get("provision").cloned();
     let spec = Spec {
         project: slug.clone(),
         id: crate::ctx::id(id)?,
@@ -116,6 +117,7 @@ fn run(
         model: model.to_string(),
         effort: effort.filter(|e| !e.is_empty()).map(str::to_string),
         role: role.to_string(),
+        provision,
     };
     let name = job::name_of(&spec.branch);
     let env = [

@@ -316,6 +316,9 @@ pub struct EditRequest {
     pub append: Option<String>,
     #[serde(default)]
     pub body: Option<String>,
+    /// The `updated_at` the caller last read; a whole-body replace against a newer row is refused.
+    #[serde(default)]
+    pub expect_updated_at: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -358,6 +361,9 @@ pub struct FactRequest {
     pub key: String,
     #[serde(default)]
     pub value: String,
+    /// Set the owner-level value of an agent setting, read by every project, not the project's.
+    #[serde(default)]
+    pub all_projects: bool,
 }
 
 /// The checkout a client stands in, for the project it belongs to.
@@ -472,6 +478,9 @@ pub struct Reindexed {
 pub struct Facts {
     pub project: String,
     pub skills: BTreeMap<String, String>,
+    /// The owner-level agent settings, held on the server for every project.
+    #[serde(default)]
+    pub owner: BTreeMap<String, String>,
 }
 
 /// One fact written: the facts as they stand after it.
@@ -480,6 +489,8 @@ pub struct FactSet {
     pub project: String,
     pub key: String,
     pub skills: BTreeMap<String, String>,
+    #[serde(default)]
+    pub owner: BTreeMap<String, String>,
 }
 
 /// `docket machine set` and `remove`: the fields given, or the machine removed. The owner's key only.

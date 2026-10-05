@@ -395,6 +395,10 @@ pub enum Cmd {
         /// install without asking, for a run with no terminal
         #[arg(short = 'y', long)]
         yes: bool,
+        /// set: the owner-level value of an agent setting, read by every project that does not set
+        /// its own
+        #[arg(long)]
+        all_projects: bool,
     },
     /// the docket block in the AGENTS.md at the project's root: install writes it, diff lists what
     /// install would change
@@ -457,6 +461,9 @@ pub enum Cmd {
         /// default: audit for a plan, plan for an investigation, build for the rest
         #[arg(long, value_parser = JOB_ROLES)]
         role: Option<String>,
+        /// dispatch although another member of its group has a job running
+        #[arg(long)]
+        force: bool,
     },
     /// the project's jobs on every machine, read over ssh: running, done, failed or lost
     Jobs {

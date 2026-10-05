@@ -54,9 +54,15 @@ impl Api {
 
     /// # Errors
     /// The server cannot be reached, or refuses.
-    pub fn set_fact(&self, slug: &str, key: &str, value: &str) -> Result<FactSet> {
+    pub fn set_fact(
+        &self,
+        slug: &str,
+        key: &str,
+        value: &str,
+        all_projects: bool,
+    ) -> Result<FactSet> {
         self.client
-            .set_fact(slug, key, value)
+            .set_fact(slug, key, value, all_projects)
             .map_err(|e| failed(&self.base, &e))
     }
 }
@@ -66,6 +72,14 @@ fn failed(base: &str, e: &Error) -> Fail {
     match e {
         Error::Refused(401, _) => Fail::refused(format!("docket: {base} refused the key")),
         Error::Refused(_, why) => Fail::refused(why.clone()),
+        Error::Unreadable(why) => Fail::refused(format!(
+            "docket: the write may have landed, but the answer is not the shape this client reads: \
+             update the client, and check before retrying: {why}"
+        )),
         Error::Failed(why) => Fail::refused(format!("docket: cannot reach the server: {why}")),
     }
 }
+
+#[cfg(test)]
+#[path = "tests/http.rs"]
+mod tests;

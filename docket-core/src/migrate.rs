@@ -1077,6 +1077,7 @@ impl<'a> Project<'a> {
                     self.out.placed.by_placement += 1;
                     area
                 }
+                (None, None) if i.area.is_some() => i.area.clone().unwrap_or_default(),
                 (None, None) => {
                     if i.state == "open" {
                         open.push(i.id.clone());

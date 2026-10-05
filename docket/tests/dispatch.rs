@@ -23,7 +23,13 @@ INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, compl
   (1, 'o/p', 'T', 1, 'Write one', 'open', 'agent', '[]', '', 'low', '2026-01-01T00:00:00Z', 'u'),
   (2, 'o/p', 'T', 2, 'Write two', 'open', 'agent', '[]', '', 'low', '2026-01-01T00:00:00Z', 'u'),
   (3, 'o/p', 'T', 3, 'Write three', 'open', 'agent', '[]', '', 'high', '2026-01-01T00:00:00Z', 'u'),
-  (4, 'o/p', 'A', 1, 'A plan', 'open', 'agent', '[]', '', NULL, '2026-01-01T00:00:00Z', 'u');
+  (4, 'o/p', 'A', 1, 'A plan', 'open', 'agent', '[]', '', NULL, '2026-01-01T00:00:00Z', 'u'),
+  (5, 'o/p', 'T', 4, 'Write four', 'open', 'agent', '[]', '', 'medium', '2026-01-01T00:00:00Z', 'u'),
+  (6, 'o/p', 'T', 5, 'Write five', 'open', 'agent', '[]', '', 'medium', '2026-01-01T00:00:00Z', 'u'),
+  (7, 'o/p', 'T', 6, 'Write six', 'open', 'agent', '[]', '', 'medium', '2026-01-01T00:00:00Z', 'u'),
+  (8, 'o/p', 'A', 2, 'A finished plan', 'open', 'agent', '[]', '', NULL, '2026-01-01T00:00:00Z', 'u'),
+  (9, 'o/p', 'T', 7, 'Written', 'open', 'agent', '[]', '', 'low', '2026-01-01T00:00:00Z', 'u');
+INSERT INTO links (rid, kind, to_rid) VALUES (8, 'opened', 9);
 UPDATE items SET group_name = 'streams' WHERE rid IN (1, 2);
 "#;
 
@@ -39,10 +45,11 @@ exec sh -c "$*"
 "#;
 
 /// The stand-in agent: one change left in its worktree, uncommitted, then its report as a Claude
-/// Code result. `AGENT_DOES` is shell it runs first, and `AGENT_SAYS` replaces the report, for an
-/// agent that proposes no message.
+/// Code result. `AGENT_DOES` is shell it runs first, `AGENT_SAYS` replaces the report, for an
+/// agent that proposes no message, and `AGENT_EVENT` is one stream line it prints instead, then fails.
 const AGENT: &str = r#"#!/bin/sh
 eval "$AGENT_DOES"
+if [ -n "$AGENT_EVENT" ]; then printf '%s\n' "$AGENT_EVENT"; exit 1; fi
 echo "$DOCKET_JOB" > made-by-job
 said=${AGENT_SAYS:-'NOTE wrote made-by-job\nMESSAGE Write the job marker\nDONE'}
 printf '{"type":"result","result":"%s","usage":{"output_tokens":7}}\n' "$said"
@@ -53,6 +60,8 @@ struct World {
     _tmp: tempfile::TempDir,
     /// What the stand-in agent reports instead of its usual note, message and DONE.
     says: String,
+    /// The one stream line the stand-in agent prints, and fails, instead of reporting.
+    event: String,
     /// Shell the stand-in agent runs in its worktree before its usual change.
     does: String,
     machines: PathBuf,
@@ -79,6 +88,7 @@ impl World {
         script(&bin.join("agent"), AGENT);
         let w = World {
             says: String::new(),
+            event: String::new(),
             does: String::new(),
             machines,
             bin,
@@ -161,6 +171,7 @@ impl World {
             .env("MACHINES", &self.machines)
             .env("AGENT_SAYS", &self.says)
             .env("AGENT_DOES", &self.does)
+            .env("AGENT_EVENT", &self.event)
             .env("GIT_AUTHOR_NAME", "lead")
             .env("GIT_AUTHOR_EMAIL", "lead@example.org")
             .env("GIT_COMMITTER_NAME", "lead")
@@ -315,13 +326,21 @@ fn test_a_dispatch_to_a_machine_without_the_runner_is_refused_before_any_claim()
 }
 
 #[test]
-fn test_a_plan_is_dispatched_as_an_audit_on_the_audit_model() {
+fn test_a_plan_that_opened_nothing_is_dispatched_as_a_plan() {
     let w = World::new();
     let out = w.lead(&["dispatch", "A1", "--on", "beta"]);
     assert!(out.status.success(), "{}", text(&out));
-    assert!(text(&out).contains("audit on lead/a1-"), "{}", text(&out));
-    let a1 = w.show("A1");
-    assert_eq!(a1["claim_runner"], "codex");
+    assert!(text(&out).contains("plan on lead/a1-"), "{}", text(&out));
+}
+
+#[test]
+fn test_a_plan_that_opened_work_is_dispatched_as_an_audit_on_the_audit_model() {
+    let w = World::new();
+    let out = w.lead(&["dispatch", "A2", "--on", "beta"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains("audit on lead/a2-"), "{}", text(&out));
+    let a2 = w.show("A2");
+    assert_eq!(a2["claim_runner"], "codex");
     let jobs = w.lead(&["jobs", "--wait", "--every", "1"]);
     assert!(text(&jobs).contains("middle"), "{}", text(&jobs));
 }
@@ -554,4 +573,108 @@ fn test_a_dispatch_names_the_machine_it_could_not_read_and_why() {
     let said = text(&out);
     assert!(said.contains("gamma cannot be read"), "{said}");
     assert!(said.contains("no host gamma"), "{said}");
+}
+
+#[test]
+fn test_a_runner_that_reports_a_usage_limit_is_skipped_on_every_machine_until_its_reset() {
+    let mut w = World::new();
+    w.event = r#"{"type":"error","message":"weekly usage limit reached, resets 2999-10-07 18:29"}"#
+        .into();
+    for (id, on) in [("T4", "alpha"), ("T5", "beta")] {
+        let out = w.lead(&["dispatch", id, "--on", on]);
+        assert!(out.status.success(), "{}", text(&out));
+        assert_eq!(w.show(id)["claim_runner"], "codex");
+    }
+    let jobs = w.lead(&["jobs", "--wait", "--every", "1"]);
+    assert!(jobs.status.success(), "{}", text(&jobs));
+
+    let machines = w.lead(&["machines"]);
+    let listed = text(&machines);
+    assert_eq!(
+        listed
+            .matches("codex limited until 2999-10-07T18:29:00Z")
+            .count(),
+        2,
+        "{listed}"
+    );
+
+    let collected = w.lead(&["collect", "T4", "--discard"]);
+    assert!(
+        text(&collected).contains("usage limit: codex on alpha until 2999-10-07T18:29:00Z"),
+        "{}",
+        text(&collected)
+    );
+
+    let audit = w.lead(&["dispatch", "A1"]);
+    assert!(audit.status.success(), "{}", text(&audit));
+    let a1 = w.show("A1");
+    assert_eq!(a1["claim_runner"], "claude");
+    assert!(text(&audit).contains("claude large"), "{}", text(&audit));
+
+    let on_alpha = w.lead(&[
+        "dispatch", "T6", "--on", "alpha", "--runner", "codex", "--model", "m",
+    ]);
+    assert!(!on_alpha.status.success());
+    assert!(
+        text(&on_alpha)
+            .contains("codex on alpha reported a usage limit until 2999-10-07T18:29:00Z"),
+        "{}",
+        text(&on_alpha)
+    );
+    assert!(w.show("T6")["claim_branch"].is_null());
+}
+
+#[test]
+fn test_a_dispatch_with_no_runner_free_of_a_limit_is_refused_naming_the_reset() {
+    let mut w = World::new();
+    w.event = r#"{"type":"error","message":"usage limit reached, resets 2999-10-07 18:29"}"#.into();
+    let set = w.lead(&[
+        "skills",
+        "set",
+        "models",
+        "medium=codex:middle low=codex:small",
+    ]);
+    assert!(set.status.success(), "{}", text(&set));
+    for (id, on) in [("T4", "alpha"), ("T5", "beta")] {
+        let out = w.lead(&["dispatch", id, "--on", on]);
+        assert!(out.status.success(), "{}", text(&out));
+    }
+    w.lead(&["jobs", "--wait", "--every", "1"]);
+    let out = w.lead(&["dispatch", "T6"]);
+    assert!(!out.status.success());
+    assert!(text(&out).contains("usage limit"), "{}", text(&out));
+}
+
+#[test]
+fn test_a_final_message_that_reports_a_limit_limits_the_runner_but_a_finished_job_quoting_one_does_not()
+ {
+    let mut w = World::new();
+    w.says = "usage limit reached, resets 2999-10-07 18:29".into();
+    assert!(
+        w.lead(&["dispatch", "T3", "--on", "alpha"])
+            .status
+            .success()
+    );
+    w.lead(&["jobs", "--wait", "--every", "1"]);
+    let listed = text(&w.lead(&["machines"]));
+    assert!(
+        listed.contains("claude limited until 2999-10-07T18:29:00Z"),
+        "{listed}"
+    );
+    assert!(w.lead(&["collect", "T3", "--discard"]).status.success());
+
+    let w = {
+        let mut w = World::new();
+        w.says =
+            r"NOTE the usage limit reset line was resets 2999-10-07 18:29\nMESSAGE Write it\nDONE"
+                .into();
+        w
+    };
+    assert!(
+        w.lead(&["dispatch", "T3", "--on", "alpha"])
+            .status
+            .success()
+    );
+    w.lead(&["jobs", "--wait", "--every", "1"]);
+    assert!(!text(&w.lead(&["machines"])).contains("limited"));
 }

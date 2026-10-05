@@ -61,7 +61,7 @@ pub const RETIRED: [&str; 8] = [
 pub const TOOLS: [(&str, &str); 2] = [("claude", ".claude/skills"), ("codex", ".agents/skills")];
 
 pub const BLOCK: &str = include_str!("../../skills/docket-block.md");
-pub const BEGIN: &str = "<!-- docket:begin, from evanjt/docket skills/docket-block.md; docket instructions install rewrites it -->";
+pub const BEGIN: &str = "<!-- docket:begin, from docket skills/docket-block.md; docket instructions install rewrites it -->";
 pub const END: &str = "<!-- docket:end -->";
 /// Headings that open a block pasted by hand, the current one and an earlier template's.
 const PASTED: [&str; 2] = ["## The docket", "## The consolidation audit"];

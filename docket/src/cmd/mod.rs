@@ -139,6 +139,7 @@ fn run_lead(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             slots,
             runners,
             note,
+            path,
         } => machines::machine(
             ctx,
             &machines::set_request(
@@ -147,6 +148,7 @@ fn run_lead(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
                 *slots,
                 runners.as_deref(),
                 note.as_ref(),
+                path.as_ref(),
                 what == "remove",
             ),
         ),
@@ -247,7 +249,7 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             };
             write::start(ctx, &req)
         }
-        Cmd::Release {
+        Cmd::Unclaim {
             id,
             note,
             bounce,

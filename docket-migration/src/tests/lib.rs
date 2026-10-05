@@ -2,10 +2,12 @@ use super::*;
 
 use crate::scratch::Scratch;
 
-const MIGRATIONS: [&str; 3] = [
+const MIGRATIONS: [&str; 5] = [
     "m20261001_000001_schema",
     "m20261002_000001_machines_and_leads",
     "m20261005_000001_owner_facts",
+    "m20261005_000002_runner_limits",
+    "m20261005_000003_machine_path",
 ];
 
 #[test]

@@ -1240,6 +1240,20 @@ async fn test_a_refusal_writes_nothing() {
 }
 
 #[tokio::test]
+async fn test_decide_on_a_question_is_refused_in_favour_of_answer() {
+    let s = Scratch::new().await;
+    s.open("Q", "One cache or two").await;
+    let why = s
+        .refused(
+            "decide",
+            json!({ "id": "Q1", "choice": "One.", "basis": "CID1" }),
+        )
+        .await;
+    assert!(why.contains("docket answer"), "{why}");
+    assert!(s.events("Q1").await.iter().all(|e| e["kind"] != "decided"));
+}
+
+#[tokio::test]
 async fn test_decide_appends_the_choice_and_its_basis() {
     let s = Scratch::new().await;
     s.open_with_body("B", "x", "- **Fix.** do it.\n").await;

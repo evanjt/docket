@@ -8,6 +8,7 @@ use docket_core::rows::{Derived, EventRow, ItemRow, ProjectRow, Row, Shown, Stat
 
 use crate::doc::{Cursor, Listing};
 
+#[derive(Clone)]
 pub enum Page {
     Home(Home),
     Project(Project),
@@ -76,7 +77,7 @@ pub struct HomeRow {
     pub error: Option<String>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Home {
     pub rows: Vec<HomeRow>,
     pub cursor: Cursor,
@@ -97,6 +98,7 @@ pub struct ProjectData {
     pub now: i64,
 }
 
+#[derive(Clone)]
 pub struct Project {
     pub slug: String,
     pub data: Option<ProjectData>,
@@ -193,6 +195,7 @@ pub struct Typing {
     pub before: Listing,
 }
 
+#[derive(Clone)]
 pub struct Browser {
     pub slug: String,
     pub listing: Listing,
@@ -228,6 +231,7 @@ impl Browser {
     }
 }
 
+#[derive(Clone)]
 pub struct Queue {
     pub slug: String,
     pub rows: Vec<Row>,
@@ -250,6 +254,7 @@ pub struct PlanRow {
     pub folded: Option<bool>,
 }
 
+#[derive(Clone)]
 pub struct Plans {
     pub slug: String,
     pub rows: Vec<PlanRow>,
@@ -262,6 +267,7 @@ pub struct Plans {
     pub marks: BTreeSet<String>,
 }
 
+#[derive(Clone)]
 pub struct Settings {
     pub slug: String,
     pub cursor: Cursor,
@@ -269,7 +275,7 @@ pub struct Settings {
     pub refused: Option<(String, String)>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Help {
     pub cursor: Cursor,
 }

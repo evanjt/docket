@@ -24,3 +24,36 @@ export function parse(buffer: string): { events: SseEvent[]; rest: string } {
   }
   return { events, rest };
 }
+
+/**
+ * Whether a `change` event's data is news to the project on screen. A change naming other projects
+ * is not; one naming none, or that cannot be read, may be any project's, and `shown` null is a page
+ * of no single project.
+ */
+export function concerns(data: string, shown: string | null): boolean {
+  if (shown === null) return true;
+  try {
+    const projects: unknown = JSON.parse(data).projects;
+    return !Array.isArray(projects) || projects.length === 0 || projects.includes(shown);
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Calls `fire` for the first request at once and for those after it at most once per `interval`
+ * milliseconds: requests arriving inside the interval collapse into one call at its end.
+ */
+export function paced(interval: number, fire: () => void): () => void {
+  let last = -Infinity;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return () => {
+    if (timer !== undefined) return;
+    const wait = Math.max(0, last + interval - Date.now());
+    timer = setTimeout(() => {
+      timer = undefined;
+      last = Date.now();
+      fire();
+    }, wait);
+  };
+}

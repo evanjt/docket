@@ -6,16 +6,24 @@ export interface MachineUse {
   slots: number;
   used: number;
   runners: string[];
+  /** The runners under a usage limit still in force, each with its reset. */
+  limited: { runner: string; until: string }[];
   here: boolean;
 }
 
-/** Each machine with the claims running on it: a claim counts against the machine its job runs on. */
-export function machineUse(machines: Machine[], claims: Row[], here: string): MachineUse[] {
+/**
+ * Each machine with the claims running on it: a claim counts against the machine its job runs on.
+ * A usage limit is in force until its reset, `now` in epoch seconds.
+ */
+export function machineUse(machines: Machine[], claims: Row[], here: string, now: number): MachineUse[] {
   return machines.map((m) => ({
     name: m.name,
     slots: m.slots,
     used: claims.filter((c) => (c.claim_on ?? '') === m.name).length,
     runners: m.runners,
+    limited: Object.entries(m.limits ?? {})
+      .filter(([, until]) => Date.parse(until) / 1000 > now)
+      .map(([runner, until]) => ({ runner, until })),
     here: m.name === here,
   }));
 }

@@ -34,8 +34,9 @@ a defect), the body holding **Evidence** (`file:line` from the working tree),
 **Fix**, and **Failing case** (the test that fails until it lands, at the
 lowest level that can fail for the right reason). Then `docket link T14 T15
 opened A3`, `docket priority T14 high` where it is more urgent than normal,
-`docket rate T14 medium`, and `docket release A3`: the plan waits on its
-tickets.
+`docket rate T14 medium`, and `docket unclaim A3`: the plan waits on its
+tickets. The queue reads release, then priority, then age; a theme the releases
+fact does not list ranks with the current release.
 
 Every item filed names its release with `--release`, by what it is: a
 crash, hang, data loss, wrong numbers, upgrade safety, security, privacy or

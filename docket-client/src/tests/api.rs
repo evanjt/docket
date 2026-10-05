@@ -97,11 +97,11 @@ fn test_typed_rows_read_every_route_the_tui_uses() {
     assert_eq!(status.count("ready"), 1);
     assert_eq!(status.count("parked"), 1);
 
-    let next = api.next("o/p", 5, None).unwrap();
+    let next = api.next("o/p", 5, &[]).unwrap();
     assert_eq!(next[0].id, "T1");
     assert_eq!(next[0].priority, "high");
     assert_eq!(api.list("todo", "o/p").unwrap()[0].id, "Q1");
-    assert_eq!(api.list("questions", "o/p").unwrap()[0].body, "Two ways");
+    assert_eq!(api.list("questions", "o/p").unwrap()[0].id, "Q1");
     assert_eq!(api.search("o/p", "sync", 5).unwrap()[0].id, "T1");
     assert!(api.group("o/p", "none").unwrap().is_empty());
 
@@ -155,15 +155,38 @@ fn test_a_route_the_server_lacks_names_itself() {
 #[test]
 fn test_changes_name_each_event_and_skip_comments() {
     let text = ": keep-alive\n\nevent: hello\ndata: 0\n\nevent: change\ndata: 1\n\ndata: x\n\n";
-    let names: Vec<String> = Changes::over(Box::new(text.as_bytes())).collect();
+    let names: Vec<String> = Changes::over(Box::new(text.as_bytes()))
+        .map(|e| e.name)
+        .collect();
     assert_eq!(names, ["hello", "change", "message"]);
+}
+
+#[test]
+fn test_changes_carry_their_data() {
+    let text = "event: change\ndata: {\"n\":1,\"projects\":[\"o/q\"]}\n\n";
+    let event = Changes::over(Box::new(text.as_bytes())).next().unwrap();
+    assert_eq!(event.data, "{\"n\":1,\"projects\":[\"o/q\"]}");
+}
+
+#[test]
+fn test_a_change_naming_other_projects_is_not_news_to_the_shown_one() {
+    let event = |data: &str| Event {
+        name: "change".into(),
+        data: data.into(),
+    };
+    let other = event("{\"n\":1,\"projects\":[\"o/q\"]}");
+    assert!(!other.concerns(Some("o/p")));
+    assert!(other.concerns(Some("o/q")));
+    assert!(other.concerns(None));
+    assert!(event("{\"n\":1,\"projects\":[]}").concerns(Some("o/p")));
+    assert!(event("1").concerns(Some("o/p")));
 }
 
 #[test]
 fn test_changes_from_the_server_start_with_hello() {
     let api = served();
     let mut stream = api.changes().unwrap();
-    assert_eq!(stream.next().as_deref(), Some("hello"));
+    assert_eq!(stream.next().map(|e| e.name).as_deref(), Some("hello"));
 }
 
 #[test]
@@ -197,6 +220,7 @@ fn test_machines_and_the_lead_claim_round_trip() {
             slots: Some(2),
             runners: Some(vec!["claude".into()]),
             note: None,
+            path: None,
         },
         remove: false,
     };

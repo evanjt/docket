@@ -44,7 +44,7 @@ pub fn next(ctx: &mut Ctx, q: &Queue) -> Result<i32> {
             ("key", q.key.clone()),
             ("theme", q.theme.clone()),
             ("under", opt_id(q.under.as_ref())?),
-            ("role", q.role.clone()),
+            ("role", (!q.role.is_empty()).then(|| q.role.join(","))),
             ("priority", q.priority.clone()),
         ],
     )?;
@@ -227,6 +227,14 @@ pub fn questions(ctx: &mut Ctx, theme: Option<&String>) -> Result<i32> {
         print_rows(ctx, &rows, "Nothing.");
         return Ok(0);
     }
+    let twins: Vec<Option<Row>> = rows
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|r| serde_json::from_value(r["close_to"].clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default();
     let rows = rows_of(&rows);
     if rows.is_empty() {
         println!("No open questions.");
@@ -258,7 +266,7 @@ pub fn questions(ctx: &mut Ctx, theme: Option<&String>) -> Result<i32> {
                 println!("     {note}");
             }
         }
-        print_question(ctx, i + 1, r, &waiters, &qkeys)?;
+        print_question(i + 1, r, twins.get(i).and_then(Option::as_ref), &waiters);
     }
     println!(
         "\nAnswer one with: docket answer Q7 \"the decision\", or --derived \"basis\" when a prior decision settles it."
@@ -266,13 +274,7 @@ pub fn questions(ctx: &mut Ctx, theme: Option<&String>) -> Result<i32> {
     Ok(0)
 }
 
-fn print_question(
-    ctx: &mut Ctx,
-    i: usize,
-    r: &Row,
-    waiters: &BTreeMap<String, Vec<String>>,
-    qkeys: &[String],
-) -> Result<()> {
+fn print_question(i: usize, r: &Row, twin: Option<&Row>, waiters: &BTreeMap<String, Vec<String>>) {
     let flag = if r.turn.as_deref() == Some("agent") {
         format!(
             "   <- agent's turn: {}",
@@ -295,14 +297,13 @@ fn print_question(
         held.sort();
         println!("          holds {}", held.join(", "));
     }
-    if let Some(twin) = decided_like(ctx, r, qkeys, 1)?.first() {
+    if let Some(twin) = twin {
         println!(
             "          close to decided {}: {}",
             twin.id,
             cut(twin.decision.as_deref().unwrap_or_default(), 70)
         );
     }
-    Ok(())
 }
 
 fn theme_note(project: &Value, theme: Option<&str>) -> Option<String> {

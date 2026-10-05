@@ -1,12 +1,15 @@
 import { BASE, Refused, headers } from './api';
-import { parse } from './sse';
+import { here } from './here.svelte';
+import { concerns, paced, parse } from './sse';
 
 /** Bumped after every change the server reports, and after every write from this page. */
-export const live = $state({ version: 0, connected: false });
+export const live = $state({ version: 0, graph: 0, connected: false });
 
 const SETTLE_MS = 250;
+const GRAPH_MS = 60_000;
 const RETRY_MS = [1000, 2000, 5000, 10000];
 
+const reloadGraph = paced(GRAPH_MS, () => live.graph++);
 let timer: ReturnType<typeof setTimeout> | undefined;
 
 /** Reads again everything on screen, once a burst of changes has settled. */
@@ -15,6 +18,7 @@ export function refresh() {
   timer = setTimeout(() => {
     clock.now = Date.now() / 1000;
     live.version++;
+    reloadGraph();
   }, SETTLE_MS);
 }
 
@@ -37,7 +41,7 @@ export async function follow(signal: AbortSignal) {
             if (!live.connected && attempt > 0) refresh();
             live.connected = true;
             attempt = 0;
-          } else if (e.event === 'change') {
+          } else if (e.event === 'change' && concerns(e.data, here.slug)) {
             refresh();
           }
         }
@@ -62,8 +66,12 @@ export interface Resource<T> {
 /**
  * What `fetcher` answers, read again whenever its reactive inputs or `live.version` move. The last answer
  * stays shown while the next is read. A fetcher answering `null` reads nothing.
+ * `version` is the counter whose moves read it again.
  */
-export function resource<T>(fetcher: () => Promise<T> | null): Resource<T> {
+export function resource<T>(
+  fetcher: () => Promise<T> | null,
+  version: () => number = () => live.version,
+): Resource<T> {
   const state = $state<{ data: T | undefined; error: string | null; loading: boolean }>({
     data: undefined,
     error: null,
@@ -71,7 +79,7 @@ export function resource<T>(fetcher: () => Promise<T> | null): Resource<T> {
   });
   let ticket = 0;
   $effect(() => {
-    void live.version;
+    void version();
     const pending = fetcher();
     const mine = ++ticket;
     if (!pending) {

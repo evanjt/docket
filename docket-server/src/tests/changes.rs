@@ -54,6 +54,15 @@ async fn write(db: &DatabaseConnection) {
         .unwrap();
 }
 
+/// One write transaction that wrote to the named projects.
+async fn write_to(db: &DatabaseConnection, slugs: &[&str]) {
+    let mut tx = Tx::begin(db, "devbox").await.unwrap();
+    for slug in slugs {
+        tx.touch_project(slug);
+    }
+    tx.commit().await.unwrap();
+}
+
 #[tokio::test]
 async fn test_changes_without_a_key_is_401() {
     let s = seeded().await;
@@ -78,12 +87,18 @@ async fn test_changes_says_hello_then_change_after_each_write_commits() {
 
     write(&s.db).await;
     let change = frame(&mut stream, Duration::from_secs(3)).await.unwrap();
-    assert!(change.starts_with("event: change\ndata: 1"), "{change}");
+    assert!(
+        change.starts_with("event: change\ndata: {\"n\":1,\"projects\":[]}"),
+        "{change}"
+    );
 
     let other = crate::connect(&s.url()).await.unwrap();
     write(&other).await;
     let again = frame(&mut stream, Duration::from_secs(3)).await.unwrap();
-    assert!(again.starts_with("event: change\ndata: 2"), "{again}");
+    assert!(
+        again.starts_with("event: change\ndata: {\"n\":2,\"projects\":[]}"),
+        "{again}"
+    );
 }
 
 #[tokio::test]
@@ -99,4 +114,27 @@ async fn test_changes_says_nothing_for_a_write_rolled_back() {
         .unwrap();
     drop(tx);
     assert_eq!(frame(&mut stream, Duration::from_millis(500)).await, None);
+}
+
+#[tokio::test]
+async fn test_changes_name_the_projects_a_write_touched() {
+    let s = seeded().await;
+    let resp = subscribe(&s.db, Some("secret")).await;
+    let mut stream = resp.into_body().into_data_stream();
+    frame(&mut stream, Duration::from_secs(2)).await.unwrap();
+
+    write_to(&s.db, &["o/p", "o/q"]).await;
+    let change = frame(&mut stream, Duration::from_secs(3)).await.unwrap();
+    assert!(
+        change.starts_with("event: change\ndata: {\"n\":1,\"projects\":[\"o/p\",\"o/q\"]}"),
+        "{change}"
+    );
+}
+
+#[test]
+fn test_payload_is_left_empty_when_the_slugs_would_not_fit() {
+    let few: std::collections::BTreeSet<String> = ["o/p".to_string()].into();
+    assert_eq!(super::payload(&few), "[\"o/p\"]");
+    let many = (0..2000).map(|i| format!("owner/project-{i}")).collect();
+    assert_eq!(super::payload(&many), "");
 }

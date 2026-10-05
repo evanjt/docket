@@ -2,6 +2,7 @@
 
 use std::convert::Infallible;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use axum::Router;
@@ -11,7 +12,8 @@ use axum::routing::get;
 use futures_util::stream::{self, Stream};
 use sea_orm::DatabaseConnection;
 use sea_orm::sqlx::postgres::PgListener;
-use tokio::sync::{OnceCell, watch};
+use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::{OnceCell, broadcast, watch};
 
 /// The channel every write transaction notifies as it commits.
 pub const CHANNEL: &str = "docket_changes";
@@ -22,16 +24,50 @@ const RETRY: Duration = Duration::from_secs(1);
 /// One listener per server, started by the first subscriber and shared by every later one.
 pub struct Changes {
     db: DatabaseConnection,
-    seen: OnceCell<watch::Receiver<u64>>,
+    feed: OnceCell<Feed>,
     stopping: watch::Receiver<bool>,
 }
+
+/// The commits so far, counted, and each one as it is heard.
+struct Feed {
+    count: Arc<AtomicU64>,
+    sent: broadcast::Sender<Change>,
+}
+
+/// One commit: its number and the projects it wrote to. No project listed means the commit did not
+/// say, or the stream fell behind, and a client takes it as a change to any of them.
+#[derive(Clone)]
+struct Change {
+    n: u64,
+    projects: Vec<String>,
+}
+
+impl Change {
+    fn data(&self) -> String {
+        serde_json::json!({"n": self.n, "projects": self.projects}).to_string()
+    }
+}
+
+/// The notice payload for the projects a commit wrote to; empty when the list would not fit in one.
+#[must_use]
+pub fn payload(projects: &std::collections::BTreeSet<String>) -> String {
+    let text = serde_json::json!(projects).to_string();
+    if text.len() > PAYLOAD_MAX {
+        String::new()
+    } else {
+        text
+    }
+}
+
+/// The most a notice payload may carry; Postgres refuses 8000 bytes or more.
+const PAYLOAD_MAX: usize = 7000;
 
 /// `GET /changes`: an event stream, `hello` on connecting and `change` after each commit. Every
 /// stream ends once `stopping` turns true, so a server shutting down is not held open by them.
 pub fn router(db: &DatabaseConnection, stopping: watch::Receiver<bool>) -> Router {
     let state = Arc::new(Changes {
         db: db.clone(),
-        seen: OnceCell::new(),
+        feed: OnceCell::new(),
         stopping,
     });
     Router::new()
@@ -42,34 +78,45 @@ pub fn router(db: &DatabaseConnection, stopping: watch::Receiver<bool>) -> Route
 async fn changes(
     State(state): State<Arc<Changes>>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let rx = state
-        .seen
+    let feed = state
+        .feed
         .get_or_init(|| async {
-            let (tx, rx) = watch::channel(0);
+            let (sent, _) = broadcast::channel(64);
+            let count = Arc::new(AtomicU64::new(0));
             let listener = listen(&state.db).await;
-            tokio::spawn(relay(state.db.clone(), listener, tx));
-            rx
+            tokio::spawn(relay(
+                listener,
+                state.db.clone(),
+                count.clone(),
+                sent.clone(),
+            ));
+            Feed { count, sent }
         })
-        .await
-        .clone();
+        .await;
+    let rx = feed.sent.subscribe();
+    let count = feed.count.clone();
     let hello = Event::default()
         .event("hello")
-        .data(rx.borrow().to_string());
+        .data(count.load(Ordering::SeqCst).to_string());
     let rest = stream::unfold(
-        (rx, state.stopping.clone()),
-        |(mut rx, mut stopping)| async move {
-            tokio::select! {
-                () = stopped(&mut stopping) => None,
-                changed = rx.changed() => {
-                    if changed.is_err() {
+        (rx, count, state.stopping.clone()),
+        |(mut rx, count, mut stopping)| async move {
+            let change = tokio::select! {
+                () = stopped(&mut stopping) => return None,
+                got = rx.recv() => match got {
+                    Ok(change) => change,
+                    Err(RecvError::Lagged(_)) => Change {
+                        n: count.load(Ordering::SeqCst),
+                        projects: Vec::new(),
+                    },
+                    Err(RecvError::Closed) => {
                         stopped(&mut stopping).await;
                         return None;
                     }
-                    let n = *rx.borrow_and_update();
-                    let event = Event::default().event("change").data(n.to_string());
-                    Some((Ok(event), (rx, stopping)))
-                }
-            }
+                },
+            };
+            let event = Event::default().event("change").data(change.data());
+            Some((Ok(event), (rx, count, stopping)))
         },
     );
     let all = futures_util::StreamExt::chain(stream::once(async { Ok(hello) }), rest);
@@ -92,8 +139,14 @@ async fn listen(db: &DatabaseConnection) -> Option<PgListener> {
     Some(listener)
 }
 
-/// Counts each notice into the watch. A notice lost while the connection is down is not counted.
-async fn relay(db: DatabaseConnection, mut listener: Option<PgListener>, tx: watch::Sender<u64>) {
+/// Numbers each notice and passes it on with the projects it names. A notice lost while the
+/// connection is down is not counted.
+async fn relay(
+    mut listener: Option<PgListener>,
+    db: DatabaseConnection,
+    count: Arc<AtomicU64>,
+    sent: broadcast::Sender<Change>,
+) {
     loop {
         let Some(l) = listener.as_mut() else {
             tokio::time::sleep(RETRY).await;
@@ -101,7 +154,11 @@ async fn relay(db: DatabaseConnection, mut listener: Option<PgListener>, tx: wat
             continue;
         };
         match l.try_recv().await {
-            Ok(Some(_)) => tx.send_modify(|n| *n += 1),
+            Ok(Some(notice)) => {
+                let projects = serde_json::from_str(notice.payload()).unwrap_or_default();
+                let n = count.fetch_add(1, Ordering::SeqCst) + 1;
+                let _ = sent.send(Change { n, projects });
+            }
             Ok(None) => {}
             Err(_) => {
                 tokio::time::sleep(RETRY).await;

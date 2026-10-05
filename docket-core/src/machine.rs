@@ -1,6 +1,8 @@
 //! The machines jobs run on, as the owner records them on the server: a name, an address, slots and
 //! the runners it has. Nothing here names a real machine; every one is data.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::item::Refused;
@@ -23,6 +25,84 @@ pub struct Machine {
     pub runners: Vec<String>,
     pub note: Option<String>,
     pub updated_at: String,
+    /// Each runner that reported a usage limit here, with the reset it named, as a stamp. A limit
+    /// the clock has passed is still listed until it is next written over.
+    #[serde(default)]
+    pub limits: BTreeMap<String, String>,
+    /// The directories put before `PATH` in the command run on it over ssh, as the shell reads
+    /// them; none means the user-install directories.
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+impl Machine {
+    /// The reset of the runner's usage limit when it is still in force at `now`, a stamp.
+    #[must_use]
+    pub fn limited(&self, runner: &str, now: &str) -> Option<&str> {
+        self.limits
+            .get(runner)
+            .map(String::as_str)
+            .filter(|until| *until > now)
+    }
+}
+
+/// A usage limit one runner reported on one machine: `POST /do/limit`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Limit {
+    pub machine: String,
+    pub runner: String,
+    /// The reset the runner named, as a stamp.
+    pub until: String,
+}
+
+/// The reset a usage-limit message names, as a stamp: the last `resets YYYY-MM-DD HH:MM` in a
+/// message that speaks of a limit, read as UTC. `None` for a message with no limit or no such date.
+#[must_use]
+pub fn reset_of(text: &str) -> Option<String> {
+    if !text.to_lowercase().contains("limit") {
+        return None;
+    }
+    let words: Vec<&str> = text.split_whitespace().collect();
+    words
+        .iter()
+        .enumerate()
+        .rev()
+        .filter(|(_, w)| {
+            w.trim_matches(|c: char| !c.is_alphabetic())
+                .eq_ignore_ascii_case("resets")
+        })
+        .find_map(|(i, _)| {
+            let date = words.get(i + 1)?;
+            let (date, time) = match date.split_once('T') {
+                Some((d, t)) => (d, t),
+                None => (*date, *words.get(i + 2)?),
+            };
+            stamp_of(date, time.trim_end_matches(|c: char| !c.is_ascii_digit()))
+        })
+}
+
+/// `2026-10-07` and `18:29` as `2026-10-07T18:29:00Z`, `None` unless both are in that shape.
+fn stamp_of(date: &str, time: &str) -> Option<String> {
+    let digits = |s: &str, n: usize| s.len() == n && s.bytes().all(|b| b.is_ascii_digit());
+    let d: Vec<&str> = date.split('-').collect();
+    let t: Vec<&str> = time.split(':').collect();
+    let ok = d.len() == 3
+        && digits(d[0], 4)
+        && digits(d[1], 2)
+        && digits(d[2], 2)
+        && t.len() == 2
+        && digits(t[0], 2)
+        && digits(t[1], 2);
+    ok.then(|| format!("{date}T{time}:00Z"))
+}
+
+/// The reset a new report leaves: the later of it and the one stored.
+#[must_use]
+pub fn later(stored: Option<&str>, reported: &str) -> String {
+    stored
+        .filter(|s| *s > reported)
+        .unwrap_or(reported)
+        .to_string()
 }
 
 /// `docket machine set`: the fields given, the rest kept from the stored row.
@@ -38,6 +118,9 @@ pub struct Set {
     /// An empty note clears it.
     #[serde(default)]
     pub note: Option<String>,
+    /// An empty path clears it.
+    #[serde(default)]
+    pub path: Option<String>,
 }
 
 /// The machine a set leaves: the stored one with what the set names, or a new one from the set alone.
@@ -53,6 +136,8 @@ pub fn merged(stored: Option<&Machine>, set: &Set, now: &str) -> Result<Machine,
             runners: set.runners.clone().unwrap_or_else(|| m.runners.clone()),
             note: set.note.clone().map_or_else(|| m.note.clone(), non_empty),
             updated_at: now.to_string(),
+            limits: m.limits.clone(),
+            path: set.path.clone().map_or_else(|| m.path.clone(), non_empty),
         }
     } else {
         new(set, now)?
@@ -85,6 +170,8 @@ fn new(set: &Set, now: &str) -> Result<Machine, Refused> {
         runners: set.runners.clone().unwrap_or_default(),
         note: set.note.clone().and_then(non_empty),
         updated_at: now.to_string(),
+        limits: BTreeMap::new(),
+        path: set.path.clone().and_then(non_empty),
     })
 }
 
@@ -111,6 +198,14 @@ pub fn check(m: &Machine) -> Result<(), Refused> {
     if m.ssh.trim().is_empty() || m.ssh.split_whitespace().count() != 1 {
         return Err(Refused(format!(
             "{name} needs an ssh address the other machines reach it at"
+        )));
+    }
+    if m.path
+        .as_deref()
+        .is_some_and(|p| p.contains(['"', '`', '\n']))
+    {
+        return Err(Refused(format!(
+            "{name}'s path is directories for PATH, with no double quote, backtick or newline"
         )));
     }
     if !(1..=MAX_SLOTS).contains(&m.slots) {

@@ -4,6 +4,7 @@
 use std::fmt::Write as _;
 
 use docket_core::api::{MachineRequest, Machines};
+use docket_core::clock;
 use docket_core::machine::{self, Machine};
 
 use crate::ctx::Ctx;
@@ -21,7 +22,10 @@ pub fn machines(ctx: &Ctx) -> Result<i32> {
         return Ok(0);
     }
     let listed: Machines = serde_json::from_value(v).unwrap_or_default();
-    print!("{}", machines_text(&listed.machines, &ctx.host()?));
+    print!(
+        "{}",
+        machines_text(&listed.machines, &ctx.host()?, &clock::now())
+    );
     Ok(0)
 }
 
@@ -36,7 +40,10 @@ pub fn machine(ctx: &Ctx, req: &MachineRequest) -> Result<i32> {
         ctx.emit(&Py::from_value(&v));
         return Ok(0);
     }
-    print!("{}", machines_text(&out.machines, &ctx.host()?));
+    print!(
+        "{}",
+        machines_text(&out.machines, &ctx.host()?, &clock::now())
+    );
     Ok(0)
 }
 
@@ -48,6 +55,7 @@ pub fn set_request(
     slots: Option<i64>,
     runners: Option<&str>,
     note: Option<&String>,
+    path: Option<&String>,
     remove: bool,
 ) -> MachineRequest {
     MachineRequest {
@@ -57,14 +65,16 @@ pub fn set_request(
             slots,
             runners: runners.map(machine::runners_of),
             note: note.cloned(),
+            path: path.cloned(),
         },
         remove,
     }
 }
 
-/// The machines as a table, `*` against the one named `here`.
+/// The machines as a table, `*` against the one named `here`, and each runner under a usage limit
+/// at `now` with the reset it named.
 #[must_use]
-pub fn machines_text(machines: &[Machine], here: &str) -> String {
+pub fn machines_text(machines: &[Machine], here: &str, now: &str) -> String {
     if machines.is_empty() {
         return "no machines: docket machine set NAME --ssh ADDRESS --slots N --runners claude,codex\n"
             .to_string();
@@ -87,6 +97,11 @@ pub fn machines_text(machines: &[Machine], here: &str) -> String {
         );
         if let Some(note) = &m.note {
             let _ = write!(out, "  {note}");
+        }
+        for runner in &m.runners {
+            if let Some(until) = m.limited(runner, now) {
+                let _ = write!(out, "  {runner} limited until {until}");
+            }
         }
         out.push('\n');
     }

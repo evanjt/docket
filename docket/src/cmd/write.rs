@@ -42,7 +42,7 @@ fn print_released(ctx: &Ctx, released: &[Brief]) {
         return;
     }
     for x in released {
-        println!("released {}: {}", x.id, cut(&x.title, 70));
+        println!("unblocked {}: {}", x.id, cut(&x.title, 70));
     }
 }
 
@@ -233,7 +233,7 @@ pub fn start(ctx: &mut Ctx, req: &StartRequest) -> Result<i32> {
 /// # Errors
 /// Inside a job, or the server refuses.
 pub fn release(ctx: &mut Ctx, req: &ReleaseRequest) -> Result<i32> {
-    refuse_in_job("release")?;
+    refuse_in_job("unclaim")?;
     let out: Moved = ctx.api.post("release", req)?;
     print_item(ctx, &out.item);
     Ok(0)

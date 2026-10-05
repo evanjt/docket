@@ -10,6 +10,8 @@ use serde_json::Value;
 
 use docket_core::board::Board;
 
+use crate::filter::Filter;
+
 pub type Result<T> = std::result::Result<T, String>;
 
 /// The event kinds that move an item, which the moves and the pace read.
@@ -41,7 +43,7 @@ pub trait Source: Sync {
     fn status(&self, slug: &str) -> Result<Status>;
     /// # Errors
     /// As `projects`.
-    fn next(&self, slug: &str, n: usize, under: Option<&str>) -> Result<Vec<Row>>;
+    fn next(&self, slug: &str, n: usize, filter: &Filter) -> Result<Vec<Row>>;
     /// A list route by name: `todo`, `questions`, `groups`, `wip` and the rest.
     ///
     /// # Errors
@@ -95,8 +97,10 @@ impl Source for Http {
         self.0.status(slug).map_err(|e| e.to_string())
     }
 
-    fn next(&self, slug: &str, n: usize, under: Option<&str>) -> Result<Vec<Row>> {
-        self.0.next(slug, n, under).map_err(|e| e.to_string())
+    fn next(&self, slug: &str, n: usize, filter: &Filter) -> Result<Vec<Row>> {
+        self.0
+            .next(slug, n, &filter.query())
+            .map_err(|e| e.to_string())
     }
 
     fn list(&self, route: &str, slug: &str) -> Result<Vec<Row>> {

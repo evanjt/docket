@@ -13,7 +13,7 @@ use docket_core::text::split_id;
 use docket_core::touch::{declared_files, fold_paths, same_file};
 use docket_core::word::Kind;
 
-use crate::store::{ProjectRow, Tx, by_rid, column, items, sql};
+use crate::store::{ProjectRow, STATE_COLUMNS, Tx, column, items, sql, state_by_rid};
 use crate::verbs::Failure;
 
 use crate::reads::public::marks;
@@ -101,12 +101,14 @@ pub async fn package_progress<C: ConnectionTrait>(c: &C, prid: i64) -> Result<Pr
 pub async fn open_under<C: ConnectionTrait>(c: &C, rid: i64) -> Result<Vec<Item>, DbErr> {
     items(
         c,
-        "WITH RECURSIVE below(rid) AS (\
-             SELECT rid FROM links WHERE kind='opened' AND to_rid=? \
-             UNION \
-             SELECT l.rid FROM links l JOIN below b ON l.to_rid=b.rid WHERE l.kind='opened') \
-         SELECT i.* FROM items i JOIN below b ON b.rid=i.rid WHERE i.state='open' AND i.rid<>? \
-         ORDER BY i.rid",
+        &format!(
+            "WITH RECURSIVE below(rid) AS (\
+                 SELECT rid FROM links WHERE kind='opened' AND to_rid=? \
+                 UNION \
+                 SELECT l.rid FROM links l JOIN below b ON l.to_rid=b.rid WHERE l.kind='opened') \
+             SELECT {STATE_COLUMNS} FROM items \
+             WHERE rid IN (SELECT rid FROM below) AND state='open' AND rid<>? ORDER BY rid"
+        ),
         vec![rid.into(), rid.into()],
     )
     .await
@@ -126,7 +128,7 @@ pub async fn audits_over<C: ConnectionTrait>(
         if !seen.insert(rid) {
             continue;
         }
-        if let Some(r) = by_rid(c, rid).await?
+        if let Some(r) = state_by_rid(c, rid).await?
             && audit_keys.contains(&r.key)
             && r.state == "open"
         {
@@ -174,12 +176,14 @@ pub async fn held_wait<C: ConnectionTrait>(
 ) -> Result<Option<Failure>, DbErr> {
     let waiters = items(
         c,
-        "SELECT * FROM items WHERE project=? AND state='open' AND wait_on='item' AND wait_item IS NOT NULL ORDER BY key, num",
+        &format!(
+            "SELECT {STATE_COLUMNS} FROM items WHERE project=? AND state='open' AND wait_on='item' AND wait_item IS NOT NULL ORDER BY key, num"
+        ),
         vec![p.rules.slug.clone().into()],
     )
     .await?;
     for w in waiters {
-        let Some(target) = by_rid(c, w.wait_item.unwrap_or_default()).await? else {
+        let Some(target) = state_by_rid(c, w.wait_item.unwrap_or_default()).await? else {
             continue;
         };
         if let Some(refused) = wait_cycle(c, p, &w, &target).await? {
@@ -330,7 +334,7 @@ pub async fn concepts_of<C: ConnectionTrait>(
             let to: Option<i64> = l.try_get_by_index(1)?;
             let other = if from == x { to } else { Some(from) };
             let Some(other) = other else { continue };
-            if let Some(o) = by_rid(c, other).await?
+            if let Some(o) = state_by_rid(c, other).await?
                 && con.contains(&o.key)
                 && o.rid != rid
                 && !out.iter().any(|(id, _, _)| *id == o.id)
@@ -564,8 +568,8 @@ pub async fn refuse_later_after_theme(
     };
     for row in &rows {
         let (Some(held), Some(holder)) = (
-            by_rid(&tx.conn, row.try_get_by_index::<i64>(0)?).await?,
-            by_rid(&tx.conn, row.try_get_by_index::<i64>(1)?).await?,
+            state_by_rid(&tx.conn, row.try_get_by_index::<i64>(0)?).await?,
+            state_by_rid(&tx.conn, row.try_get_by_index::<i64>(1)?).await?,
         ) else {
             continue;
         };

@@ -28,7 +28,7 @@ into it.
     docket status
     docket next 10 --role work
 
-`next` lists the tickets nobody holds, most urgent first, then oldest. Every
+`next` lists the tickets nobody holds, by release, then priority, then oldest. Every
 write lands on the server at once and every session reads it there.
 
 ### 2. Claim, on a branch only you know the number of

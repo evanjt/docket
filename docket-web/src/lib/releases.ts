@@ -45,3 +45,14 @@ export function releaseRows(nodes: Iterable<GraphNode>, releases: string[]): Rel
   }
   return rows;
 }
+
+/** The Release row an item's detail shows, for every kind: its release and whether that is the current one. */
+export function releaseRow(theme: string | null | undefined, releases: string[]): { name: string; current: boolean } | null {
+  const name = releaseOf(theme, releases);
+  return name === null ? null : { name, current: name === releases[0] };
+}
+
+/** The ids of the items an item holds, from a `/deps` reply. */
+export function holdsOf(deps: { holds?: { id: string }[] } | undefined): string[] {
+  return (deps?.holds ?? []).map((h) => h.id);
+}

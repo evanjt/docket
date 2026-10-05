@@ -1,3 +1,6 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode, header::AUTHORIZATION};
@@ -481,6 +484,26 @@ async fn test_summary_reads_claims_plans_and_due_audits() {
 }
 
 #[tokio::test]
+async fn test_summary_reads_the_ties_once() {
+    let mut scratch = Scratch::new(2).await;
+    scratch.seed(SEED).await;
+    let reads = Arc::new(AtomicUsize::new(0));
+    let seen = reads.clone();
+    scratch.db.set_metric_callback(move |info| {
+        if info.statement.sql.contains("FROM links l JOIN items i") {
+            seen.fetch_add(1, Ordering::SeqCst);
+        }
+    });
+    let keys = Keys::parse("devbox owner ownerkey").unwrap();
+    let s = Seeded {
+        app: app(&scratch.db, keys),
+        db: scratch,
+    };
+    s.ok("/summary?project=o/p").await;
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn test_audit_sections_principles_and_bound_items() {
     let s = Seeded::new().await;
     let a = s.ok("/audit?project=o/p&id=A1").await;
@@ -585,4 +608,61 @@ async fn test_reindex_rebuilds_every_items_search_row() {
     let mut found = ids(&hits);
     found.sort_unstable();
     assert_eq!(found, ["T4", "T5"]);
+}
+
+/// `url` with its credentials replaced.
+fn as_role(url: &str, role: &str, password: &str) -> String {
+    let (scheme, rest) = url.split_once("://").unwrap();
+    let (_, host) = rest.split_once('@').unwrap();
+    format!("{scheme}://{role}:{password}@{host}")
+}
+
+#[tokio::test]
+async fn test_state_reads_never_select_an_items_body() {
+    use sea_orm::{ConnectOptions, ConnectionTrait, Database};
+
+    let s = Seeded::new().await;
+    let role = format!("reader_{}", std::process::id());
+    s.db.db
+        .execute_unprepared(&format!(
+            "DROP ROLE IF EXISTS {role}; CREATE ROLE {role} LOGIN PASSWORD 'pw'; \
+             GRANT USAGE ON SCHEMA public TO {role}; \
+             DO $$ DECLARE t text; c text; BEGIN \
+               FOR t IN SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename<>'items' LOOP \
+                 EXECUTE format('GRANT SELECT ON %I TO {role}', t); END LOOP; \
+               SELECT string_agg(quote_ident(column_name), ', ') INTO c FROM information_schema.columns \
+                 WHERE table_schema='public' AND table_name='items' AND column_name<>'body'; \
+               EXECUTE format('GRANT SELECT (%s) ON items TO {role}', c); \
+             END $$;"
+        ))
+        .await
+        .unwrap();
+    let mut options = ConnectOptions::new(as_role(&s.db.url(), &role, "pw"));
+    options.max_connections(2).sqlx_logging(false);
+    let narrow = Database::connect(options).await.unwrap();
+    let keys = Keys::parse("devbox owner ownerkey").unwrap();
+    let app = app(&narrow, keys);
+    let mut seen = Vec::new();
+    for uri in ["/graph?project=o/p", "/status?project=o/p"] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(uri)
+                    .header(AUTHORIZATION, "Bearer ownerkey")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        seen.push((uri, resp.status()));
+    }
+    narrow.close().await.ok();
+    s.db.db
+        .execute_unprepared(&format!("DROP OWNED BY {role}; DROP ROLE {role};"))
+        .await
+        .unwrap();
+    for (uri, status) in seen {
+        assert_eq!(status, StatusCode::OK, "{uri}");
+    }
 }

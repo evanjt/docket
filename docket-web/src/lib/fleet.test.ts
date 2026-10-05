@@ -5,6 +5,7 @@ import type { LeadState, Machine, Row } from './types';
 const machine = (name: string, slots: number): Machine => ({
   name, ssh: `user@${name}`, slots, runners: ['claude'], note: null, updated_at: '',
 });
+const NOW = Date.parse('2026-10-05T12:00:00Z') / 1000;
 const claim = (id: string, on: string | null, by: string): Row =>
   ({ id, claim_on: on, claim_host: by, claim_branch: `lead/${id}` }) as unknown as Row;
 
@@ -14,11 +15,23 @@ describe('machineUse', () => {
       [machine('alpha', 2), machine('beta', 4)],
       [claim('T1', 'beta', 'alpha'), claim('T2', 'beta', 'alpha'), claim('T3', null, 'alpha')],
       'alpha',
+      NOW,
     );
     expect(use.map((u) => [u.name, u.used, u.slots, u.here])).toEqual([
       ['alpha', 0, 2, true],
       ['beta', 2, 4, false],
     ]);
+  });
+});
+
+describe('machineUse limits', () => {
+  const limited = { ...machine('alpha', 2), runners: ['claude', 'codex'], limits: { codex: '2026-10-07T18:29:00Z' } };
+
+  it('lists a runner under a usage limit with its reset until the reset passes', () => {
+    expect(machineUse([limited], [], 'alpha', NOW)[0].limited).toEqual([
+      { runner: 'codex', until: '2026-10-07T18:29:00Z' },
+    ]);
+    expect(machineUse([limited], [], 'alpha', Date.parse('2026-10-07T18:29:00Z') / 1000)[0].limited).toEqual([]);
   });
 });
 

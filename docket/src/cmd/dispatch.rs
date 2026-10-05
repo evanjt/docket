@@ -9,11 +9,14 @@ use serde_json::Value;
 
 use docket_core::api::Facts;
 use docket_core::api::{Common, EditRequest, ReleaseRequest, StartRequest, Started};
+use docket_core::clock;
 use docket_core::fact::{self, Model, Role};
-use docket_core::machine::Machine;
+use docket_core::machine::{Limit, Machine};
 
 use crate::ctx::Ctx;
-use crate::dispatch::{Via, branch_for, choose, commit_change, git, nonce, role_of};
+use crate::dispatch::{
+    Via, branch_for, choose, commit_change, git, limited_runners, nonce, role_of,
+};
 use crate::fail::{Fail, Result};
 use crate::job::{self, Change};
 
@@ -47,16 +50,9 @@ pub fn dispatch(ctx: &mut Ctx, ask: &Ask) -> Result<i32> {
         )));
     }
     let key = item["key"].as_str().unwrap_or_default();
-    let role = match ask.role {
-        Some(r) => r.to_string(),
-        None => role_of(&kind_of(&ctx.project_row(&slug)?, key)).to_string(),
-    };
-    let facts = ctx.api.facts(&slug)?;
-    let model = model(ask, &facts, &role, item["complexity"].as_str())?;
-    let machines = machines(ctx)?;
-    refuse_a_running_group(ctx, &item, &machines, &here, ask.force)?;
-    let (running, unread) = running(&machines, &here);
-    let m = pick(&machines, &running, &unread, ask.on, &model.runner, &here)?;
+    let role = default_role(ctx, &slug, &item, key, ask.role)?;
+    let (model, m) = place(ctx, ask, &item, &role, &here)?;
+    let m = &m;
     let via = Via::of(m, &here);
     let checkout = via
         .docket(&strings(&["-p", &slug, "job", "where"]))
@@ -135,6 +131,42 @@ pub fn dispatch(ctx: &mut Ctx, ask: &Ask) -> Result<i32> {
     Ok(0)
 }
 
+/// The model the job runs on and the machine that takes it: the models fact's entry on a runner not
+/// under a usage limit, and a machine with that runner and a free slot.
+fn place(
+    ctx: &mut Ctx,
+    ask: &Ask,
+    item: &Value,
+    role: &str,
+    here: &str,
+) -> Result<(Model, Machine)> {
+    let slug = ctx.project()?;
+    let facts = ctx.api.facts(&slug)?;
+    let machines = machines(ctx)?;
+    let now = clock::now();
+    let model = model(
+        ask,
+        &facts,
+        role,
+        item["complexity"].as_str(),
+        &limited_runners(&machines, &now),
+    )?;
+    refuse_a_running_group(ctx, item, &machines, here, ask.force)?;
+    let (running, unread) = running(&machines, here);
+    let m = pick(
+        &machines,
+        &Pick {
+            running: &running,
+            unread: &unread,
+            on: ask.on,
+            runner: &model.runner,
+            here,
+            now: &now,
+        },
+    )?;
+    Ok((model, m.clone()))
+}
+
 /// The project's jobs on every machine, or every project's; with `wait`, read again until one of
 /// the jobs running at the start ends, or `timeout` seconds pass when it is not 0.
 ///
@@ -160,6 +192,7 @@ pub fn jobs(ctx: &mut Ctx, wait: bool, every: u64, timeout: u64, all: bool) -> R
             }
         }
     }
+    record_limits(ctx, &rows);
     if ctx.json {
         println!("{}", Value::Array(rows));
     } else if rows.is_empty() {
@@ -252,6 +285,7 @@ pub fn collect(ctx: &mut Ctx, id: &str, discard: bool) -> Result<i32> {
         None
     };
     append_observations(ctx, &id, name, &row)?;
+    record_limits(ctx, &[with_machine(&row, on)]);
     let reference = format!("refs/heads/{branch}");
     let commits = if git(&repo, &["rev-parse", "--verify", "--quiet", &reference]).is_ok() {
         git(&repo, &["log", "--oneline", &format!("HEAD..{branch}")]).map_err(Fail::refused)?
@@ -270,6 +304,40 @@ pub fn collect(ctx: &mut Ctx, id: &str, discard: bool) -> Result<i32> {
     };
     said.print(ctx.json);
     Ok(0)
+}
+
+/// A job's row with the machine it ran on added, as `jobs` reads it.
+fn with_machine(row: &Value, on: &str) -> Value {
+    let mut row = row.clone();
+    row["machine"] = Value::String(on.to_string());
+    row
+}
+
+/// The usage limits the jobs in `rows` ended on and that are still in force, reported to the server
+/// so every machine and lead reads them. A server that cannot take one is said on standard error:
+/// the limit only lasts until the next job reports it.
+fn record_limits(ctx: &Ctx, rows: &[Value]) {
+    let now = clock::now();
+    let found: BTreeSet<(&str, &str, &str)> = rows
+        .iter()
+        .filter_map(|r| {
+            let until = r["limit"].as_str().filter(|u| *u > now.as_str())?;
+            Some((r["machine"].as_str()?, r["runner"].as_str()?, until))
+        })
+        .collect();
+    for (machine, runner, until) in found {
+        let limit = Limit {
+            machine: machine.to_string(),
+            runner: runner.to_string(),
+            until: until.to_string(),
+        };
+        let sent: Result<docket_core::api::Machines> = ctx.api.post("limit", &limit);
+        if let Err(why) = sent {
+            eprintln!(
+                "docket: {runner} on {machine} reported a limit until {until}, not recorded: {why}"
+            );
+        }
+    }
 }
 
 /// A job that ended, as a collect reaches it.
@@ -396,6 +464,12 @@ impl Collected<'_> {
             row["state"].as_str().unwrap_or("?"),
             row["report"].as_str().unwrap_or("no report")
         );
+        if let Some(until) = row["limit"].as_str() {
+            println!(
+                "usage limit: {} on {on} until {until}, not counted as a failed job",
+                row["runner"].as_str().unwrap_or("?")
+            );
+        }
         if let Some(note) = row["note"].as_str() {
             println!("{note}");
         }
@@ -460,7 +534,13 @@ fn start(
 
 /// The model the job runs on: the one asked for, else the `models` fact's for its role and
 /// complexity.
-fn model(ask: &Ask, facts: &Facts, role: &str, complexity: Option<&str>) -> Result<Model> {
+fn model(
+    ask: &Ask,
+    facts: &Facts,
+    role: &str,
+    complexity: Option<&str>,
+    limited: &BTreeMap<String, String>,
+) -> Result<Model> {
     if let (Some(runner), Some(model)) = (ask.runner, ask.model) {
         return Ok(Model {
             runner: runner.to_string(),
@@ -473,7 +553,24 @@ fn model(ask: &Ask, facts: &Facts, role: &str, complexity: Option<&str>) -> Resu
         "plan" => Role::Plan,
         _ => Role::Build,
     };
-    let Some(mut m) = fact::model_for(&facts.skills, &facts.owner, role_of, complexity) else {
+    let unavailable: Vec<&str> = limited.keys().map(String::as_str).collect();
+    let Some(mut m) = fact::model_without(
+        &facts.skills,
+        &facts.owner,
+        role_of,
+        complexity,
+        &unavailable,
+    ) else {
+        if fact::model_for(&facts.skills, &facts.owner, role_of, complexity).is_some() {
+            let resets: Vec<String> = limited
+                .iter()
+                .map(|(r, u)| format!("{r} until {u}"))
+                .collect();
+            return Err(Fail::refused(format!(
+                "every runner the models fact names for this job reported a usage limit: {}",
+                resets.join(", ")
+            )));
+        }
         return Err(Fail::refused(
             "no model for this job: set the models fact (docket skills set models \"high=claude:MODEL:high ...\") \
              or pass --runner and --model",
@@ -503,19 +600,32 @@ fn machines(ctx: &mut Ctx) -> Result<Vec<Machine>> {
     Ok(machines)
 }
 
-/// The machine asked for, when it has the runner and a free slot, or the one `choose` picks.
-fn pick<'a>(
-    machines: &'a [Machine],
-    running: &BTreeMap<String, usize>,
-    unread: &BTreeMap<String, String>,
-    on: Option<&str>,
-    runner: &str,
-    here: &str,
-) -> Result<&'a Machine> {
+/// What `pick` chooses by.
+struct Pick<'a> {
+    running: &'a BTreeMap<String, usize>,
+    unread: &'a BTreeMap<String, String>,
+    on: Option<&'a str>,
+    runner: &'a str,
+    here: &'a str,
+    now: &'a str,
+}
+
+/// The machine asked for, when it has the runner free of a usage limit and a free slot, or the one
+/// `choose` picks.
+fn pick<'a>(machines: &'a [Machine], by: &Pick) -> Result<&'a Machine> {
+    let Pick {
+        running,
+        unread,
+        on,
+        runner,
+        here,
+        now,
+    } = *by;
     let Some(name) = on else {
-        return choose(machines, running, runner, here).ok_or_else(|| {
+        return choose(machines, running, runner, here, now).ok_or_else(|| {
             Fail::refused(format!(
-                "no machine has {runner} and a free slot: docket jobs shows what runs{}",
+                "no machine has {runner} and a free slot: docket jobs shows what runs{}{}",
+                limit_note(machines, runner, now),
                 unread_note(unread)
             ))
         });
@@ -525,6 +635,11 @@ fn pick<'a>(
     };
     if !m.runners.iter().any(|r| r == runner) {
         return Err(Fail::refused(format!("{name} has no {runner}")));
+    }
+    if let Some(until) = m.limited(runner, now) {
+        return Err(Fail::refused(format!(
+            "{runner} on {name} reported a usage limit until {until}: docket machines"
+        )));
     }
     if crate::dispatch::free(m, running) == 0 {
         if let Some(why) = unread.get(name) {
@@ -540,6 +655,22 @@ fn pick<'a>(
         )));
     }
     Ok(m)
+}
+
+/// One line per machine whose `runner` is under a usage limit at `now`, to follow a refusal.
+fn limit_note(machines: &[Machine], runner: &str, now: &str) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    for m in machines {
+        if let Some(until) = m.limited(runner, now) {
+            let _ = write!(
+                out,
+                "\n{runner} on {} reported a usage limit until {until}",
+                m.name
+            );
+        }
+    }
+    out
 }
 
 /// The jobs running on each machine, every project's, and the reason for each machine that could
@@ -703,6 +834,21 @@ pub fn line(r: &Value) -> String {
 }
 
 /// The kind a key holds in a project's matrix.
+/// The role the lead named, or the one the item's kind and what it opened give.
+fn default_role(
+    ctx: &mut Ctx,
+    slug: &str,
+    item: &Value,
+    key: &str,
+    named: Option<&str>,
+) -> Result<String> {
+    if let Some(r) = named {
+        return Ok(r.to_string());
+    }
+    let opened = item["opened"].as_array().is_some_and(|o| !o.is_empty());
+    Ok(role_of(&kind_of(&ctx.project_row(slug)?, key), opened).to_string())
+}
+
 fn kind_of(project: &Value, key: &str) -> String {
     project["keys"]
         .as_array()

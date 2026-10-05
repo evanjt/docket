@@ -39,7 +39,7 @@ INSERT INTO items (rid, project, key, num, title, state, turn, tags, rank, compl
   (4, 'o/p', 'PK', 1, 'Package done', 'open', 'agent', '[]', NULL, NULL, NULL, NULL, NULL, '', 'o04', 'u04'),
   (6, 'o/p', 'PK', 2, 'Package live', 'open', 'agent', '["critical"]', NULL, NULL, NULL, NULL, NULL, '', 'o06', 'u06'),
   (7, 'o/p', 'T', 5, 'Member open', 'open', 'agent', '[]', NULL, NULL, NULL, NULL, NULL, '', 'o07', 'u07'),
-  (8, 'o/p', 'Q', 1, 'Open question', 'open', 'user', '[]', NULL, NULL, NULL, 'sync', NULL, '', 'o08', 'u08'),
+  (8, 'o/p', 'Q', 1, 'Open lantern choice', 'open', 'user', '[]', NULL, NULL, NULL, 'sync', NULL, '', 'o08', 'u08'),
   (12, 'o/p', 'T', 8, 'Inbox item', 'open', 'agent', '[]', NULL, NULL, 'inbox', NULL, NULL, '', 'o12', 'u12'),
   (13, 'o/p', 'T', 9, 'Held theme', 'open', 'agent', '[]', NULL, NULL, NULL, 'roadmap', NULL, 'sync', 'o13', 'u13'),
   (15, 'o/p', 'CON', 1, 'Concept', 'open', 'agent', '[]', NULL, NULL, NULL, NULL, NULL, '', 'o15', 'u15');
@@ -48,7 +48,7 @@ INSERT INTO items (rid, project, key, num, title, state, resolution, tags, rank,
   (14, 'o/p', 'T', 10, 'Dropped one', 'dropped', 'dup', '[]', NULL, 'g', '', 'o14', 'u14'),
   (17, 'o/p', 'T', 11, 'Synced thing', 'done', 'ok', '[]', 2, 'g', 'the sync queue body', 'o17', 'u17');
 INSERT INTO items (rid, project, key, num, title, state, turn, decision, decided_at, tags, opened_at, updated_at) VALUES
-  (9, 'o/p', 'Q', 2, 'Decided question', 'open', 'agent', 'Derived from CID1: keep it', 'd09', '[]', 'o09', 'u09');
+  (9, 'o/p', 'Q', 2, 'Decided lantern choice', 'open', 'agent', 'Derived from CID1: keep it', 'd09', '[]', 'o09', 'u09');
 INSERT INTO items (rid, project, key, num, title, state, turn, wait_on, wait_item, wait_ref, wait_since, tags, opened_at, updated_at) VALUES
   (10, 'o/p', 'T', 6, 'Waiting', 'open', 'agent', 'item', 1, 'T1', 'w10', '[]', 'o10', 'u10'),
   (16, 'o/p', 'A', 1, 'Plan', 'open', 'agent', 'condition', NULL, 'all closed', 'w16', '[]', 'o16', 'u16');
@@ -61,6 +61,8 @@ INSERT INTO events (uid, project, rid, at, host, kind, note, data) VALUES
   ('e1', 'o/p', 1, 'e01', 'devbox', 'decided', 'chose X', '{"derived": "CID2"}');
 INSERT INTO search (rid, id, title, body, files) VALUES
   (1, 'T1', 'Plain fix thing', '', ''),
+  (8, 'Q1', 'Open lantern choice', '', ''),
+  (9, 'Q2', 'Decided lantern choice', '', ''),
   (13, 'T9', 'Held theme', 'sync', ''),
   (17, 'T11', 'Synced thing', 'the sync queue body', 'src/sync.py');
 "#;
@@ -130,6 +132,7 @@ async fn test_next_by_role() {
     );
     assert_eq!(ids("/next?role=plan").await, ["Q2"]);
     assert!(ids("/next?role=audit").await.is_empty());
+    assert_eq!(ids("/next?role=plan,work").await[0], "Q2");
 }
 
 #[tokio::test]
@@ -169,6 +172,32 @@ async fn test_owner_lists_todo_questions_research() {
     let (_, todo) = get("/todo").await;
     assert_eq!(todo[0]["word"], "parked");
     assert_eq!(todo[0]["group"], Value::Null);
+}
+
+#[tokio::test]
+async fn test_questions_carry_the_nearest_decided_question() {
+    let (_, rows) = get("/questions").await;
+    assert_eq!(rows[0]["id"], "Q1");
+    assert_eq!(rows[0]["close_to"]["id"], "Q2");
+    assert_eq!(
+        rows[0]["close_to"]["decision"],
+        "Derived from CID1: keep it"
+    );
+}
+
+#[tokio::test]
+async fn test_list_rows_carry_no_body_and_show_does() {
+    for path in ["/todo", "/next?n=100", "/questions"] {
+        let (status, rows) = get(path).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {rows}");
+        let rows = rows.as_array().unwrap();
+        assert!(!rows.is_empty(), "{path} gave no rows");
+        for row in rows {
+            assert!(row.get("body").is_none(), "{path}: {row}");
+        }
+    }
+    let (_, shown) = get("/show/T11").await;
+    assert_eq!(shown["body"], "the sync queue body");
 }
 
 #[tokio::test]
@@ -232,7 +261,7 @@ async fn test_derived_merges_questions_and_ticket_events_newest_first() {
         body,
         json!([
             {"id": "T1", "state": "open", "at": "e01", "title": "Plain fix", "chose": "chose X", "basis": "CID2"},
-            {"id": "Q2", "state": "open", "at": "d09", "title": "Decided question", "chose": "keep it", "basis": "CID1"}
+            {"id": "Q2", "state": "open", "at": "d09", "title": "Decided lantern choice", "chose": "keep it", "basis": "CID1"}
         ])
     );
     assert_eq!(ids("/derived?n=1").await, ["T1"]);

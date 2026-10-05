@@ -12,6 +12,7 @@ use docket_core::rows::{
 use docket_core::word::Kind;
 use serde_json::Value;
 
+use crate::filter::Filter;
 use crate::source::{Result, Source};
 use docket_core::board::Board;
 
@@ -260,13 +261,21 @@ impl Source for Fixture {
         })
     }
 
-    fn next(&self, _: &str, n: usize, under: Option<&str>) -> Result<Vec<Row>> {
+    fn next(&self, _: &str, n: usize, filter: &Filter) -> Result<Vec<Row>> {
         let b = self.board_now();
-        let held = under.and_then(|id| b.get(id)).map(|i| b.holds(i));
+        let held = filter
+            .under
+            .as_deref()
+            .and_then(|id| b.get(id))
+            .map(|i| b.holds(i));
         let mut out = self.rows(|b, i| {
             b.word(i) == "ready"
                 && b.kind(i) == Kind::Work
                 && held.as_ref().is_none_or(|h| h.contains(&i.rid))
+                && filter
+                    .key
+                    .as_ref()
+                    .is_none_or(|k| k.eq_ignore_ascii_case(&i.key))
         });
         out.truncate(n);
         Ok(out)

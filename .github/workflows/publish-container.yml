@@ -129,11 +129,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Dispatch manifest update
+        env:
+          CD_URI: ${{ secrets.CD_URI }}
         run: |
+          if [ -z "$CD_URI" ]; then
+            echo "CD_URI is not set; skipping the manifest dispatch"
+            exit 0
+          fi
           curl -fsSL -X POST \
             -H "Authorization: Bearer ${{ secrets.CD_TOKEN }}" \
             -H "Accept: application/vnd.github.v3+json" \
-            ${{ secrets.CD_URI }} \
+            "$CD_URI" \
             -d '{
               "event_type": "update-manifest",
               "client_payload": {

@@ -58,6 +58,7 @@ Keys
   Enter, l               open the one selected
   Esc, h, Left           back                         f, Right   forward again
   /                      search, the list following each key; Enter keeps it, Esc cancels
+  F                      filter the queue: release:7.2.0 priority:high key:B complexity:low under:A7
   Space                  open or close a row's children in the plans; in the other lists, as x
   PgUp / PgDn            scroll
   m                      on a project, every move of the last day or the last five

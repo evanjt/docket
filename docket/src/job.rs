@@ -28,7 +28,7 @@ pub const BRIEFS: [(&str, &str); 3] = [
 ];
 
 /// The verbs only the lead runs: a job asking for one is refused.
-pub const LEAD_VERBS: [&str; 5] = ["start", "release", "close", "drop", "reopen"];
+pub const LEAD_VERBS: [&str; 6] = ["start", "unclaim", "release", "close", "drop", "reopen"];
 
 /// The shell that runs the session and records its exit code once it ends. `$1` is the job's
 /// directory, the rest the session's command.
@@ -297,6 +297,9 @@ pub fn message(text: &str) -> Option<String> {
 pub struct Read {
     pub last: Option<String>,
     pub tokens: Option<u64>,
+    /// The last error the runner's own stream reported, which is where a usage limit shows when the
+    /// session ended without a final message.
+    pub error: Option<String>,
 }
 
 /// A Claude Code stream: the longest `result` is the final message, and the tokens are summed over
@@ -317,6 +320,17 @@ pub fn read_events(runner: &str, events: &str) -> Read {
                     out.last = Some(r.to_string());
                 }
                 true
+            }
+            (_, Some("error")) => {
+                out.error = e["message"].as_str().map(str::to_string).or(out.error);
+                false
+            }
+            ("codex", Some("turn.failed")) => {
+                out.error = e["error"]["message"]
+                    .as_str()
+                    .map(str::to_string)
+                    .or(out.error);
+                false
             }
             _ => false,
         };
@@ -440,6 +454,8 @@ pub struct Row {
     pub base: Option<String>,
     /// The final message in full: the result of a Claude session, the last message file of Codex.
     pub last: Option<String>,
+    /// The reset of the usage limit the job reported, as a stamp.
+    pub limit: Option<String>,
     pub worktree: String,
     pub dir: String,
 }
@@ -459,6 +475,19 @@ pub fn row(dir: &Path, at: u64) -> Option<Row> {
     let last = read(dir, "final").or(got.last);
     let (said, note) = last.as_deref().map_or((None, None), report);
     let said = said.or_else(|| killed.then(|| Report::Failed("killed".into())));
+    // A job that finished or waits reports its work, which may quote a limit; only one that ended
+    // without that report, or failed, ended on the limit.
+    let limit = (!matches!(said, Some(Report::Done(_) | Report::Waiting(_))))
+        .then(|| {
+            last.as_deref()
+                .and_then(docket_core::machine::reset_of)
+                .or_else(|| {
+                    got.error
+                        .as_deref()
+                        .and_then(docket_core::machine::reset_of)
+                })
+        })
+        .flatten();
     let ended = ["exit", "killed"]
         .iter()
         .filter_map(|f| fs::metadata(dir.join(f)).ok()?.modified().ok())
@@ -484,6 +513,7 @@ pub fn row(dir: &Path, at: u64) -> Option<Row> {
         observations: last.as_deref().map(observations).unwrap_or_default(),
         base: meta.base,
         last,
+        limit,
         worktree: meta.worktree,
         dir: dir.display().to_string(),
     })

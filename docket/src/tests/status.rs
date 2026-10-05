@@ -136,3 +136,30 @@ fn test_a_hold_by_a_later_release_names_both_releases() {
         ["A1 (1.0) is held by T4, in the later release 1.1"]
     );
 }
+
+#[test]
+fn test_many_problems_print_as_one_line_of_counts() {
+    let mut problems: Vec<_> = (0..95)
+        .map(|i| json!({"kind": "held_later", "id": format!("T{i}"), "by": "T1", "release": "1.0", "later": "1.1"}))
+        .collect();
+    problems.extend((0..5).map(|i| json!({"kind": "cycle", "id": format!("B{i}")})));
+    let mut r = read();
+    r.summary["problems"] = json!(problems);
+    let text = render("o/p", &r).join("\n");
+    assert!(
+        text.contains("\nCheck:\n  95 release inversions, 5 cycles: docket check\n"),
+        "{text}"
+    );
+    assert!(!text.contains("is held by"), "{text}");
+}
+
+#[test]
+fn test_status_json_carries_every_section_of_the_text() {
+    let json = json_status(&read());
+    for key in ["yours", "next", "plans", "problems", "pace"] {
+        assert!(json.get(key).is_some(), "{key}: {json}");
+    }
+    assert_eq!(json["yours"][0]["id"], "Q1");
+    assert_eq!(json["next"][0]["id"], "T3");
+    assert_eq!(json["plans"][0]["id"], "A1");
+}

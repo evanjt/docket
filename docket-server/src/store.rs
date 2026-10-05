@@ -1,12 +1,14 @@
 //! One write's transaction: the rows, their events and links, the index and the dump mark.
 
 use std::collections::BTreeSet;
+use std::sync::{Arc, LazyLock};
 
 use sea_orm::{
     ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbErr, FromQueryResult, Statement,
     TransactionTrait, Value,
 };
 use serde_json::Value as Json;
+use tokio::sync::{Mutex, OwnedMutexGuard};
 
 use docket_core::clock;
 use docket_core::item::{Field, Item, KeySpec, Project, Refused};
@@ -84,7 +86,7 @@ pub fn project_row(m: project::Model) -> ProjectRow {
 
 /// The advisory lock every write transaction holds, so writes commit one at a time and their events
 /// become visible in `seq` order.
-const WRITES: i64 = 0x0064_6f63_6b65_7401;
+pub(crate) const WRITES: i64 = 0x0064_6f63_6b65_7401;
 
 /// A statement for text written with `?` marks.
 pub fn sql(text: &str, values: Vec<Value>) -> Statement {
@@ -154,6 +156,23 @@ pub async fn project<C: ConnectionTrait>(c: &C, slug: &str) -> Result<ProjectRow
 
 pub async fn by_rid<C: ConnectionTrait>(c: &C, rid: i64) -> Result<Option<Item>, DbErr> {
     item_row(c, "SELECT * FROM items WHERE rid=?", vec![rid.into()]).await
+}
+
+/// Every column of `items` but the body, which comes back empty. For reads that only derive an
+/// item's state, so a table of large bodies is never loaded to compute it.
+pub const STATE_COLUMNS: &str = "rid, project, key, num, id, title, state, turn, turn_note, asked_at, \
+    claim_branch, claim_host, claim_since, claim_runner, claim_job, claim_on, wait_on, wait_item, \
+    wait_ref, wait_since, decision, decided_at, resolution, superseded_by, scope, complexity, \
+    group_name, theme, rank, tags, '' AS body, conflict, opened_at, updated_at";
+
+/// An item by rid without its body.
+pub async fn state_by_rid<C: ConnectionTrait>(c: &C, rid: i64) -> Result<Option<Item>, DbErr> {
+    item_row(
+        c,
+        &format!("SELECT {STATE_COLUMNS} FROM items WHERE rid=?"),
+        vec![rid.into()],
+    )
+    .await
 }
 
 pub async fn id_of<C: ConnectionTrait>(c: &C, rid: i64) -> Result<Option<String>, DbErr> {
@@ -239,10 +258,16 @@ pub struct Tx {
     pub now: String,
     touched: BTreeSet<i64>,
     touched_projects: BTreeSet<String>,
+    _queue: OwnedMutexGuard<()>,
 }
+
+/// Writers of this process queue here, holding no pool connection, so at most one of them waits on the
+/// advisory lock and the pool keeps its connections for reads.
+static QUEUE: LazyLock<Arc<Mutex<()>>> = LazyLock::new(|| Arc::new(Mutex::new(())));
 
 impl Tx {
     pub async fn begin(db: &DatabaseConnection, host: &str) -> Result<Self, DbErr> {
+        let queue = Arc::clone(&QUEUE).lock_owned().await;
         let tx = db.begin().await?;
         tx.execute_unprepared(&format!("SELECT pg_advisory_xact_lock({WRITES})"))
             .await?;
@@ -252,6 +277,7 @@ impl Tx {
             now: clock::now(),
             touched: BTreeSet::new(),
             touched_projects: BTreeSet::new(),
+            _queue: queue,
         })
     }
 
@@ -509,8 +535,9 @@ impl Tx {
             )
             .await?;
         }
+        let payload = crate::changes::payload(&self.touched_projects).replace('\'', "''");
         self.conn
-            .execute_unprepared(&format!("NOTIFY {CHANNEL}"))
+            .execute_unprepared(&format!("NOTIFY {CHANNEL}, '{payload}'"))
             .await?;
         self.conn.commit().await
     }

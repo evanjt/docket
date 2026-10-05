@@ -454,3 +454,34 @@ fn test_typing_a_line_takes_the_global_keys_as_text() {
     assert_eq!(a.page.title(), "yours");
     assert_eq!(a.prompt.as_ref().unwrap().text, "go to ?q");
 }
+
+#[test]
+fn test_f_opens_the_queue_under_the_filter_typed_and_titles_it() {
+    let mut a = app();
+    a.open(Target::Project("o/p".into()));
+    press(&mut a, KeyCode::Char('F'));
+    typed(&mut a, "key:B release:9.9");
+    press(&mut a, KeyCode::Enter);
+    assert_eq!(a.page.title(), "next release:9.9 key:B");
+    let Page::Browser(b) = &a.page else {
+        panic!("not a browser");
+    };
+    assert!(
+        b.entries.iter().all(|e| e.id.starts_with('B')),
+        "{:?}",
+        b.entries.len()
+    );
+    press(&mut a, KeyCode::Char('F'));
+    assert_eq!(a.prompt.as_ref().unwrap().text, "release:9.9 key:B");
+}
+
+#[test]
+fn test_f_refuses_an_unknown_field_and_stays_on_the_page() {
+    let mut a = app();
+    a.open(Target::Project("o/p".into()));
+    press(&mut a, KeyCode::Char('F'));
+    typed(&mut a, "colour:red");
+    press(&mut a, KeyCode::Enter);
+    assert_eq!(a.page.title(), "o/p");
+    assert!(a.flash.as_ref().unwrap().contains("the fields are release"));
+}

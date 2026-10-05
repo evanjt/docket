@@ -3,7 +3,7 @@
   import { provide } from '../lib/context';
   import { board } from '../lib/flow';
   import { releaseList } from '../lib/releases';
-  import { resource } from '../lib/live.svelte';
+  import { live, resource } from '../lib/live.svelte';
   import { href, type Tab } from '../lib/route';
   import { at, go, withParams } from '../lib/router.svelte';
   import { here } from '../lib/here.svelte';
@@ -20,7 +20,10 @@
   let { slug, tab }: { slug: string; tab: Tab } = $props();
   let creating = $state(false);
 
-  const graph = resource(() => api.graph(slug));
+  const graph = resource(
+    () => api.graph(slug),
+    () => live.graph,
+  );
   const todo = resource(() => api.list('todo', slug));
   const questions = resource(() => api.list('questions', slug));
   const facts = resource(() => api.facts(slug));
@@ -108,7 +111,7 @@
     {/key}
   </div>
 
-  <NewItem bind:open={creating} />
+  <NewItem bind:open={creating} from={open ? b?.nodes.get(open) : undefined} />
 
   {#if open && tab !== 'work'}
     <div class="scrim" role="presentation" onclick={closeItem}></div>

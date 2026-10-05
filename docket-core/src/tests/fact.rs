@@ -409,3 +409,25 @@ fn test_only_agent_settings_are_set_for_all_projects() {
         "mode is one of run, drain, pause, not 'go'"
     );
 }
+
+#[test]
+fn test_model_without_a_runner_takes_the_entry_on_another() {
+    let set = skills(&[("models", MODELS_SET)]);
+    assert_eq!(
+        model_without(&set, &skills(&[]), Role::Build, Some("medium"), &["codex"]),
+        Some(model("claude", "opus-x", Some("high")))
+    );
+    assert_eq!(
+        model_without(&set, &skills(&[]), Role::Build, Some("high"), &["codex"]),
+        Some(model("claude", "opus-x", Some("high")))
+    );
+    assert_eq!(
+        model_without(&set, &skills(&[]), Role::Build, Some("low"), &[]),
+        model_for(&set, &skills(&[]), Role::Build, Some("low"))
+    );
+    let one_runner = skills(&[("models", "high=codex:gpt-x medium=codex:gpt-y")]);
+    assert_eq!(
+        model_without(&one_runner, &skills(&[]), Role::Build, None, &["codex"]),
+        None
+    );
+}

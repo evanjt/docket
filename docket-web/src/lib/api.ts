@@ -1,6 +1,6 @@
 import type {
   Offers,
-  Context, Count, Derived, EventRow, Facts, Graph, LeadState, Machine, ProjectRow, Row, Shown, Status, Whoami,
+  Context, Count, Deps, Derived, EventRow, Facts, Graph, LeadState, Machine, ProjectRow, Row, Shown, Status, Whoami,
 } from './types';
 
 const KEY = 'docket.key';
@@ -129,6 +129,7 @@ export const api = {
   offers: (p: string, id: string) => get<Offers>(`/offers/${encodeURIComponent(id)}`, of(p)),
   log: (p: string, id: string) => get<EventRow[]>(`/log/${encodeURIComponent(id)}`, of(p)),
   context: (p: string, id: string) => get<Context>(`/context/${encodeURIComponent(id)}`, of(p)),
+  deps: (p: string, id: string) => get<Deps>(`/deps/${encodeURIComponent(id)}`, of(p)),
   graph: (p: string) => get<Graph>('/graph', of(p)),
   facts: (p: string) => get<Facts>('/facts', of(p)),
   machines: () => get<{ machines: Machine[] }>('/machines').then((m) => m.machines),

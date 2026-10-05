@@ -3,6 +3,7 @@
 
 pub mod app;
 pub mod doc;
+pub mod filter;
 pub mod load;
 pub mod mouse;
 pub mod page;

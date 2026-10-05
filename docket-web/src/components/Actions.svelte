@@ -66,7 +66,7 @@
       case 'reply': return ['reply', { ...common(), id, note: text.trim() }, 'Replied'];
       case 'start': return ['start', { ...common(given(extra) ?? 'main'), id }, `Started on ${given(extra) ?? 'main'}`];
       case 'close': return ['close', { ...common(held), id, resolution: given(text) }, 'Closed'];
-      case 'release': return ['release', { ...common(held), id, note: given(text) }, 'Released'];
+      case 'release': return ['release', { ...common(held), id, note: given(text) }, 'Unclaimed'];
       case 'resume': return ['resume', { ...common(), id, note: given(text) }, 'Resumed'];
       case 'retry': return ['retry', { ...common(), id, note: text.trim() }, 'Retried'];
       case 'ask': return ['ask', { ...common(held), id, note: text.trim() }, 'Parked for you'];

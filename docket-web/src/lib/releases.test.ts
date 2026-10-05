@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { releaseList, releaseOf, releaseRows } from './releases';
+import { holdsOf, releaseList, releaseOf, releaseRow, releaseRows } from './releases';
 import type { GraphNode } from './types';
 
 const node = (id: string, theme: string | null, word: string, state = 'open', kind = 'work'): GraphNode =>
@@ -42,5 +42,27 @@ describe('releaseRows', () => {
       { name: '1.0', current: true, done: 1, total: 3, live: 1, words: { ready: 1, building: 1 } },
       { name: '1.1', current: false, done: 0, total: 1, live: 0, words: { blocked: 1 } },
     ]);
+  });
+});
+
+describe('releaseRow', () => {
+  it('gives a plan with a listed theme a Release row', () => {
+    expect(releaseRow('0.4', ['1.0', '0.4'])).toEqual({ name: '0.4', current: false });
+  });
+  it('marks the current release and falls back to it for an unlisted theme', () => {
+    expect(releaseRow(null, ['1.0', '0.4'])).toEqual({ name: '1.0', current: true });
+  });
+  it('has no row without releases', () => {
+    expect(releaseRow('0.4', [])).toBeNull();
+  });
+});
+
+describe('holdsOf', () => {
+  it('lists what an item holds, in order', () => {
+    expect(holdsOf({ holds: [{ id: 'T2' }, { id: 'T3' }] })).toEqual(['T2', 'T3']);
+  });
+  it('is empty when the reply has none', () => {
+    expect(holdsOf(undefined)).toEqual([]);
+    expect(holdsOf({})).toEqual([]);
   });
 });

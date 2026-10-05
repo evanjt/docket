@@ -19,7 +19,7 @@ use docket_core::word::{Kind, word};
 use crate::auth::Caller;
 use crate::reads::public::{Kinds, facts, open_members, sql};
 use crate::reads::rows::{project_model, rows};
-use crate::store::{self, column, to_item};
+use crate::store::{self, STATE_COLUMNS, column, to_item};
 use crate::verbs::Failure;
 use crate::verbs::graph::live_overlaps;
 
@@ -91,7 +91,7 @@ async fn words<C: ConnectionTrait>(
     let open = open_members(db, slug).await?;
     let found = rows(
         db,
-        "SELECT * FROM items WHERE project=? ORDER BY state, rid",
+        &format!("SELECT {STATE_COLUMNS} FROM items WHERE project=? ORDER BY state, rid"),
         vec![slug.into()],
     )
     .await?;
@@ -161,15 +161,20 @@ pub async fn check(
     State(db): State<DatabaseConnection>,
     Query(q): Query<InProject>,
 ) -> Result<Json<Value>, Failure> {
-    project_model(&db, &q.project).await?;
-    Ok(Json(Value::Array(problems(&db, &q.project).await?)))
+    let model = project_model(&db, &q.project).await?;
+    let board = core_board(&db, &model).await?;
+    Ok(Json(Value::Array(problems(&db, &q.project, &board).await?)))
 }
 
 /// Every problem `check` finds, in the order it reports them.
 ///
 /// # Errors
 /// The database.
-pub async fn problems<C: ConnectionTrait>(db: &C, slug: &str) -> Result<Vec<Value>, Failure> {
+pub async fn problems<C: ConnectionTrait>(
+    db: &C,
+    slug: &str,
+    board: &Board,
+) -> Result<Vec<Value>, Failure> {
     let project = store::project(db, slug).await?;
     let mut out = Vec::new();
     let conflicts: Vec<String> = column(
@@ -186,12 +191,14 @@ pub async fn problems<C: ConnectionTrait>(db: &C, slug: &str) -> Result<Vec<Valu
     out.extend(undefined_keys(db, slug, &project).await?);
     out.extend(database_checks(db).await?);
     out.extend(stalls(db, slug).await?);
-    out.extend(audits_held(db, slug).await?);
+    out.extend(audits_held(board));
     let cutoff = stamp(now_secs().saturating_sub(30 * 86_400));
     let waiting = rows(
         db,
-        "SELECT * FROM items WHERE project=? AND state='open' AND wait_on='condition' AND wait_since < ? \
-         AND wait_ref<>? ORDER BY rid",
+        &format!(
+            "SELECT {STATE_COLUMNS} FROM items WHERE project=? AND state='open' AND wait_on='condition' \
+             AND wait_since < ? AND wait_ref<>? ORDER BY rid"
+        ),
         vec![slug.into(), cutoff.clone().into(), GATE.into()],
     )
     .await?;
@@ -303,7 +310,7 @@ struct Hold {
 async fn stalls<C: ConnectionTrait>(db: &C, slug: &str) -> Result<Vec<Value>, Failure> {
     let open = rows(
         db,
-        "SELECT * FROM items WHERE project=? AND state='open' ORDER BY rid",
+        &format!("SELECT {STATE_COLUMNS} FROM items WHERE project=? AND state='open' ORDER BY rid"),
         vec![slug.into()],
     )
     .await?;
@@ -352,17 +359,15 @@ async fn stalls<C: ConnectionTrait>(db: &C, slug: &str) -> Result<Vec<Value>, Fa
     Ok(out)
 }
 
-async fn audits_held<C: ConnectionTrait>(db: &C, slug: &str) -> Result<Vec<Value>, Failure> {
-    let model = project_model(db, slug).await?;
-    let board = core_board(db, &model).await?;
-    Ok(board
+fn audits_held(board: &Board) -> Vec<Value> {
+    board
         .gate_problems()
         .into_iter()
         .map(|g| match g {
             GateProblem::HeldGate { id } => problem("held_gate", json!({ "id": id })),
             GateProblem::OpenAudit { id, n } => problem("open_audit", json!({ "id": id, "n": n })),
         })
-        .collect())
+        .collect()
 }
 
 #[derive(FromQueryResult)]
@@ -458,7 +463,7 @@ pub async fn core_board<C: ConnectionTrait>(
     };
     let items: Vec<ItemRow> = rows(
         db,
-        "SELECT * FROM items WHERE project=? ORDER BY rid",
+        &format!("SELECT {STATE_COLUMNS} FROM items WHERE project=? ORDER BY rid"),
         vec![model.slug.clone().into()],
     )
     .await?
@@ -682,7 +687,7 @@ pub async fn summary(
         "claims": claims(&db, &q.project, &model).await?,
         "plans": plans(&board),
         "due": due(&board),
-        "problems": problems(&db, &q.project).await?,
+        "problems": problems(&db, &q.project, &board).await?,
     })))
 }
 

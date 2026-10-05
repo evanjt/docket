@@ -60,10 +60,11 @@ pub struct Queue {
     /// only items a plan opened, at any depth
     #[arg(long, value_name = "ID")]
     pub under: Option<String>,
-    /// only what this role takes: plan (new plans, investigations, decided questions), work
-    /// (tickets), audit (plans whose tickets are all closed)
-    #[arg(long, value_parser = QUEUE_ROLES)]
-    pub role: Option<String>,
+    /// only what these roles take, comma-separated and ranked in the order given within a
+    /// release: plan (new plans, investigations, decided questions), work (tickets), audit
+    /// (plans whose tickets are all closed)
+    #[arg(long, value_parser = QUEUE_ROLES, value_delimiter = ',')]
+    pub role: Vec<String>,
     /// only this priority and anything more urgent
     #[arg(long, value_parser = PRIORITIES)]
     pub priority: Option<String>,
@@ -182,7 +183,8 @@ pub enum Cmd {
         role: Option<String>,
     },
     /// give a claim back
-    Release {
+    #[command(alias = "release")]
+    Unclaim {
         id: String,
         note: Option<String>,
         /// the loop sending it back: counted, and twice parks it
@@ -436,6 +438,10 @@ pub enum Cmd {
         /// a line about it; empty clears it
         #[arg(long)]
         note: Option<String>,
+        /// the directories put before PATH in the command run on it over ssh, as the shell reads
+        /// them; empty clears it, none means $HOME/.local/bin:$HOME/.cargo/bin
+        #[arg(long)]
+        path: Option<String>,
     },
     /// the project's lead claim: show who leads, or take, renew or give it back
     Lead {
@@ -603,3 +609,7 @@ pub enum JobCmd {
         n: usize,
     },
 }
+
+#[cfg(test)]
+#[path = "tests/args.rs"]
+mod tests;

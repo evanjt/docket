@@ -8,6 +8,8 @@ fn alpha() -> Machine {
         runners: vec!["claude".into(), "codex".into()],
         note: None,
         updated_at: "2026-10-02T00:00:00Z".into(),
+        limits: BTreeMap::new(),
+        path: None,
     }
 }
 
@@ -56,6 +58,8 @@ fn test_a_new_machine_with_everything_is_stored_as_given() {
             runners: vec!["codex".into()],
             note: Some("the spare box".into()),
             updated_at: "2026-10-02T01:00:00Z".into(),
+            limits: BTreeMap::new(),
+            path: None,
         }
     );
 }
@@ -122,4 +126,70 @@ fn test_runners_read_from_a_comma_list() {
     assert_eq!(runners_of("claude, codex"), ["claude", "codex"]);
     assert_eq!(runners_of("codex"), ["codex"]);
     assert!(runners_of(" , ").is_empty());
+}
+
+#[test]
+fn test_a_limit_is_in_force_until_its_reset_and_not_after() {
+    let mut m = alpha();
+    m.limits
+        .insert("codex".into(), "2026-10-07T18:29:00Z".into());
+    assert_eq!(
+        m.limited("codex", "2026-10-07T18:28:59Z"),
+        Some("2026-10-07T18:29:00Z")
+    );
+    assert_eq!(m.limited("codex", "2026-10-07T18:29:00Z"), None);
+    assert_eq!(m.limited("claude", "2026-10-05T00:00:00Z"), None);
+}
+
+#[test]
+fn test_a_reset_is_read_from_the_message_that_reports_the_limit() {
+    let said = "You have reached your weekly usage limit, resets 2026-10-07 18:29.";
+    assert_eq!(reset_of(said).as_deref(), Some("2026-10-07T18:29:00Z"));
+    assert_eq!(
+        reset_of("limit reached, resets 2026-10-07T18:29").as_deref(),
+        Some("2026-10-07T18:29:00Z")
+    );
+    assert_eq!(reset_of("it resets 2026-10-07 18:29 daily"), None);
+    assert_eq!(reset_of("usage limit reached, resets 3pm"), None);
+}
+
+#[test]
+fn test_a_new_report_keeps_the_later_reset() {
+    assert_eq!(later(None, "2026-10-07T18:29:00Z"), "2026-10-07T18:29:00Z");
+    assert_eq!(
+        later(Some("2026-10-09T00:00:00Z"), "2026-10-07T18:29:00Z"),
+        "2026-10-09T00:00:00Z"
+    );
+    assert_eq!(
+        later(Some("2026-10-06T00:00:00Z"), "2026-10-07T18:29:00Z"),
+        "2026-10-07T18:29:00Z"
+    );
+}
+
+#[test]
+fn test_a_path_prefix_is_kept_cleared_by_empty_and_refused_when_it_breaks_the_quoting() {
+    let stored = Machine {
+        name: "beta".into(),
+        ssh: "u@beta".into(),
+        slots: 2,
+        runners: vec!["claude".into()],
+        ..alpha()
+    };
+    let with = Set {
+        path: Some("/opt/bin".into()),
+        ..set("beta")
+    };
+    let m = merged(Some(&stored), &with, "t").unwrap();
+    assert_eq!(m.path.as_deref(), Some("/opt/bin"));
+    assert_eq!(merged(Some(&m), &set("beta"), "t").unwrap().path, m.path);
+    let clear = Set {
+        path: Some(String::new()),
+        ..set("beta")
+    };
+    assert_eq!(merged(Some(&m), &clear, "t").unwrap().path, None);
+    let bad = Set {
+        path: Some("/a\"b".into()),
+        ..set("beta")
+    };
+    assert!(merged(Some(&stored), &bad, "t").is_err());
 }

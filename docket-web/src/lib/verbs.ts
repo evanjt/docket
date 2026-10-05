@@ -20,7 +20,7 @@ export const WORDING: Record<Verb, { label: string; done: string }> = {
   reply: { label: 'Reply', done: 'Replied' },
   start: { label: 'Start', done: 'Started' },
   close: { label: 'Close', done: 'Closed' },
-  release: { label: 'Release', done: 'Released' },
+  release: { label: 'Unclaim', done: 'Unclaimed' },
   retry: { label: 'Retry', done: 'Retried' },
   resume: { label: 'Resume', done: 'Resumed' },
   ask: { label: 'Park for me', done: 'Parked' },

@@ -7,25 +7,26 @@ use axum::{Json, Router};
 use sea_orm::{ConnectionTrait, DatabaseConnection, FromQueryResult};
 
 use docket_core::api::{MachineRequest, Machines};
-use docket_core::machine::{self, Machine};
+use docket_core::machine::{self, Limit, Machine};
 
 use crate::auth::Caller;
 use crate::store::{Tx, json, sql};
 use crate::verbs::Failure;
 
-const ALL: &str = "SELECT name, ssh, slots, runners, note, updated_at FROM machines ORDER BY name";
-const ONE: &str =
-    "SELECT name, ssh, slots, runners, note, updated_at FROM machines WHERE name=? FOR UPDATE";
-const WRITE: &str = "INSERT INTO machines (name, ssh, slots, runners, note, updated_at) \
-                     VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (name) DO UPDATE SET ssh=EXCLUDED.ssh, \
+const ALL: &str = "SELECT name, ssh, slots, runners, note, updated_at, limits, path_prefix FROM machines ORDER BY name";
+const ONE: &str = "SELECT name, ssh, slots, runners, note, updated_at, limits, path_prefix FROM machines WHERE name=? FOR UPDATE";
+const WRITE: &str = "INSERT INTO machines (name, ssh, slots, runners, note, updated_at, path_prefix) \
+                     VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (name) DO UPDATE SET ssh=EXCLUDED.ssh, \
                      slots=EXCLUDED.slots, runners=EXCLUDED.runners, note=EXCLUDED.note, \
-                     updated_at=EXCLUDED.updated_at";
+                     updated_at=EXCLUDED.updated_at, path_prefix=EXCLUDED.path_prefix";
+const LIMITS: &str = "UPDATE machines SET limits=? WHERE name=?";
 const REMOVE: &str = "DELETE FROM machines WHERE name=?";
 
 pub fn router() -> Router<DatabaseConnection> {
     Router::new()
         .route("/machines", get(read))
         .route("/do/machine", post(set))
+        .route("/do/limit", post(limit))
 }
 
 #[derive(FromQueryResult)]
@@ -36,6 +37,8 @@ struct Row {
     runners: serde_json::Value,
     note: Option<String>,
     updated_at: String,
+    limits: serde_json::Value,
+    path_prefix: Option<String>,
 }
 
 impl From<Row> for Machine {
@@ -47,6 +50,8 @@ impl From<Row> for Machine {
             runners: serde_json::from_value(r.runners).unwrap_or_default(),
             note: r.note,
             updated_at: r.updated_at,
+            limits: serde_json::from_value(r.limits).unwrap_or_default(),
+            path: r.path_prefix,
         }
     }
 }
@@ -107,10 +112,56 @@ pub async fn set(
                 json(serde_json::json!(m.runners)),
                 m.note.into(),
                 m.updated_at.into(),
+                m.path.into(),
             ],
         )
         .await?;
     }
+    let machines = rows(&tx.conn, ALL, vec![]).await?;
+    tx.commit().await?;
+    Ok(Json(Machines { machines }))
+}
+
+/// A runner's usage limit, as a job reported it: the reset kept is the later of it and the one
+/// stored, and resets already past are dropped. Any key may report one.
+///
+/// # Errors
+/// 404 for an unknown machine, 409 for a runner the machine does not have or a reset that is not a
+/// stamp.
+pub async fn limit(
+    State(db): State<DatabaseConnection>,
+    Extension(caller): Extension<Caller>,
+    Json(req): Json<Limit>,
+) -> Result<Json<Machines>, Failure> {
+    let tx = Tx::begin(&db, &caller.host).await?;
+    let stored = rows(&tx.conn, ONE, vec![req.machine.clone().into()]).await?;
+    let Some(m) = stored.first() else {
+        return Err(Failure::NotFound(format!("no machine {}", req.machine)));
+    };
+    if !m.runners.contains(&req.runner) {
+        return Err(Failure::Refused(format!(
+            "{} has no {}",
+            req.machine, req.runner
+        )));
+    }
+    let valid = req.until.len() == 20
+        && req.until.ends_with('Z')
+        && req.until.as_bytes().get(10) == Some(&b'T');
+    if !valid {
+        return Err(Failure::Refused(format!(
+            "a reset is a stamp like 2026-10-07T18:29:00Z, not {}",
+            req.until
+        )));
+    }
+    let mut limits = m.limits.clone();
+    let later = machine::later(limits.get(&req.runner).map(String::as_str), &req.until);
+    limits.insert(req.runner, later);
+    limits.retain(|_, until| *until > tx.now);
+    tx.execute(
+        LIMITS,
+        vec![json(serde_json::json!(limits)), req.machine.into()],
+    )
+    .await?;
     let machines = rows(&tx.conn, ALL, vec![]).await?;
     tx.commit().await?;
     Ok(Json(Machines { machines }))

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { releaseOf } from '../lib/releases';
+  import { releaseRow } from '../lib/releases';
   import { api } from '../lib/api';
   import { project } from '../lib/context';
   import { tally, verbWord } from '../lib/flow';
@@ -16,6 +16,8 @@
   const ctx = project();
   const shown = resource(() => api.show(ctx.slug, id));
   const offers = resource(() => api.offers(ctx.slug, id));
+  const deps = resource(() => api.deps(ctx.slug, id));
+  const context = resource(() => api.context(ctx.slug, id));
   const log = resource(() => api.log(ctx.slug, id));
 
   const item = $derived(shown.data?.id === id ? shown.data : undefined);
@@ -29,6 +31,13 @@
   const related = $derived(ctx.board?.related.get(id) ?? item?.related ?? []);
   const cites = $derived((item?.cites ?? []).filter((c) => c.path));
   const t = $derived(ctx.board ? tally(ctx.board, id) : null);
+  const dep = $derived(item ? deps.data : undefined);
+  const holds = $derived(dep?.holds ?? []);
+  const groupMates = $derived(dep?.group ?? []);
+  const mentions = $derived(dep?.mentions ?? []);
+  const sameFiles = $derived(dep?.same_files ?? []);
+  const rel = $derived(item ? releaseRow(item.theme, ctx.releases) : null);
+  const concepts = $derived(context.data?.concepts ?? []);
   const host = (h: string | null | undefined) => (h ?? '').split('.')[0];
 </script>
 
@@ -54,13 +63,13 @@
       <div><dt>Opened</dt><dd title={item.opened_at}>{stamp(item.opened_at)}</dd></div>
       <div><dt>Moved</dt><dd title={item.updated_at}>{ago(item.updated_at)}</dd></div>
       {#if item.group}<div><dt>Group</dt><dd>{item.group}</dd></div>{/if}
-      {#if ctx.releases.length && item.key && ctx.board?.nodes.get(item.id)?.kind === 'work'}
-        {@const rel = releaseOf(item.theme, ctx.releases)}
-        <div><dt>Release</dt><dd>{rel}{rel === ctx.releases[0] ? ' (current)' : ''}</dd></div>
+      {#if rel}
+        <div><dt>Release</dt><dd>{rel.name}{rel.current ? ' (current)' : ''}</dd></div>
       {/if}
+      {#if concepts.length}<div><dt>Concepts</dt><dd>{concepts.join(', ')}</dd></div>{/if}
       {#if item.theme && !ctx.releases.includes(item.theme)}<div><dt>Theme</dt><dd>{item.theme}</dd></div>{/if}
       {#if item.claim_branch}
-        <div><dt>Claimed</dt><dd><span class="id">{item.claim_branch}</span> on {host(item.claim_on ?? item.claim_host)}, {ago(item.claim_since)}</dd></div>
+        <div><dt>Claimed</dt><dd><span class="id">{item.claim_branch}</span> on {host(item.claim_on ?? item.claim_host)}, {ago(item.claim_since)}{#if item.claim_job}, job <span class="id">{item.claim_job}</span>{/if}</dd></div>
       {/if}
       {#if t && t.total > 0}<div><dt>Opened items</dt><dd><Bar tally={t} /></dd></div>{/if}
     </dl>
@@ -99,6 +108,38 @@
       </section>
     {/if}
 
+    {#if holds.length}
+      <section>
+        <h3>Holds</h3>
+        <ul class="ties">{#each holds as h (h.id)}{@render row(h)}{/each}</ul>
+      </section>
+    {/if}
+
+    {#if groupMates.length}
+      <section>
+        <h3>Group {item.group}</h3>
+        <ul class="ties">{#each groupMates as g (g.id)}{@render row(g)}{/each}</ul>
+      </section>
+    {/if}
+
+    {#if mentions.length}
+      <section>
+        <details>
+          <summary>Mentions ({mentions.length})</summary>
+          <ul class="ties">{#each mentions as m (m.id)}{@render row(m)}{/each}</ul>
+        </details>
+      </section>
+    {/if}
+
+    {#if sameFiles.length}
+      <section>
+        <details>
+          <summary>Same files ({sameFiles.length})</summary>
+          <ul class="ties">{#each sameFiles as f (f.id)}{@render row(f, `${f.shared ?? 0} shared`)}{/each}</ul>
+        </details>
+      </section>
+    {/if}
+
     {#if cites.length}
       <section>
         <h3>Cites</h3>
@@ -127,6 +168,14 @@
     </section>
   {/if}
 </article>
+
+{#snippet row(r: { id: string; word: string; title: string }, how = '')}
+  <li>
+    <span class="how faint">{how}</span>
+    <a class="id" href={ctx.item(r.id)}>{r.id}</a>
+    <Word word={r.word} plain /><span class="title">{r.title}</span>
+  </li>
+{/snippet}
 
 {#snippet tie(other: string, how: string)}
   {@const n = ctx.board?.nodes.get(other)}

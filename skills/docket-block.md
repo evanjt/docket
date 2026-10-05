@@ -22,5 +22,5 @@ project's facts.
   commits never name an item, project, person or machine.
   `docket private check --staged` finds one.
 
-    docket next --role work      the queue, most urgent first
+    docket next --role work      the queue, in release order
     docket show ID               one item in full

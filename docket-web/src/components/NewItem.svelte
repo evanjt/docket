@@ -1,10 +1,11 @@
 <script lang="ts">
   import { project } from '../lib/context';
   import { LEVELS, PRIORITIES } from '../lib/flow';
+  import { newItemDefaults, newItemRequests } from '../lib/newitem';
   import { go } from '../lib/router.svelte';
   import { act } from '../lib/session.svelte';
 
-  let { open = $bindable(false) }: { open?: boolean } = $props();
+  let { open = $bindable(false), from }: { open?: boolean; from?: { id: string; theme?: string | null } } = $props();
 
   const ctx = project();
   const keys = $derived((ctx.row?.keys ?? []).filter((k) => k.kind !== 'concept' && k.kind !== 'idea'));
@@ -14,32 +15,35 @@
   let body = $state('');
   let priority = $state('normal');
   let complexity = $state('');
+  let release = $state('');
+  let openedBy = $state('');
+  let group = $state('');
   let busy = $state(false);
 
   $effect(() => {
     if (open && !key && keys.length) key = keys[0].key;
   });
 
+  $effect(() => {
+    if (!open) return;
+    const d = newItemDefaults(from, ctx.releases);
+    release = d.release;
+    openedBy = d.openedBy;
+  });
+
   async function submit(e: SubmitEvent) {
     e.preventDefault();
     busy = true;
-    const done = await act<{ item: { id: string } }>(
-      'new',
-      {
-        project: ctx.slug,
-        key,
-        title: title.trim(),
-        body: body.trim() || null,
-        priority: priority === 'normal' ? null : priority,
-        complexity: complexity || null,
-      },
-      'Opened',
-    );
+    const req = newItemRequests(ctx.slug, { key, title, body, priority, complexity, release, openedBy, group });
+    const done = await act<{ item: { id: string } }>('new', req.request, 'Opened');
+    const link = done && req.link(done.item.id);
+    if (link) await act('link', link, 'Linked');
     busy = false;
     if (!done) return;
     open = false;
     title = '';
     body = '';
+    group = '';
     go(ctx.item(done.item.id));
   }
 </script>
@@ -69,6 +73,20 @@
         </select>
       </label>
     </div>
+    <div class="pair">
+      <label>Release
+        <select class="field" bind:value={release}>
+          <option value="">current</option>
+          {#each ctx.releases as r (r)}<option value={r}>{r}</option>{/each}
+        </select>
+      </label>
+      <label>Group
+        <input class="field" bind:value={group} placeholder="none" />
+      </label>
+    </div>
+    <label>Opened by
+      <input class="field" bind:value={openedBy} placeholder="an item id, or none" />
+    </label>
     <div class="foot">
       <button class="btn primary" disabled={!title.trim() || !key || busy}>Open {key}</button>
       <button type="button" class="btn" onclick={() => (open = false)}>Cancel</button>

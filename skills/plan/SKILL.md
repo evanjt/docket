@@ -79,10 +79,11 @@ Then:
     docket edit T14 --set group=name    # tickets one session should take together
     docket wait T15 --on T14            # T15 builds on T14, the owner ticket first
 
-Priority is the only order the queue reads. Complexity is rated apart from
+The queue reads release, then priority, then age. A theme the releases fact does not
+list ranks with the current release. Complexity is rated apart from
 effort: high is architecture (a new data model, a migration, many dependants).
 
-Release the plan once its tickets are filed (`docket release A3`): it then
+Unclaim the plan once its tickets are filed (`docket unclaim A3`): it then
 waits on them, and comes back for its audit when they are all closed.
 
 ## An investigation

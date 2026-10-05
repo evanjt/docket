@@ -456,6 +456,20 @@ pub fn model_for(
     role: Role,
     complexity: Option<&str>,
 ) -> Option<Model> {
+    model_without(project, owner, role, complexity, &[])
+}
+
+/// `model_for`, never on a runner in `unavailable`: the entry the role and complexity pick when its
+/// runner is available, else, when one is picked, the first entry on an available runner, the complexities from high to
+/// low and then the audit, plan and lead entries.
+#[must_use]
+pub fn model_without(
+    project: &BTreeMap<String, String>,
+    owner: &BTreeMap<String, String>,
+    role: Role,
+    complexity: Option<&str>,
+    unavailable: &[&str],
+) -> Option<Model> {
     let (models, _) = layered(project, owner, "models")?;
     let models = models_of(&models).ok()?;
     let order: &[&str] = match (role, complexity) {
@@ -465,7 +479,15 @@ pub fn model_for(
         (Role::Build, Some(c @ ("high" | "medium" | "low"))) => &[c][..],
         (Role::Build, _) => &["unrated", "medium"],
     };
-    order.iter().find_map(|k| models.get(*k).cloned())
+    let own = order.iter().find_map(|k| models.get(*k))?;
+    if !unavailable.contains(&own.runner.as_str()) {
+        return Some(own.clone());
+    }
+    MODEL_KEYS
+        .iter()
+        .filter_map(|k| models.get(*k))
+        .find(|m| !unavailable.contains(&m.runner.as_str()))
+        .cloned()
 }
 
 /// The facts with one set or unset, as stored after the write.

@@ -159,9 +159,33 @@ impl Api {
     }
 }
 
-/// The event names of a server-sent stream, in order; it ends when the connection does.
+/// The events of a server-sent stream, in order; it ends when the connection does.
 pub struct Changes {
     lines: BufReader<Box<dyn Read + Send>>,
+}
+
+/// One event of the stream: its name and its data lines joined.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Event {
+    pub name: String,
+    pub data: String,
+}
+
+impl Event {
+    /// Whether a `change` is news to the project `shown`. A change naming other projects is not;
+    /// one naming none, or whose data cannot be read, may be any project's, and no `shown` is a
+    /// page of no single project.
+    #[must_use]
+    pub fn concerns(&self, shown: Option<&str>) -> bool {
+        let Some(shown) = shown else { return true };
+        let Ok(data) = serde_json::from_str::<serde_json::Value>(&self.data) else {
+            return true;
+        };
+        match data.get("projects").and_then(|p| p.as_array()) {
+            Some(projects) if !projects.is_empty() => projects.iter().any(|p| p == shown),
+            _ => true,
+        }
+    }
 }
 
 impl Changes {
@@ -175,10 +199,11 @@ impl Changes {
 }
 
 impl Iterator for Changes {
-    type Item = String;
+    type Item = Event;
 
-    fn next(&mut self) -> Option<String> {
+    fn next(&mut self) -> Option<Event> {
         let mut name = None;
+        let mut data: Vec<String> = Vec::new();
         loop {
             let mut line = String::new();
             if self.lines.read_line(&mut line).ok()? == 0 {
@@ -186,13 +211,16 @@ impl Iterator for Changes {
             }
             let line = line.trim_end_matches(['\r', '\n']);
             if line.is_empty() {
-                if let Some(name) = name.take() {
-                    return Some(name);
+                if name.is_some() || !data.is_empty() {
+                    return Some(Event {
+                        name: name.take().unwrap_or_else(|| "message".to_string()),
+                        data: data.join("\n"),
+                    });
                 }
             } else if let Some(n) = line.strip_prefix("event:") {
                 name = Some(n.trim().to_string());
-            } else if line.starts_with("data:") && name.is_none() {
-                name = Some("message".to_string());
+            } else if let Some(d) = line.strip_prefix("data:") {
+                data.push(d.strip_prefix(' ').unwrap_or(d).to_string());
             }
         }
     }
@@ -247,12 +275,15 @@ impl Api {
     ///
     /// # Errors
     /// As `get`.
-    pub fn next(&self, slug: &str, n: usize, under: Option<&str>) -> Result<Vec<Row>> {
+    pub fn next(
+        &self,
+        slug: &str,
+        n: usize,
+        narrow: &[(&'static str, String)],
+    ) -> Result<Vec<Row>> {
         let mut q = of(slug);
         q.push(("n", n.to_string()));
-        if let Some(id) = under {
-            q.push(("under", id.to_string()));
-        }
+        q.extend(narrow.iter().cloned());
         self.get("/next", &q)
     }
 

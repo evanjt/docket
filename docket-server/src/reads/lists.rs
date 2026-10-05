@@ -10,8 +10,10 @@ use docket_core::word::Kind;
 
 use crate::entities::project;
 use crate::reads::public::{
-    Failure, Kinds, failure, items_where, marks, one_of, project_of, public_rows, sql,
+    Failure, Kinds, failure, internal, items_where, marks, one_of, open_members, project_of,
+    public, public_rows, sql,
 };
+use crate::reads::search::{Narrow, similar_rows};
 
 fn like(words: &str) -> sea_orm::Value {
     format!("%{words}%").into()
@@ -116,7 +118,9 @@ pub async fn questions(
     Query(q): Query<ByTheme>,
 ) -> Result<Json<Value>, Failure> {
     let project = project_of(&db, &q.project).await?;
-    let qkeys = Kinds::of(&project).keys(Kind::Decision);
+    let kinds = Kinds::of(&project);
+    let qkeys = kinds.keys(Kind::Decision);
+    let decided_keys = qkeys.clone();
     if qkeys.is_empty() {
         return Ok(Json(json!([])));
     }
@@ -130,7 +134,35 @@ pub async fn questions(
         values.push(like(&theme));
     }
     tail.push_str(" ORDER BY theme IS NULL, theme, rank IS NULL, rank, rid");
-    listed(&db, &q.project, &tail, values).await
+    let rows = items_where(&db, &q.project, &tail, values).await?;
+    let counts = open_members(&db, &q.project)
+        .await
+        .map_err(|e| internal(&e))?;
+    let mut twins = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let narrow = Narrow {
+            decided: decided_keys.clone(),
+            n: 1,
+            ..Narrow::default()
+        };
+        let near = similar_rows(&db, &q.project, row, &narrow).await?;
+        twins.push(match near.into_iter().next() {
+            Some((twin, _, _)) => {
+                let open = counts.get(&twin.rid).copied().unwrap_or(0);
+                Value::Object(
+                    public(&db, kinds.kind(&twin.key), twin, open, None)
+                        .await
+                        .map_err(|e| internal(&e))?,
+                )
+            }
+            None => Value::Null,
+        });
+    }
+    let mut out = public_rows(&db, &project, rows).await?;
+    for (row, twin) in out.iter_mut().zip(twins) {
+        row["close_to"] = twin;
+    }
+    Ok(Json(Value::Array(out)))
 }
 
 /// `docket research`: decided questions still open, which owe work items.

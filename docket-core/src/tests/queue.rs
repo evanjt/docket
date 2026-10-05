@@ -147,7 +147,7 @@ fn test_next_by_role() {
     ties.extend(opened(9, 8));
     let by = |role| {
         let f = Filter {
-            role: Some(role),
+            roles: &[role],
             ..Filter::default()
         };
         ids(next(&items, &ties, &f, 10))
@@ -237,4 +237,47 @@ fn test_next_orders_by_release_before_priority() {
         ids(next(&items, &[], &Filter::default(), 10)),
         vec![1, 4, 3, 2]
     );
+}
+
+#[test]
+fn test_next_over_several_roles_orders_by_release_then_role() {
+    let items = vec![
+        Candidate {
+            tier: 3,
+            ..item(1, "B", Kind::Work)
+        },
+        Candidate {
+            tier: 3,
+            ..item(2, "A", Kind::Audit)
+        },
+        Candidate {
+            open: false,
+            ..item(3, "B", Kind::Work)
+        },
+        Candidate {
+            theme: Some("1.1"),
+            tier: 0,
+            ..item(4, "A", Kind::Audit)
+        },
+        Candidate {
+            theme: Some("1.1"),
+            tier: 0,
+            ..item(5, "B", Kind::Work)
+        },
+        Candidate {
+            theme: Some("1.1"),
+            tier: 0,
+            ..item(6, "A", Kind::Audit)
+        },
+    ];
+    let mut ties = opened(3, 2);
+    ties.extend(opened(5, 6));
+    let r = releases(&["1.0", "1.1"]);
+    let roles = [Role::Audit, Role::Plan, Role::Work];
+    let f = Filter {
+        roles: &roles,
+        releases: &r,
+        ..Filter::default()
+    };
+    assert_eq!(ids(next(&items, &ties, &f, 10)), vec![2, 1, 4, 5]);
 }

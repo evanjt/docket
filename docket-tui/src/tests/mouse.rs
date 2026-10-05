@@ -258,3 +258,49 @@ fn test_help_names_what_the_mouse_does() {
     );
     find(&buf, "right click            back", 0, 120);
 }
+
+fn click_stamped(app: &mut App<Fixture>, (column, row): (u16, u16), layout: u64) {
+    app.mouse_stamped(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        },
+        layout,
+    );
+}
+
+#[test]
+fn test_a_click_stamped_before_a_layout_change_is_ignored() {
+    let mut a = app();
+    browse(&mut a, Listing::Route(Route::Questions));
+    let old_at = in_detail(&mut a, "B1");
+    let before = a.map.layout;
+    draw(&mut a, 120, 30);
+    assert_ne!(a.map.layout, before);
+    click_stamped(&mut a, old_at, before);
+    assert_ne!(a.page.title(), "B1");
+}
+
+#[test]
+fn test_a_click_after_a_layout_change_hits_the_new_map() {
+    let mut a = app();
+    browse(&mut a, Listing::Route(Route::Questions));
+    in_detail(&mut a, "B1");
+    let buf = draw(&mut a, 120, 30);
+    let at = find(&buf, "B1", list_width(120) + 1, 120);
+    let layout = a.map.layout;
+    click_stamped(&mut a, at, layout);
+    assert_eq!(a.page.title(), "B1");
+}
+
+#[test]
+fn test_drawing_the_same_layout_again_keeps_its_generation() {
+    let mut a = app();
+    browse(&mut a, Listing::Route(Route::Questions));
+    draw(&mut a, 160, 40);
+    let layout = a.map.layout;
+    draw(&mut a, 160, 40);
+    assert_eq!(a.map.layout, layout);
+}

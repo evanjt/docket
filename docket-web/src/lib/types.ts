@@ -133,6 +133,8 @@ export interface Machine {
   runners: string[];
   note: string | null;
   updated_at: string;
+  /** Each runner that reported a usage limit here, with the reset it named. */
+  limits?: Record<string, string>;
 }
 
 export interface Lead {
@@ -182,6 +184,14 @@ export interface Graph {
   project: string;
   nodes: GraphNode[];
   edges: GraphEdge[];
+}
+
+/** `/deps`: the items an item is tied to, by the tie; mentions carry a snippet, same files a shared count. */
+export interface Deps {
+  holds?: Row[];
+  group?: Row[];
+  mentions?: (Row & { snip?: string })[];
+  same_files?: (Row & { shared?: number })[];
 }
 
 export interface Context {

@@ -166,3 +166,71 @@ async fn test_machines_are_listed_by_name_and_removed_one_at_a_time() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(out["error"], "no machine alpha");
 }
+
+async fn report(app: &Router, key: &str, runner: &str, until: &str) -> (StatusCode, Value) {
+    let body = json!({ "machine": "beta", "runner": runner, "until": until });
+    send(app, Method::POST, "/do/limit", key, Some(body)).await
+}
+
+#[tokio::test]
+async fn test_a_reported_limit_is_read_with_the_machine_by_every_key() {
+    let (_db, app) = scratch().await;
+    set(&app, "ownerkey", beta()).await;
+    let (status, out) = report(&app, "agentkey", "codex", "2999-10-07T18:29:00Z").await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    let (_, read) = send(&app, Method::GET, "/machines", "ownerkey", None).await;
+    assert_eq!(
+        read["machines"][0]["limits"],
+        json!({ "codex": "2999-10-07T18:29:00Z" })
+    );
+}
+
+#[tokio::test]
+async fn test_a_later_report_keeps_the_later_reset_and_a_set_keeps_the_limits() {
+    let (_db, app) = scratch().await;
+    set(&app, "ownerkey", beta()).await;
+    report(&app, "agentkey", "codex", "2999-10-09T00:00:00Z").await;
+    let (_, out) = report(&app, "agentkey", "codex", "2999-10-07T18:29:00Z").await;
+    assert_eq!(
+        out["machines"][0]["limits"]["codex"],
+        "2999-10-09T00:00:00Z"
+    );
+    let (_, out) = set(&app, "ownerkey", json!({ "name": "beta", "slots": 5 })).await;
+    assert_eq!(
+        out["machines"][0]["limits"]["codex"],
+        "2999-10-09T00:00:00Z"
+    );
+}
+
+#[tokio::test]
+async fn test_a_limit_already_past_is_dropped_on_the_next_report() {
+    let (_db, app) = scratch().await;
+    set(&app, "ownerkey", beta()).await;
+    report(&app, "agentkey", "codex", "2000-01-01T00:00:00Z").await;
+    let (_, out) = report(&app, "agentkey", "claude", "2999-10-07T18:29:00Z").await;
+    assert_eq!(
+        out["machines"][0]["limits"],
+        json!({ "claude": "2999-10-07T18:29:00Z" })
+    );
+}
+
+#[tokio::test]
+async fn test_a_limit_for_an_unknown_machine_runner_or_stamp_is_refused() {
+    let (_db, app) = scratch().await;
+    let body = json!({ "machine": "beta", "runner": "codex", "until": "2999-10-07T18:29:00Z" });
+    let (status, _) = send(&app, Method::POST, "/do/limit", "agentkey", Some(body)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    set(
+        &app,
+        "ownerkey",
+        json!({ "name": "beta", "ssh": "b", "slots": 1, "runners": ["claude"] }),
+    )
+    .await;
+    let (status, out) = report(&app, "agentkey", "codex", "2999-10-07T18:29:00Z").await;
+    assert_eq!(
+        (status, out["refused"].as_str()),
+        (StatusCode::CONFLICT, Some("beta has no codex"))
+    );
+    let (status, _) = report(&app, "agentkey", "claude", "tomorrow").await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}

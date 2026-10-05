@@ -4,6 +4,8 @@
 mod m20261001_000001_schema;
 mod m20261002_000001_machines_and_leads;
 mod m20261005_000001_owner_facts;
+mod m20261005_000002_runner_limits;
+mod m20261005_000003_machine_path;
 #[cfg(any(test, feature = "scratch"))]
 pub mod scratch;
 
@@ -26,6 +28,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20261001_000001_schema::Migration),
             Box::new(m20261002_000001_machines_and_leads::Migration),
             Box::new(m20261005_000001_owner_facts::Migration),
+            Box::new(m20261005_000002_runner_limits::Migration),
+            Box::new(m20261005_000003_machine_path::Migration),
         ]
     }
 }

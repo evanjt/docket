@@ -22,6 +22,8 @@ const STATES: [&str; 4] = ["open", "done", "dropped", "any"];
 #[derive(Default)]
 pub(crate) struct Narrow {
     pub key: Option<String>,
+    /// Only items with a non-empty decision whose key is one of these; unused when empty.
+    pub decided: Vec<String>,
     pub state: Option<String>,
     pub exclude: Option<i64>,
     pub theme: Option<String>,
@@ -49,6 +51,12 @@ pub(crate) fn ranked(slug: &str, query: &str, narrow: &Narrow) -> (String, Vec<s
     if let Some(key) = &narrow.key {
         text.push_str(" AND i.key=?");
         values.push(key.to_uppercase().into());
+    }
+    if !narrow.decided.is_empty() {
+        text.push_str(" AND i.key IN (");
+        text.push_str(&crate::reads::public::marks(narrow.decided.len()));
+        text.push_str(") AND i.decision IS NOT NULL AND i.decision<>''");
+        values.extend(narrow.decided.iter().map(|k| k.as_str().into()));
     }
     if let Some(state) = narrow.state.as_deref().filter(|s| *s != "any") {
         text.push_str(" AND i.state=?");
@@ -161,6 +169,7 @@ pub async fn search(
     };
     let narrow = Narrow {
         key: q.key,
+        decided: Vec::new(),
         state: q.state,
         exclude: None,
         theme: q.theme,
@@ -195,6 +204,23 @@ pub async fn similar(
     crate::reads::public::one_of("state", q.state.as_deref(), &STATES)?;
     let project = project_of(&db, &q.project).await?;
     let row = item_of(&db, &q.project, &id).await?;
+    let narrow = Narrow {
+        state: q.state,
+        exclude: Some(row.rid),
+        n: q.n,
+        ..Narrow::default()
+    };
+    let rows = similar_rows(&db, &q.project, &row, &narrow).await?;
+    shaped(&db, &project, rows, false).await
+}
+
+/// The items close to `row` by its title's words, the files it cites and its symbols.
+pub(crate) async fn similar_rows(
+    db: &DatabaseConnection,
+    slug: &str,
+    row: &item::Model,
+    narrow: &Narrow,
+) -> Result<Vec<(item::Model, f64, String)>, Failure> {
     let cited: Vec<String> = link::Entity::find()
         .filter(link::Column::Rid.eq(row.rid))
         .order_by_asc(link::Column::Kind)
@@ -202,7 +228,7 @@ pub async fn similar(
         .order_by_with_nulls(link::Column::ToPath, Order::Asc, NullOrdering::First)
         .order_by_with_nulls(link::Column::ToLine, Order::Asc, NullOrdering::First)
         .order_by_asc(link::Column::Id)
-        .all(&db)
+        .all(db)
         .await
         .map_err(|e| internal(&e))?
         .into_iter()
@@ -210,14 +236,7 @@ pub async fn similar(
         .collect();
     let terms = similar_terms(&row.title, &cited, &row.body);
     if terms.is_empty() {
-        return Ok(Json(json!([])));
+        return Ok(Vec::new());
     }
-    let narrow = Narrow {
-        state: q.state,
-        exclude: Some(row.rid),
-        n: q.n,
-        ..Narrow::default()
-    };
-    let rows = search_rows(&db, &q.project, &any_of(&terms), &narrow).await?;
-    shaped(&db, &project, rows, false).await
+    search_rows(db, slug, &any_of(&terms), narrow).await
 }

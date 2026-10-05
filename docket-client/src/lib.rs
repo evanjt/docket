@@ -4,5 +4,5 @@ pub mod api;
 pub mod config;
 pub mod roots;
 
-pub use api::{Api, Changes, Error};
+pub use api::{Api, Changes, Error, Event};
 pub use config::Config;

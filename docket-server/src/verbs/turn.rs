@@ -13,6 +13,7 @@ use docket_core::api::{
 };
 use docket_core::item::Field;
 use docket_core::rules;
+use docket_core::word::Kind;
 
 use crate::auth::Caller;
 use crate::verbs::graph::{
@@ -281,6 +282,12 @@ pub async fn decide(
 ) -> Result<Json<Moved>, Failure> {
     let mut call = Call::begin(&db, &caller, &req.common).await?;
     let r = call.item(&req.id).await?;
+    if kind(&call.project, &r) == Kind::Decision {
+        return Err(Failure::Refused(format!(
+            "{} is a question: decide only records a choice in the body. Use docket answer {} \"the choice\" --derived \"the basis\", which settles it and releases what waited on it.",
+            req.id, req.id
+        )));
+    }
     let body = format!(
         "{}\n\n**Decided, {}.** {}. Basis: {}",
         r.body.trim_end_matches('\n'),

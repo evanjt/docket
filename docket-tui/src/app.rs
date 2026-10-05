@@ -15,6 +15,29 @@ use crate::view;
 use crate::write::{Ask, Prompt};
 use docket_core::board::Board;
 
+/// What a read of the open page left behind, kept apart from the screen until it is adopted.
+pub struct Reloaded {
+    pub page: Page,
+    pub boards: HashMap<String, Board>,
+    pub details: HashMap<(String, String), Detail>,
+    pub flash: Option<String>,
+}
+
+impl<S: Source> App<S> {
+    /// The page read again from scratch, the pointers it holds kept.
+    pub fn reload(&mut self, page: Page) -> Reloaded {
+        self.page = page;
+        self.flash = None;
+        self.changed();
+        Reloaded {
+            page: std::mem::replace(&mut self.page, Page::Help(Help::default())),
+            boards: std::mem::take(&mut self.boards),
+            details: std::mem::take(&mut self.details),
+            flash: self.flash.take(),
+        }
+    }
+}
+
 pub struct App<S: Source> {
     pub source: S,
     pub page: Page,
@@ -25,6 +48,11 @@ pub struct App<S: Source> {
     pub flash: Option<String>,
     /// Whether the server's change stream is connected.
     pub live: bool,
+    /// Whether the stream has been connected once, the first connection following a read just made.
+    pub seen_live: bool,
+    /// Counts each key and mouse press, so a read made in the background can be told the screen
+    /// moved on while it ran.
+    pub inputs: u64,
     pub quit: bool,
     /// The terminal's width and height at the last draw.
     pub size: (u16, u16),
@@ -50,7 +78,14 @@ pub type DocKey = (u64, String, u16, bool);
 impl<S: Source> App<S> {
     /// Opens on home, read at once.
     pub fn new(source: S) -> Self {
-        let mut app = Self {
+        let mut app = Self::unread(source);
+        app.load();
+        app
+    }
+
+    /// Opens on home, nothing read yet.
+    pub fn unread(source: S) -> Self {
+        Self {
             source,
             page: Page::Home(Home::default()),
             back: Vec::new(),
@@ -59,6 +94,8 @@ impl<S: Source> App<S> {
             details: HashMap::new(),
             flash: None,
             live: false,
+            seen_live: false,
+            inputs: 0,
             quit: false,
             size: (120, 40),
             prompt: None,
@@ -68,9 +105,7 @@ impl<S: Source> App<S> {
             generation: 0,
             doc_cache: RefCell::new(None),
             starts: Starts::default(),
-        };
-        app.load();
-        app
+        }
     }
 
     /// The board of a project, read when not held.
@@ -120,6 +155,17 @@ impl<S: Source> App<S> {
         self.load();
     }
 
+    /// The page and caches a background read produced, put in place of the ones shown.
+    pub fn adopt(&mut self, read: Reloaded) {
+        self.page = read.page;
+        self.boards = read.boards;
+        self.details = read.details;
+        if read.flash.is_some() {
+            self.flash = read.flash;
+        }
+        self.generation += 1;
+    }
+
     /// What a hot spot opens, in the project the page is in.
     pub fn open(&mut self, target: Target) {
         let slug = self.page.slug().map(str::to_string);
@@ -152,6 +198,7 @@ impl<S: Source> App<S> {
         if k.kind != KeyEventKind::Press {
             return;
         }
+        self.inputs += 1;
         self.flash = None;
         self.hover = None;
         if self.prompting(k) || self.typed(k) {

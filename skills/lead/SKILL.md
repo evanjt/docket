@@ -46,9 +46,7 @@ The claim lapses after `lead_lapse` minutes, so renew at least that often.
 
     docket skills mode
     docket jobs
-    docket next 20 --role audit
-    docket next 20 --role plan
-    docket next 30 --role work
+    docket next 40 --role audit,plan,work
 
 `mode` pause: dispatch nothing and stop once nothing runs. drain: dispatch
 nothing, see the running jobs through, then stop. run: carry on.
@@ -65,8 +63,11 @@ queue really is, and goes stale as the branch moves under it. When several end
 together, land them as one batch with one gate run rather than one gate run
 each.
 
-Audits first (they close plans), then plans and investigations, then tickets,
-each list in the order `next` gives it (most urgent first):
+Take the one list in the order `next` gives it: earliest release first, then
+audits, plans and investigations, then tickets, then most urgent. A later
+release never goes ahead of a current-release ticket. Send each with its role:
+an audit-due plan as `--role audit`, a plan or investigation as `--role plan`,
+a ticket with none:
 
     docket dispatch A3 --role audit
     docket dispatch I2 --role plan
@@ -85,6 +86,10 @@ Read each answer:
   worktree starts from the first member's landed change. `--force` only when
   the members touch nothing in common.
 - `no machine has ... a free slot`: stop dispatching until a job ends.
+- `reported a usage limit` or `every runner ... reported a usage limit`: the
+  runner is out until the reset the line names, and dispatch already uses the
+  `models` fact's entry on the other runner when there is one. With none, stop
+  dispatching until that reset. It is not a failure.
 - `dispatch ... failed, the claim given back`: the reason is in the line.
   Note it, take the next, and count it as a failure.
 
@@ -137,7 +142,7 @@ it), which runs the gates, or with the gates by hand and
   into the item, give the ticket back and dispatch it again at once:
 
       docket edit T14 --append "fails <gate> on <sha>: <the failing lines>"
-      docket --branch <the job's branch> release T14 "fails <gate> on <sha>: fix on the new head"
+      docket --branch <the job's branch> unclaim T14 "fails <gate> on <sha>: fix on the new head"
       docket dispatch T14
 
 Once landed, close each item with its own commit, now on your branch, and
@@ -154,15 +159,32 @@ Check content, not reachability: `git show HEAD:<a file it touched>`.
     docket collect A3
     docket --branch <the job's branch> close A3 "<the NOTE line>"
 
-**DONE, for a plan or investigation.** Merge any commit as for a ticket, then
-close it with the note, or for a decided question, with what it opened:
-`docket --branch <branch> close Q7 "opened T22, T23"`.
+**DONE, for a plan.** Merge any commit as for a ticket, then give the claim
+back with the note. The plan stays open until its tickets close and its audit
+is due: `close` refuses while it has open work.
 
-**WAITING Q\<n\>.** The job filed a question and the item waits on it. Give
-the claim back, which keeps the wait, and clear the job:
+    docket collect A3
+    docket --branch <the job's branch> unclaim A3 "<the NOTE line>"
+
+**DONE, for an investigation or a decided question.** Merge any commit as for a
+ticket, then close it with the note, or for a decided question, with what it
+opened: `docket --branch <branch> close Q7 "opened T22, T23"`.
+
+**WAITING Q\<n\>.** The job filed a question and the item waits on it. The
+wait already gave the claim back, so `release` is refused: note the wait on the
+item and clear the job:
 
     docket collect T14 --discard
-    docket --branch <the job's branch> release T14 "waits on Q<n>"
+    docket --branch <the job's branch> edit T14 --append "waits on Q<n>"
+
+**A usage limit.** `docket collect` prints `usage limit: RUNNER on MACHINE until
+RESET` and the server records it, so `docket machines` and the next dispatch
+read it. Clear the job and give the claim back with that reason. It is not
+a failed job: it neither counts toward the second failure of the item nor
+toward the stop below.
+
+    docket collect T14 --discard
+    docket --branch <branch> unclaim T14 "RUNNER usage limit until RESET"
 
 **FAILED, or lost, or no report.** Read why (`docket jobs`, and the job's log
 on its machine with `docket job log NAME`). Clear it with `docket collect T14
@@ -170,7 +192,7 @@ on its machine with `docket job log NAME`). Clear it with `docket collect T14
 dispatch it once more on the other runner. A second failure hands it to the
 owner:
 
-    docket --branch <branch> release T14 "failed on <runner>: <why>"
+    docket --branch <branch> unclaim T14 "failed on <runner>: <why>"
     docket ask T14 "two jobs failed: <why, in one line>"
 
 Three failed jobs in a row, of any items, mean something is wrong with a

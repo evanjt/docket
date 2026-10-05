@@ -19,7 +19,7 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::App;
 use crate::doc::{Doc, Target};
-use crate::mouse::{Map, Zone};
+use crate::mouse::Zone;
 use crate::page::Page;
 use crate::source::Source;
 use crate::style;
@@ -84,7 +84,7 @@ pub fn spots<S: Source>(app: &App<S>) -> Vec<(usize, Target)> {
 pub fn draw<S: Source>(app: &mut App<S>, f: &mut Frame) {
     let area = f.area();
     app.size = (area.width, area.height);
-    app.map = Map::default();
+    let before = std::mem::take(&mut app.map);
     let foot_lines = footer(app, usize::from(area.width));
     let [top, body, foot] = Layout::vertical([
         Constraint::Length(1),
@@ -99,6 +99,7 @@ pub fn draw<S: Source>(app: &mut App<S>, f: &mut Frame) {
         _ => draw_doc(app, f, body),
     }
     f.render_widget(Paragraph::new(foot_lines).style(style::bar()), foot);
+    app.map.layout = before.layout + u64::from(!before.same_layout(&app.map));
 }
 
 /// The page's document, scrolled to keep the selected spot in view, its hot spots kept for the mouse.

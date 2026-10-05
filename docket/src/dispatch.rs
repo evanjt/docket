@@ -13,14 +13,14 @@ use docket_core::machine::Machine;
 
 use crate::job::Change;
 
-/// The job role an item's kind gives when the lead names none: a plan's audit, an investigation's
-/// or a decided question's planning, anything else a build. A new plan with nothing opened is planned,
-/// which the lead says with `--role plan`, as `docket next --role plan` listed it.
+/// The job role an item's kind gives when the lead names none: an investigation's or a decided
+/// question's planning, anything else a build. A plan that has opened something is audited and one
+/// that has opened nothing is planned, as the queue gives it.
 #[must_use]
-pub fn role_of(kind: &str) -> &'static str {
+pub fn role_of(kind: &str, opened_any: bool) -> &'static str {
     match kind {
-        "audit" => "audit",
-        "research" | "decision" => "plan",
+        "audit" if opened_any => "audit",
+        "audit" | "research" | "decision" => "plan",
         _ => "build",
     }
 }
@@ -41,22 +41,47 @@ pub fn nonce() -> u32 {
     (nanos ^ std::process::id().rotate_left(16)) % 100_000
 }
 
-/// The machine to start a job on: one with the runner and a free slot, the most free first, this
-/// machine first among equals, then by name. `running` counts the jobs running on each machine.
+/// The machine to start a job on: one with the runner, not under a usage limit of it at `now`, and
+/// a free slot, the most free first, this machine first among equals, then by name. `running`
+/// counts the jobs running on each machine.
 #[must_use]
 pub fn choose<'a>(
     machines: &'a [Machine],
     running: &BTreeMap<String, usize>,
     runner: &str,
     here: &str,
+    now: &str,
 ) -> Option<&'a Machine> {
     machines
         .iter()
-        .filter(|m| m.runners.iter().any(|r| r == runner))
+        .filter(|m| m.runners.iter().any(|r| r == runner) && m.limited(runner, now).is_none())
         .map(|m| (m, free(m, running)))
         .filter(|(_, free)| *free > 0)
         .min_by_key(|(m, free)| (std::cmp::Reverse(*free), m.name != here, m.name.clone()))
         .map(|(m, _)| m)
+}
+
+/// The runners under a usage limit at `now` on every machine that has them, each with the earliest
+/// reset among those machines: the runners no dispatch can use until then.
+#[must_use]
+pub fn limited_runners(machines: &[Machine], now: &str) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for runner in docket_core::machine::RUNNERS {
+        let having: Vec<&Machine> = machines
+            .iter()
+            .filter(|m| m.runners.iter().any(|r| r == runner))
+            .collect();
+        let resets: Vec<&str> = having
+            .iter()
+            .filter_map(|m| m.limited(runner, now))
+            .collect();
+        if !having.is_empty() && resets.len() == having.len() {
+            if let Some(first) = resets.into_iter().min() {
+                out.insert(runner.to_string(), first.to_string());
+            }
+        }
+    }
+    out
 }
 
 /// The slots a machine has left.
@@ -79,13 +104,17 @@ pub fn quote(word: &str) -> String {
     format!("'{}'", word.replace('\'', r"'\''"))
 }
 
-/// The command line run on another machine: `docket` with the arguments, found where a user install
-/// puts it when the login's path does not have it.
+/// The directories put before `PATH` on a machine whose record names none.
+const DEFAULT_PATH: &str = "$HOME/.local/bin:$HOME/.cargo/bin";
+
+/// The command line run on another machine: `docket` with the arguments, found in the machine's
+/// path prefix, a user install's directories by default, when the login's path does not have it.
 #[must_use]
-pub fn remote_line(args: &[String]) -> String {
+pub fn remote_line(args: &[String], path: Option<&str>) -> String {
     let words: Vec<String> = args.iter().map(|a| quote(a)).collect();
     format!(
-        "PATH=\"$HOME/.local/bin:$HOME/.cargo/bin:$PATH\" docket {}",
+        "PATH=\"{}:$PATH\" docket {}",
+        path.unwrap_or(DEFAULT_PATH),
         words.join(" ")
     )
 }
@@ -94,7 +123,8 @@ pub fn remote_line(args: &[String]) -> String {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Via {
     Here,
-    Ssh(String),
+    /// The address and the machine's path prefix.
+    Ssh(String, Option<String>),
 }
 
 impl Via {
@@ -103,7 +133,7 @@ impl Via {
         if m.name == here {
             Via::Here
         } else {
-            Via::Ssh(m.ssh.clone())
+            Via::Ssh(m.ssh.clone(), m.path.clone())
         }
     }
 
@@ -113,14 +143,14 @@ impl Via {
     pub fn git_url(&self, path: &str) -> String {
         match self {
             Via::Here => path.to_string(),
-            Via::Ssh(addr) if addr.starts_with("ssh://") => {
+            Via::Ssh(addr, _) if addr.starts_with("ssh://") => {
                 format!(
                     "{}/{}",
                     addr.trim_end_matches('/'),
                     path.trim_start_matches('/')
                 )
             }
-            Via::Ssh(addr) => format!("{addr}:{path}"),
+            Via::Ssh(addr, _) => format!("{addr}:{path}"),
         }
     }
 
@@ -136,9 +166,14 @@ impl Via {
                 c.args(args);
                 c
             }
-            Via::Ssh(addr) => {
+            Via::Ssh(addr, path) => {
                 let mut c = Command::new(ssh_program());
-                c.args(["-o", "BatchMode=yes", addr.as_str(), &remote_line(args)]);
+                c.args([
+                    "-o",
+                    "BatchMode=yes",
+                    addr.as_str(),
+                    &remote_line(args, path.as_deref()),
+                ]);
                 c
             }
         };
@@ -148,7 +183,7 @@ impl Via {
     fn label(&self) -> String {
         match self {
             Via::Here => "this machine".into(),
-            Via::Ssh(addr) => addr.clone(),
+            Via::Ssh(addr, _) => addr.clone(),
         }
     }
 }
@@ -259,8 +294,7 @@ fn commit_submodules(
     Ok(pins)
 }
 
-/// A submodule's change as one commit on `base` in its repository at `dir`, made through an index of
-/// its own so the checkout there is left as it is. Never signed and never pushed.
+/// A submodule's change as one commit on `base` in XX
 fn commit_inside(
     dir: &Path,
     base: &str,
@@ -290,18 +324,14 @@ fn commit_inside(
         }
         pin(dir, at, &pins)?;
         let tree = index_git(dir, at, &["write-tree"])?;
-        git(
-            dir,
-            &[
-                "commit-tree",
-                "--no-gpg-sign",
-                &tree,
-                "-p",
-                base,
-                "-m",
-                message,
-            ],
-        )
+        let signs = git(dir, &["config", "--type=bool", "--get", "commit.gpgsign"])
+            .is_ok_and(|v| v == "true");
+        let mut args = vec!["commit-tree"];
+        if signs {
+            args.push("-S");
+        }
+        args.extend([tree.as_str(), "-p", base, "-m", message]);
+        git(dir, &args)
     })();
     let _ = std::fs::remove_file(&index);
     let sha = made?;

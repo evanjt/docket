@@ -13,8 +13,9 @@ use ratatui::DefaultTerminal;
 
 use docket_client::{Api, Config};
 
-use crate::app::App;
+use crate::app::{App, Reloaded};
 use crate::doc::Target;
+use crate::page::Page;
 use crate::source::{Http, Source};
 use crate::starter::{self, Start};
 use crate::view;
@@ -22,7 +23,7 @@ use crate::view;
 /// What the change stream tells the screen.
 enum Notice {
     Live,
-    Changed,
+    Changed(docket_client::Event),
     Down,
 }
 
@@ -31,6 +32,18 @@ const SETTLE: Duration = Duration::from_secs(1);
 
 /// How often the screen looks for a project that has no lead.
 const LEAD_LOOK: Duration = Duration::from_secs(5);
+
+/// An open page to read again off the UI thread, and how many inputs the screen had taken.
+struct Job {
+    page: Page,
+    inputs: u64,
+}
+
+/// A page read again for the `Job` that carried `inputs`.
+struct Read {
+    reloaded: Reloaded,
+    inputs: u64,
+}
 
 /// Starts a lead on this machine for a project that has none.
 pub type Launcher = dyn Fn(&Start) -> Result<String, String>;
@@ -61,11 +74,11 @@ fn release_mouse_on_panic() {
 fn follow(config: &Config, tx: &Sender<Notice>) {
     loop {
         if let Ok(stream) = Api::new(config).and_then(|api| api.changes()) {
-            for name in stream {
-                let notice = if name == "hello" {
+            for event in stream {
+                let notice = if event.name == "hello" {
                     Notice::Live
                 } else {
-                    Notice::Changed
+                    Notice::Changed(event)
                 };
                 if tx.send(notice).is_err() {
                     return;
@@ -80,18 +93,31 @@ fn follow(config: &Config, tx: &Sender<Notice>) {
 }
 
 /// Every notice waiting: whether the stream is up, and whether anything moved since the last read.
-fn drain(rx: &Receiver<Notice>, app: &mut App<Http>, mut moved: bool) -> bool {
+fn drain<S: Source>(rx: &Receiver<Notice>, app: &mut App<S>, mut moved: bool) -> bool {
     while let Ok(n) = rx.try_recv() {
         match n {
             Notice::Live => {
-                moved |= !app.live;
+                moved |= !app.live && app.seen_live;
                 app.live = true;
+                app.seen_live = true;
             }
-            Notice::Changed => moved = true,
+            Notice::Changed(event) => moved |= event.concerns(app.page.slug()),
             Notice::Down => app.live = false,
         }
     }
     moved
+}
+
+/// Reads each page handed over, until the screen drops its end. The screen goes on taking input
+/// meanwhile.
+fn read_pages(api: Api, jobs: &Receiver<Job>, done: &Sender<Read>) {
+    let mut scratch = App::unread(Http(api));
+    while let Ok(Job { page, inputs }) = jobs.recv() {
+        let reloaded = scratch.reload(page);
+        if done.send(Read { reloaded, inputs }).is_err() {
+            return;
+        }
+    }
 }
 
 /// The text after `$VISUAL` or `$EDITOR` (else `vi`) edited it in a file of its own, the screen
@@ -149,6 +175,7 @@ fn step<S: Source>(
     wait: Duration,
 ) -> std::io::Result<bool> {
     let (mut redraw, mut hover, mut wait) = (false, None, wait);
+    let seen = app.map.layout;
     while events.poll(wait)? {
         wait = Duration::ZERO;
         match events.read()? {
@@ -158,9 +185,10 @@ fn step<S: Source>(
                 redraw = true;
                 match other {
                     Event::Key(k) => app.key(k),
-                    Event::Mouse(m) => app.mouse(m),
+                    Event::Mouse(m) => app.mouse_stamped(m, seen),
                     _ => {}
                 }
+                app.map.invalidate();
             }
         }
     }
@@ -193,8 +221,11 @@ fn look_for_leads(app: &mut App<Http>, launch: &Launcher) -> bool {
 fn run_loop(
     app: &mut App<Http>,
     rx: &Receiver<Notice>,
+    reads: (&Sender<Job>, &Receiver<Read>),
     launch: Option<&Launcher>,
 ) -> std::io::Result<()> {
+    let (jobs, done) = reads;
+    let mut reading = false;
     let mut terminal = init();
     let (mut moved, mut read) = (false, Instant::now());
     let mut looked = Instant::now()
@@ -214,10 +245,27 @@ fn run_loop(
         let live = app.live;
         moved = drain(rx, app, moved);
         redraw |= live != app.live;
-        if moved && read.elapsed() >= SETTLE {
-            app.changed();
+        while let Ok(Read { reloaded, inputs }) = done.try_recv() {
+            reading = false;
+            if inputs == app.inputs {
+                app.adopt(reloaded);
+                redraw = true;
+            } else {
+                moved = true;
+            }
+        }
+        if moved && !reading && read.elapsed() >= SETTLE {
+            let job = Job {
+                page: app.page.clone(),
+                inputs: app.inputs,
+            };
+            if jobs.send(job).is_ok() {
+                reading = true;
+            } else {
+                app.changed();
+                redraw = true;
+            }
             (moved, read) = (false, Instant::now());
-            redraw = true;
         }
         if let Some(launch) = launch
             && looked.elapsed() >= LEAD_LOOK
@@ -245,14 +293,26 @@ pub fn main(
             return ExitCode::from(2);
         }
     };
+    let reader_config = config.clone();
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || follow(&config, &tx));
+    let (jobs, job_rx) = mpsc::channel();
+    let (done_tx, done) = mpsc::channel();
+    match Api::new(&reader_config) {
+        Ok(reader) => {
+            std::thread::spawn(move || read_pages(reader, &job_rx, &done_tx));
+        }
+        Err(e) => {
+            eprintln!("{name}: {e}");
+            return ExitCode::from(2);
+        }
+    }
     let mut app = App::new(Http(api));
     if let Some(slug) = project {
         app.open(Target::Project(slug));
     }
     release_mouse_on_panic();
-    let result = run_loop(&mut app, &rx, launch);
+    let result = run_loop(&mut app, &rx, (&jobs, &done), launch);
     restore();
     match result {
         Ok(()) => ExitCode::SUCCESS,

@@ -49,7 +49,8 @@ impl Role {
 /// What `docket next` narrows the queue by.
 #[derive(Clone, Debug, Default)]
 pub struct Filter<'a> {
-    pub role: Option<Role>,
+    /// The roles to take, in the order they rank within a release; empty takes any, unranked.
+    pub roles: &'a [Role],
     pub priority: Option<usize>,
     pub key: Option<&'a str>,
     pub under: Option<&'a HashSet<i64>>,
@@ -94,7 +95,7 @@ fn takeable(c: &Candidate, f: &Filter, ties: &[Tie], open: &HashSet<i64>) -> boo
         && !c.waiting
         && !c.conflict
         && !c.kind.is_read_only()
-        && f.role.is_none_or(|r| role_of(c, ties, open) == Some(r))
+        && (f.roles.is_empty() || role_of(c, ties, open).is_some_and(|r| f.roles.contains(&r)))
         && f.under.is_none_or(|u| u.contains(&c.rid))
         && f.complexity.is_none_or(|x| c.complexity == Some(x))
         && f.key.is_none_or(|k| c.key == k)
@@ -102,8 +103,8 @@ fn takeable(c: &Candidate, f: &Filter, ties: &[Tie], open: &HashSet<i64>) -> boo
             .is_none_or(|t| c.theme.is_some_and(|mine| mine.eq_ignore_ascii_case(t)))
 }
 
-/// The queue an agent takes from, as `(rid, tier)`: the earliest release first, then the most urgent,
-/// then the oldest.
+/// The queue an agent takes from, as `(rid, tier)`: the earliest release first, then the role's place in
+/// the filter's roles, then the most urgent, then the oldest.
 #[must_use]
 pub fn next(items: &[Candidate], ties: &[Tie], filter: &Filter, limit: usize) -> Vec<(i64, usize)> {
     let open: HashSet<i64> = items.iter().filter(|c| c.open).map(|c| c.rid).collect();
@@ -112,9 +113,15 @@ pub fn next(items: &[Candidate], ties: &[Tie], filter: &Filter, limit: usize) ->
         .filter(|c| takeable(c, filter, ties, &open))
         .filter(|c| filter.priority.is_none_or(|p| c.tier <= p))
         .collect();
+    let role_rank = |c: &Candidate| {
+        role_of(c, ties, &open)
+            .and_then(|r| filter.roles.iter().position(|x| *x == r))
+            .unwrap_or(0)
+    };
     rows.sort_by_key(|c| {
         (
             release_rank(filter.releases, c.theme),
+            role_rank(c),
             c.tier,
             c.opened_at,
             c.rid,

@@ -12,7 +12,8 @@ use docket_core::api::{
 use docket_core::flow::DERIVED;
 
 use crate::app::App;
-use crate::doc::{Listing, Target};
+use crate::doc::{Listing, Route, Target};
+use crate::filter::Filter;
 use crate::page::{Browser, Page};
 use crate::palette::{self, Command};
 use crate::source::Source;
@@ -23,6 +24,8 @@ pub enum Ask {
     Answer(String),
     Reply(String),
     Fact(String),
+    /// A filter line for the queue.
+    Filter,
     Link(Vec<String>),
     Palette(Vec<String>),
     /// One key picks the tier.
@@ -173,6 +176,7 @@ impl<S: Source> App<S> {
             KeyCode::Char('!') => self.ask_many(Ask::Priority),
             KeyCode::Char('c') => self.ask_many(Ask::Rate),
             KeyCode::Char('L') => self.ask_many(Ask::Link),
+            KeyCode::Char('F') if self.page.slug().is_some() => self.ask_filter(),
             KeyCode::Char(':') if self.page.slug().is_some() => {
                 let selection = self.selection();
                 self.start_prompt("", Ask::Palette(selection), String::new());
@@ -180,6 +184,35 @@ impl<S: Source> App<S> {
             _ => return false,
         }
         true
+    }
+
+    /// The queue's filter line, starting from the one the open queue already has.
+    fn ask_filter(&mut self) {
+        let text = match &self.page {
+            Page::Browser(b) => match &b.listing {
+                Listing::Next(f) => f.label(),
+                _ => String::new(),
+            },
+            _ => String::new(),
+        };
+        self.start_prompt(
+            "filter (release priority key complexity under): ",
+            Ask::Filter,
+            text,
+        );
+    }
+
+    /// Opens the queue under the filter a line names, or says why the line is refused.
+    fn filter(&mut self, line: &str) {
+        let listing = match Filter::parse(line) {
+            Ok(f) if f == Filter::default() => Listing::Route(Route::Next),
+            Ok(f) => Listing::Next(Box::new(f)),
+            Err(why) => {
+                self.flash = Some(why);
+                return;
+            }
+        };
+        self.open(Target::List(listing));
     }
 
     pub fn start_prompt(&mut self, label: &str, ask: Ask, text: String) {
@@ -357,6 +390,7 @@ impl<S: Source> App<S> {
                 ("reply", body(&req), format!("replied to {id}"))
             }
             Ask::Fact(key) => return self.set_fact(common, &key, &text),
+            Ask::Filter => return self.filter(&text),
             Ask::Link(ids) => return self.link(common, &ids, &text),
             Ask::Palette(selection) => return self.palette(&text, &selection),
             Ask::Priority(_) | Ask::Rate(_) => return,

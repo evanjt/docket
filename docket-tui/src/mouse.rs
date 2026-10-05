@@ -34,9 +34,23 @@ pub struct Map {
     pub zones: Vec<(Rect, Zone)>,
     pub panes: Vec<(Rect, Pane)>,
     pub list_rows: usize,
+    /// Which layout the zones belong to: bumped by each draw that places them differently, and by
+    /// each input that may have moved them since.
+    pub layout: u64,
 }
 
 impl Map {
+    /// Whether another map places every zone and pane where this one does.
+    #[must_use]
+    pub fn same_layout(&self, other: &Map) -> bool {
+        self.zones == other.zones && self.panes == other.panes && self.list_rows == other.list_rows
+    }
+
+    /// Marks the zones as possibly out of date until the next draw.
+    pub fn invalidate(&mut self) {
+        self.layout += 1;
+    }
+
     #[must_use]
     pub fn zone(&self, x: u16, y: u16) -> Option<&Zone> {
         let at = Position::new(x, y);
@@ -97,15 +111,26 @@ pub fn scrolled(top: usize, sel: usize, n: usize, rows: usize, by: isize) -> (us
 }
 
 impl<S: Source> App<S> {
-    /// One mouse event. While a line is typed only the wheel acts, so nothing typed is lost.
+    /// One mouse event read against the layout now on screen.
     pub fn mouse(&mut self, m: MouseEvent) {
+        self.mouse_stamped(m, self.map.layout);
+    }
+
+    /// One mouse event read when the screen was in layout `layout`. A click made against another
+    /// layout is dropped, since it would land on whatever the zones now are. While a line is typed
+    /// only the wheel acts, so nothing typed is lost.
+    pub fn mouse_stamped(&mut self, m: MouseEvent, layout: u64) {
         let (x, y) = (m.column, m.row);
+        if m.kind != MouseEventKind::Moved {
+            self.inputs += 1;
+        }
         let typing = matches!(&self.page, Page::Browser(b) if b.typing.is_some());
         let busy = typing || self.prompt.is_some();
         match m.kind {
             MouseEventKind::ScrollDown => self.wheel(x, y, WHEEL),
             MouseEventKind::ScrollUp => self.wheel(x, y, -WHEEL),
             _ if busy => {}
+            MouseEventKind::Down(MouseButton::Left) if layout != self.map.layout => {}
             MouseEventKind::Down(MouseButton::Left) => self.click(x, y),
             MouseEventKind::Down(MouseButton::Right) => {
                 self.flash = None;

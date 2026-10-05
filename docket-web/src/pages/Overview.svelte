@@ -53,7 +53,7 @@
   const releases = $derived(ctx.board && ctx.releases.length ? releaseRows(ctx.board.nodes.values(), ctx.releases) : []);
   const OPEN_WORDS = ['ready', 'building', 'blocked', 'parked'];
   const host = (h: string | null | undefined) => (h ?? '').split('.')[0];
-  const use = $derived(machines.data && wip.data ? machineUse(machines.data, wip.data, session.me?.host ?? '') : []);
+  const use = $derived(machines.data && wip.data ? machineUse(machines.data, wip.data, session.me?.host ?? '', now) : []);
   const COUNTED = ['claimed', 'released'];
 </script>
 
@@ -103,6 +103,9 @@
                 </span>
                 <span class="count">{m.used}/{m.slots}</span>
                 <span class="runners">{m.runners.join(', ')}</span>
+                {#each m.limited as l (l.runner)}
+                  <span class="limit" title={l.until}>{l.runner} unavailable until {stamp(l.until)}</span>
+                {/each}
               </li>
             {/each}
           </ul>
@@ -443,6 +446,11 @@
 
   .runners {
     color: var(--muted);
+  }
+
+  .limit {
+    color: var(--muted);
+    font-style: italic;
   }
 
   .since {

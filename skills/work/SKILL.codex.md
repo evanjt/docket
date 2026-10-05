@@ -24,7 +24,7 @@ Run from the project root. Note the branch the session started on (`git branch
 
 ## The loop
 
-1. `docket next 10 --role work`: tickets nobody holds, most urgent then oldest.
+1. `docket next 10 --role work`: tickets nobody holds, by release, then priority, then oldest.
 2. Claim on a branch nobody can guess:
 
        n=$RANDOM

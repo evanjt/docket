@@ -3,11 +3,14 @@
 //! Expected behaviour: exactly one claim wins, and every filed item gets its own id.
 
 use std::collections::HashSet;
+use std::time::Duration;
 
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header::AUTHORIZATION};
 use serde_json::{Value, json};
 use tower::ServiceExt;
+
+use sea_orm::{ConnectOptions, ConnectionTrait, Database, DbBackend, Statement};
 
 use docket_migration::scratch::Scratch;
 
@@ -99,4 +102,73 @@ async fn test_concurrent_new_items_get_distinct_ids() {
         })
         .collect();
     assert_eq!(ids.len(), RACERS);
+}
+
+async fn waiting_for_an_advisory_lock(holder: &sea_orm::DatabaseConnection) -> i64 {
+    holder
+        .query_one_raw(Statement::from_string(
+            DbBackend::Postgres,
+            "SELECT count(*) AS n FROM pg_locks WHERE locktype = 'advisory' AND NOT granted",
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get("", "n")
+        .unwrap()
+}
+
+/// Scenario: another process holds the write lock while more writers queue than the pool has connections.
+/// Expected behaviour: the queued writers wait without a connection, so a read still answers.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_queued_writers_leave_connections_for_reads() {
+    let (app, s) = served().await;
+    let mut options = ConnectOptions::new(s.url());
+    options.max_connections(1).sqlx_logging(false);
+    let holder = Database::connect(options).await.unwrap();
+    holder
+        .execute_unprepared(&format!(
+            "SELECT pg_advisory_lock({})",
+            crate::store::WRITES
+        ))
+        .await
+        .unwrap();
+
+    let writers: Vec<_> = (0..10)
+        .map(|_| {
+            tokio::spawn(post(
+                app.clone(),
+                "priority",
+                json!({"project": "o/p", "ids": ["T1"], "tier": "high"}),
+            ))
+        })
+        .collect();
+    for _ in 0..100 {
+        if waiting_for_an_advisory_lock(&holder).await > 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let read = Request::get("/check?project=o/p")
+        .header(AUTHORIZATION, "Bearer ownerkey")
+        .body(Body::empty())
+        .unwrap();
+    let answered = tokio::time::timeout(Duration::from_secs(2), app.clone().oneshot(read)).await;
+
+    holder
+        .execute_unprepared(&format!(
+            "SELECT pg_advisory_unlock({})",
+            crate::store::WRITES
+        ))
+        .await
+        .unwrap();
+    for writer in writers {
+        writer.await.unwrap();
+    }
+    let status = answered
+        .expect("a read answers while writers queue on the lock")
+        .unwrap()
+        .status();
+    assert_eq!(status, StatusCode::OK);
 }

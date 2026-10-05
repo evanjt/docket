@@ -101,6 +101,15 @@ fn test_no_template_carries_an_address() {
 }
 
 #[test]
+fn test_the_marker_names_the_tool_and_an_older_marker_is_still_replaced() {
+    assert!(!BEGIN.contains("evanjt"), "{BEGIN}");
+    let older = "# Rules\n\n<!-- docket:begin, from owner/tool skills/docket-block.md; docket instructions install rewrites it -->\nold\n<!-- docket:end -->\n";
+    let (a, text) = rewritten(older);
+    assert_eq!(a, Action::Overwrite);
+    assert_eq!(text, format!("# Rules\n\n{}", block()));
+}
+
+#[test]
 fn test_the_block_is_under_one_and_a_half_kilobytes() {
     let b = block();
     assert!(b.len() < 1536, "{} bytes", b.len());
@@ -310,5 +319,39 @@ fn test_no_installed_text_names_a_retired_skill() {
         for old in RETIRED {
             assert!(!text.contains(old), "{name} names {old}");
         }
+    }
+}
+
+#[test]
+fn test_no_text_orders_the_queue_by_priority_alone() {
+    for (name, text) in texts() {
+        let flat = text
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase();
+        for phrase in [
+            "most urgent first",
+            "most urgent then",
+            "only order the queue reads",
+        ] {
+            assert!(!flat.contains(phrase), "{name} says \"{phrase}\"");
+        }
+    }
+    let plan = SKILLS.iter().find(|s| s.name == "plan").unwrap();
+    for text in [plan.claude, plan.codex] {
+        let flat = text
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase();
+        assert!(
+            flat.contains("release, then priority, then age"),
+            "plan does not state the queue order"
+        );
+        assert!(
+            flat.contains("a theme the releases fact does not list ranks with the current release"),
+            "plan does not say an unlisted theme is current"
+        );
     }
 }

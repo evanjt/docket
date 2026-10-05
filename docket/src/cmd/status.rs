@@ -30,15 +30,6 @@ fn count(total: &[(String, u64)], word: &str) -> u64 {
     total.iter().find(|(w, _)| w == word).map_or(0, |(_, n)| *n)
 }
 
-fn as_dict(pairs: &[(String, u64)]) -> Py {
-    Py::Dict(
-        pairs
-            .iter()
-            .map(|(w, n)| (w.clone(), Py::Int(i64::try_from(*n).unwrap_or(0))))
-            .collect(),
-    )
-}
-
 /// Everything the status text is made from, read once.
 pub struct Read {
     pub total: Vec<(String, u64)>,
@@ -53,27 +44,6 @@ pub struct Read {
 pub fn status(ctx: &mut Ctx) -> Result<i32> {
     let flow = ctx.read("/flow", &[])?;
     let total = counts(&flow["by_word"]);
-    if ctx.json {
-        let by_key = flow["by_key"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .map(|p| {
-                (
-                    p[0].as_str().unwrap_or_default().to_string(),
-                    as_dict(&counts(&p[1])),
-                )
-            })
-            .collect();
-        ctx.emit(&Py::Dict(vec![
-            ("project".into(), Py::from_value(&flow["project"])),
-            ("host".into(), Py::from_value(&flow["host"])),
-            ("total".into(), Py::from_value(&flow["total"])),
-            ("by_word".into(), as_dict(&total)),
-            ("by_key".into(), Py::Dict(by_key)),
-        ]));
-        return Ok(0);
-    }
     let slug = ctx.project()?;
     let read = Read {
         total,
@@ -82,10 +52,54 @@ pub fn status(ctx: &mut Ctx) -> Result<i32> {
         next: ctx.read("/next", &[("n", Some("8".into()))])?,
         now: now(),
     };
+    if ctx.json {
+        let mut out = json_status(&read);
+        for k in ["project", "host", "total"] {
+            out[k] = flow[k].clone();
+        }
+        let by_key: serde_json::Map<String, Value> = flow["by_key"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|p| {
+                (
+                    p[0].as_str().unwrap_or_default().to_string(),
+                    Value::Object(
+                        counts(&p[1])
+                            .into_iter()
+                            .map(|(w, n)| (w, n.into()))
+                            .collect(),
+                    ),
+                )
+            })
+            .collect();
+        out["by_key"] = Value::Object(by_key);
+        ctx.emit(&Py::from_value(&out));
+        return Ok(0);
+    }
     for line in render(&slug, &read) {
         println!("{}", cut(&line, WIDTH - 1));
     }
     Ok(0)
+}
+
+/// The sections the status text is made from, as JSON: the word counts, the claims, yours, due
+/// audits, plans, problem counts by kind, pace and next.
+#[must_use]
+pub fn json_status(r: &Read) -> Value {
+    let s = &r.summary;
+    serde_json::json!({
+        "by_word": Value::Object(r.total.iter().map(|(w, n)| (w.clone(), (*n).into())).collect()),
+        "claims": s["claims"],
+        "yours": r.yours,
+        "due": s["due"],
+        "plans": s["plans"],
+        "problems": Value::Object(
+            problem_counts(&s["problems"]).into_iter().map(|(k, n)| (k, n.into())).collect()
+        ),
+        "pace": s["pace"],
+        "next": r.next,
+    })
 }
 
 fn now() -> i64 {
@@ -128,10 +142,10 @@ pub fn render(slug: &str, r: &Read) -> Vec<String> {
     ));
     out.extend(titled_lines("AUDITS DUE", "", "no plan is due", &s["due"]));
     out.extend(plan_lines(&s["plans"]));
-    let problems = problem_lines(&s["problems"]);
+    let problems = problem_summary(&s["problems"]);
     if !problems.is_empty() {
         out.push("\nCheck:".into());
-        out.extend(problems.into_iter().map(|p| format!("  {p}")));
+        out.push(format!("  {problems}: docket check"));
     }
     out.extend(next_lines(&r.next));
     out.push("\nTo get going, a session per role:".into());
@@ -302,6 +316,43 @@ pub fn problem_lines(problems: &Value) -> Vec<String> {
         .flatten()
         .map(problem_line)
         .collect()
+}
+
+/// Problems per kind, in the order each kind first appears.
+fn problem_counts(problems: &Value) -> Vec<(String, u64)> {
+    let mut counts: Vec<(String, u64)> = Vec::new();
+    for p in problems.as_array().into_iter().flatten() {
+        let kind = p["kind"].as_str().unwrap_or("other");
+        match counts.iter_mut().find(|(k, _)| k == kind) {
+            Some((_, n)) => *n += 1,
+            None => counts.push((kind.to_string(), 1)),
+        }
+    }
+    counts
+}
+
+/// `95 release inversions, 5 cycles`: one count per kind of problem.
+fn problem_summary(problems: &Value) -> String {
+    problem_counts(problems)
+        .into_iter()
+        .map(|(kind, n)| {
+            let (one, many) = match kind.as_str() {
+                "conflict" => ("sync conflict", "sync conflicts"),
+                "undefined_key" => ("undefined key", "undefined keys"),
+                "integrity" => ("integrity failure", "integrity failures"),
+                "foreign_keys" => ("foreign key violation", "foreign key violations"),
+                "cycle" => ("cycle", "cycles"),
+                "held_later" => ("release inversion", "release inversions"),
+                "held_gate" => ("hold on closed work", "holds on closed work"),
+                "open_audit" => ("open audit", "open audits"),
+                "stale_wait" => ("stale wait", "stale waits"),
+                "no_body" => ("item with no body", "items with no body"),
+                _ => ("other problem", "other problems"),
+            };
+            format!("{n} {}", if n == 1 { one } else { many })
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn problem_line(p: &Value) -> String {

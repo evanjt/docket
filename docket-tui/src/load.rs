@@ -8,6 +8,7 @@ use docket_core::word::Kind;
 
 use crate::app::App;
 use crate::doc::{Listing, Route};
+use crate::filter::Filter;
 use crate::page::{Detail, Entry, HomeRow, Page, PlanRow, ProjectData};
 use crate::source::Source;
 use docket_core::board::Board;
@@ -77,7 +78,7 @@ impl<S: Source> App<S> {
         };
         let read = || -> crate::source::Result<ProjectData> {
             let status = self.source.status(&slug)?;
-            let next = self.source.next(&slug, NEXT_ROWS, None)?;
+            let next = self.source.next(&slug, NEXT_ROWS, &Filter::default())?;
             let wip = self.source.list("wip", &slug)?;
             let recent = self.source.recent(&slug)?;
             Ok(project_data(&board, status, next, wip, &recent, now()))
@@ -117,7 +118,10 @@ impl<S: Source> App<S> {
         match listing {
             Listing::Search(q) if q.trim().is_empty() => Ok(Vec::new()),
             Listing::Search(q) => self.source.search(slug, q).map(rows),
-            Listing::Route(Route::Next) => self.source.next(slug, 100, None).map(rows),
+            Listing::Route(Route::Next) => {
+                self.source.next(slug, 100, &Filter::default()).map(rows)
+            }
+            Listing::Next(f) => self.source.next(slug, 100, f).map(rows),
             Listing::Route(Route::Derived) => self
                 .source
                 .derived(slug)
@@ -263,7 +267,7 @@ impl<S: Source> App<S> {
         };
         let slug = p.slug.clone();
         let shown = self.source.show(&slug, &id);
-        let next = self.source.next(&slug, 10, Some(&id));
+        let next = self.source.next(&slug, 10, &Filter::under(&id));
         if let Err(e) = &shown {
             self.flash = Some(e.clone());
         }

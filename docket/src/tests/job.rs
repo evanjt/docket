@@ -120,7 +120,8 @@ fn test_claude_final_is_the_longest_result_and_tokens_sum() {
         read_events("claude", &events),
         Read {
             last: Some("NOTE n\nDONE abcdef1".into()),
-            tokens: Some(7)
+            tokens: Some(7),
+            error: None,
         }
     );
     assert_eq!(read_events("claude", ""), Read::default());
@@ -137,6 +138,22 @@ fn test_codex_tokens_sum_over_completed_turns() {
     let read = read_events("codex", &events);
     assert_eq!(read.tokens, Some(7));
     assert_eq!(read.last, None);
+}
+
+#[test]
+fn test_codex_error_events_are_kept_for_a_limit_to_be_read() {
+    let events = [
+        r#"{"type":"error","message":"weekly usage limit reached, resets 2026-10-07 18:29"}"#,
+        r#"{"type":"turn.failed","error":{"message":"weekly usage limit reached, resets 2026-10-07 18:29"}}"#,
+    ]
+    .join("\n");
+    let read = read_events("codex", &events);
+    assert_eq!(
+        read.error
+            .as_deref()
+            .and_then(docket_core::machine::reset_of),
+        Some("2026-10-07T18:29:00Z".into())
+    );
 }
 
 #[test]

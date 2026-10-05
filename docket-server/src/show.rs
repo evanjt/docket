@@ -80,9 +80,11 @@ pub async fn show(
         }
     }
 
+    let body = row.body.clone();
     let mut out = public(&db, kind, row, open_members, None)
         .await
         .map_err(|e| internal(&e))?;
+    out.insert("body".into(), json!(body));
     out.insert("related".into(), json!(related));
     out.insert("opened".into(), json!(opened));
     out.insert("cites".into(), json!(cites));

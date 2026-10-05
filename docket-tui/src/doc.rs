@@ -2,6 +2,7 @@
 
 use ratatui::style::{Modifier, Style};
 
+use crate::filter::Filter;
 use crate::style;
 use ratatui::text::{Line, Span};
 
@@ -59,6 +60,8 @@ pub enum Listing {
     /// What `/search` finds for the words.
     Search(String),
     Route(Route),
+    /// The queue, narrowed by a filter line.
+    Next(Box<Filter>),
     /// An item and everything tied to it.
     Ties(String),
     /// The items of one group.
@@ -72,6 +75,10 @@ impl Listing {
             Listing::Word(w) => w.clone(),
             Listing::Search(q) => format!("search {q}"),
             Listing::Route(r) => r.name().to_string(),
+            Listing::Next(f) => match f.label() {
+                l if l.is_empty() => Route::Next.name().to_string(),
+                l => format!("{} {l}", Route::Next.name()),
+            },
             Listing::Ties(id) => id.clone(),
             Listing::Group(name) => format!("group {name}"),
         }

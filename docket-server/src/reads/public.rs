@@ -241,7 +241,8 @@ pub fn one_of(name: &str, value: Option<&str>, choices: &[&str]) -> Result<(), F
     }
 }
 
-/// The stored columns `--json` carries under their own names.
+/// The stored columns a list row carries under their own names. The body is left out: only `/show`
+/// returns it.
 #[derive(serde::Serialize)]
 struct StoredFields {
     project: String,
@@ -270,7 +271,6 @@ struct StoredFields {
     theme: Option<String>,
     rank: Option<i64>,
     tags: Value,
-    body: String,
     conflict: i64,
     opened_at: String,
     updated_at: String,
@@ -305,7 +305,6 @@ impl From<item::Model> for StoredFields {
             theme: r.theme,
             rank: r.rank,
             tags: r.tags,
-            body: r.body,
             conflict: r.conflict,
             opened_at: r.opened_at,
             updated_at: r.updated_at,

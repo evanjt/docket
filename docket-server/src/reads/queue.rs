@@ -131,7 +131,8 @@ async fn rids_under(
     Ok(members_of(&board.ties, &standing, target.rid))
 }
 
-/// `docket next`: the queue an agent takes from, most urgent first, narrowed to one role when asked.
+/// `docket next`: the queue an agent takes from, most urgent first, narrowed to the roles asked, comma-separated,
+/// which rank in the order given within a release.
 ///
 /// # Errors
 /// 400 for a choice outside its options, 404 for an unknown project or `under` id.
@@ -144,7 +145,11 @@ pub async fn next(
         q.complexity.as_deref(),
         &["high", "medium", "low"],
     )?;
-    one_of("role", q.role.as_deref(), &Role::NAMES)?;
+    let mut roles = Vec::new();
+    for name in q.role.as_deref().into_iter().flat_map(|r| r.split(',')) {
+        one_of("role", Some(name), &Role::NAMES)?;
+        roles.extend(Role::parse(name));
+    }
     one_of("priority", q.priority.as_deref(), &PRIORITIES)?;
     let project = project_of(&db, &q.project).await?;
     let kinds = Kinds::of(&project);
@@ -156,7 +161,7 @@ pub async fn next(
     let key = q.key.as_deref().map(str::to_uppercase);
     let releases = docket_core::fact::releases(project.skills["releases"].as_str());
     let filter = Filter {
-        role: q.role.as_deref().and_then(Role::parse),
+        roles: &roles,
         priority: q
             .priority
             .as_deref()

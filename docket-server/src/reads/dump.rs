@@ -123,6 +123,10 @@ async fn projects(tx: &DatabaseTransaction) -> Result<Vec<ProjectDump>, DbErr> {
         let releases = crate::verbs::releases::listed(tx, &p.slug).await?.all();
         let areas = crate::verbs::areas::listed(tx, &p.slug).await?.all();
         let labels = crate::verbs::labels::listed(tx, &p.slug).await?;
+        let publications = crate::publications::listed(tx, &p.slug)
+            .await
+            .map_err(|e| DbErr::Custom(format!("{}: {e:?}", p.slug)))?
+            .publications;
         out.push(ProjectDump {
             slug: p.slug,
             keys: p.keys,
@@ -140,6 +144,7 @@ async fn projects(tx: &DatabaseTransaction) -> Result<Vec<ProjectDump>, DbErr> {
             releases,
             areas,
             labels,
+            publications,
         });
     }
     Ok(out)

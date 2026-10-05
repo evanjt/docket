@@ -6,7 +6,8 @@
 use std::path::{Path, PathBuf};
 
 use docket_core::private::{
-    Private, Titles, hits, ids, is_comment, message_ids, shapes, ssh_hosts, terms,
+    Private, Titles, agent_in_line, agent_in_message, hits, ids, is_agent_path, is_comment,
+    message_ids, shapes, ssh_hosts, terms,
 };
 
 use crate::args::PrivateCmd;
@@ -58,6 +59,7 @@ pub struct Look {
     terms: Vec<String>,
     keys: Vec<String>,
     titles: Titles,
+    allowed: Vec<String>,
 }
 
 impl Look {
@@ -104,7 +106,15 @@ impl Look {
     pub fn message_hits(&self, name: &str, text: &str) -> Vec<String> {
         text.lines()
             .enumerate()
-            .flat_map(|(i, l)| self.line_hits(&format!("{name}:{}", i + 1), l, true, false))
+            .flat_map(|(i, l)| {
+                let at = format!("{name}:{}", i + 1);
+                let mut hits = self.line_hits(&at, l, true, false);
+                hits.extend(agent_in_message(&self.allowed, l).into_iter().map(|t| Hit {
+                    at: at.clone(),
+                    found: format!("{t} (a reference to an agent tool)"),
+                }));
+                hits
+            })
             .map(|h| format!("{}: {}", h.at, h.found))
             .collect()
     }
@@ -116,6 +126,12 @@ impl Look {
         for line in diff.lines() {
             if let Some(f) = line.strip_prefix("+++ ") {
                 file = f.strip_prefix("b/").unwrap_or(f).to_string();
+                if is_agent_path(&file) {
+                    found.extend([Hit {
+                        at: file.clone(),
+                        found: "an agent instructions file".to_string(),
+                    }]);
+                }
             } else if let Some(h) = line.strip_prefix("@@ ") {
                 n = h
                     .split_whitespace()
@@ -125,7 +141,12 @@ impl Look {
                     .unwrap_or(1);
             } else if let Some(added) = line.strip_prefix('+') {
                 if !is_licence(&file) {
-                    found.extend(self.line_hits(&format!("{file}:{n}"), added, false, false));
+                    let at = format!("{file}:{n}");
+                    found.extend(self.line_hits(&at, added, false, false));
+                    found.extend(agent_in_line(added).into_iter().map(|t| Hit {
+                        at: at.clone(),
+                        found: format!("{t} (a reference to an agent tool)"),
+                    }));
                 }
                 n += 1;
             }
@@ -166,6 +187,7 @@ pub fn read(ctx: &mut Ctx) -> Result<Look> {
         terms: terms(&private, &local, &allowed),
         keys: private.keys,
         titles: Titles::new(&private.titles),
+        allowed,
     })
 }
 

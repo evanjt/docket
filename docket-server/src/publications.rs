@@ -40,7 +40,7 @@ struct Row {
     plans: Vec<String>,
 }
 
-async fn listed<C: ConnectionTrait>(c: &C, slug: &str) -> Result<Publications, Failure> {
+pub(crate) async fn listed<C: ConnectionTrait>(c: &C, slug: &str) -> Result<Publications, Failure> {
     let rows = c.query_all_raw(sql(LIST, vec![slug.into()])).await?;
     let publications = rows
         .iter()

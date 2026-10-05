@@ -26,8 +26,9 @@ finish, and needs one message per group.
 3. `docket squash --messages FILE` applies them. It refuses when the line count
    differs from the group count, or when `docket private check` finds a name in
    a message or a diff. Fix the line or the diff it names and run it again.
-4. Never push. End by naming the push command for the owner to run, from the
-   published ref and remote the project's `publish` fact names.
+4. Never push. End by naming every push command `docket squash` printed for the
+   owner to run, each submodule's before the parent's, from the published ref and
+   remote the project's `publish` fact names.
 
 The repository may be public while the docket is private. A message names no
 docket item, project, person or machine. `docket private check --staged` finds

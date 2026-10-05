@@ -12,6 +12,7 @@ use serde_json::{Value as Json, json};
 use docket_core::area::Area;
 use docket_core::dump::{ItemDump, events_path, item_from, item_path, parse_item, project_path};
 use docket_core::label::Label;
+use docket_core::publication::Publication;
 use docket_core::release::Release;
 use docket_core::text::{citations, split_id};
 use docket_core::word::{ItemType, Kind, PRIORITIES, priority, without_priority};
@@ -121,6 +122,56 @@ async fn restore_project(
     }
     counts.items += parsed.len();
     counts.events += restore_events(tx, repo, slug).await?;
+    restore_publications(tx, slug, &doc).await
+}
+
+/// A project's publications, oldest first so the newest keeps the highest id, each covering the plans
+/// it names, which are in once the items are.
+async fn restore_publications(
+    tx: &DatabaseTransaction,
+    slug: &str,
+    doc: &Json,
+) -> Result<(), String> {
+    let publications: Vec<Publication> = doc
+        .get("publications")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    for p in publications.iter().rev() {
+        let id = scalar(
+            tx,
+            "INSERT INTO publications (project, published_sha, work_sha, created_at) \
+             VALUES (?, ?, ?, ?) RETURNING id",
+            vec![
+                slug.into(),
+                p.published.clone().into(),
+                p.work.clone().into(),
+                p.created_at.clone().into(),
+            ],
+        )
+        .await?;
+        for plan in &p.plans {
+            let (key, num) = split_id(plan).map_err(|e| e.0)?;
+            let rid = scalar(
+                tx,
+                "SELECT COALESCE((SELECT rid FROM items WHERE project=? AND key=? AND num=?), -1)",
+                vec![slug.into(), key.into(), num.into()],
+            )
+            .await?;
+            if rid < 0 {
+                return Err(format!(
+                    "{} lists publication {} as covering {plan}, which is not in the tree",
+                    project_path(slug),
+                    p.published
+                ));
+            }
+            exec(
+                tx,
+                "INSERT INTO publication_plans (publication, rid) VALUES (?, ?) ON CONFLICT DO NOTHING",
+                vec![id.into(), rid.into()],
+            )
+            .await?;
+        }
+    }
     Ok(())
 }
 

@@ -161,6 +161,62 @@ pub fn hits<'a>(terms: &'a [String], line: &str) -> Vec<&'a str> {
     out
 }
 
+/// The assistant and agent tools whose names a published commit message does not carry.
+const TOOL_NAMES: [&str; 7] = [
+    "claude",
+    "anthropic",
+    "codex",
+    "copilot",
+    "chatgpt",
+    "openai",
+    "gemini",
+];
+
+/// What marks a session of an agent tool by its shape: a session link, an attribution trailer, or a
+/// session id header.
+fn session_shapes(line: &str) -> Vec<String> {
+    static SHAPES: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = SHAPES.get_or_init(|| {
+        regex::Regex::new(
+            r"(?i)(https?://\S*/session_\w+|^\s*(co-authored-by|claude-session|session-id)\s*:)",
+        )
+        .unwrap_or_else(|_| regex::Regex::new("$^").unwrap_or_else(|_| unreachable!()))
+    });
+    re.find_iter(line)
+        .map(|m| m.as_str().trim().to_string())
+        .collect()
+}
+
+/// What a commit message line says about an agent tool: a tool's name (unless `allowed` lists it as
+/// public), a session link, or an attribution trailer.
+#[must_use]
+pub fn agent_in_message(allowed: &[String], line: &str) -> Vec<String> {
+    let allowed: Vec<String> = allowed.iter().map(|a| a.to_lowercase()).collect();
+    let names: Vec<String> = TOOL_NAMES
+        .iter()
+        .filter(|n| !allowed.contains(&(*n).to_string()))
+        .map(|n| (*n).to_string())
+        .collect();
+    let mut out: Vec<String> = hits(&names, line).into_iter().map(str::to_string).collect();
+    out.extend(session_shapes(line));
+    out
+}
+
+/// What an added line of a file says about an agent tool by shape: a session link or an
+/// attribution trailer. A tool's name alone is prose a file may carry.
+#[must_use]
+pub fn agent_in_line(line: &str) -> Vec<String> {
+    session_shapes(line)
+}
+
+/// Whether a path is an agent instructions file or sits in an agent tool's directory.
+#[must_use]
+pub fn is_agent_path(path: &str) -> bool {
+    let mut parts = path.split('/');
+    let last = path.rsplit('/').next().unwrap_or(path);
+    matches!(last, "CLAUDE.md" | "AGENTS.md") || parts.any(|p| p == ".claude")
+}
+
 /// Whether a line of a file is a comment, where a citation of a docket item would sit: a line
 /// starting with a comment marker, or one with a `//` comment after code.
 #[must_use]

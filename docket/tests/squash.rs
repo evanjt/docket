@@ -256,6 +256,33 @@ fn test_a_message_citing_an_item_or_a_job_branch_is_refused_and_nothing_is_writt
 }
 
 #[test]
+fn test_a_message_naming_an_agent_tool_is_refused_and_nothing_is_written() {
+    let r = Repo::new();
+    let file = r.messages("Fire the first bowls, generated with Claude\nGlaze the platters\n");
+    let out = r.squash(&["--messages", &file]);
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains("message 1"), "{}", text(&out));
+    assert_eq!(r.published(), None);
+}
+
+#[test]
+fn test_a_published_diff_adding_an_agent_instructions_file_is_refused_and_nothing_is_written() {
+    let r = Repo::new();
+    sh(&r.dir, "git checkout -q -b t5 main");
+    fs::write(r.dir.join("AGENTS.md"), "rules\n").unwrap();
+    sh(
+        &r.dir,
+        "git add -A && git commit -q -m notes && git checkout -q main",
+    );
+    sh(&r.dir, "git merge -q --no-ff -m 'merge t5' t5");
+    let file = r.messages("Fire the first bowls\nGlaze the platters\nAdd the notes\n");
+    let out = r.squash(&["--messages", &file]);
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains("AGENTS.md"), "{}", text(&out));
+    assert_eq!(r.published(), None);
+}
+
+#[test]
 fn test_a_message_count_that_differs_from_the_commit_count_is_refused() {
     let r = Repo::new();
     let file = r.messages("Fire the first bowls\n");
@@ -376,9 +403,9 @@ impl Nested {
         }
         let cooled = closes.get(2).map_or(String::new(), |close| {
             format!(
-                "INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, type, opened_at, updated_at, resolution, parent_rid) VALUES
-  (5, 'acme/kiln', 'A', 3, 'Cool the oven', 'done', NULL, '[]', '', 'plan', 'o', 'u', 'cooled', NULL),
-  (6, 'acme/kiln', 'T', 3, 'Open the vents', 'done', NULL, '[]', '', 'task', 'o', 'u', 'opened at {close}', 5);"
+                "INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, type, opened_at, updated_at, resolution, parent_rid, area_id) VALUES
+  (5, 'acme/kiln', 'A', 3, 'Cool the oven', 'done', NULL, '[]', '', 'plan', 'o', 'u', 'cooled', NULL, 1),
+  (6, 'acme/kiln', 'T', 3, 'Open the vents', 'done', NULL, '[]', '', 'task', 'o', 'u', 'opened at {close}', 5, 1);"
             )
         });
         let seed = format!(
@@ -386,11 +413,12 @@ impl Nested {
 INSERT INTO projects (slug, keys, skills, integration_ref, repos, created_at, updated_at) VALUES
   ('acme/kiln', '[{{"key":"T","kind":"work"}},{{"key":"A","kind":"audit"}}]',
    '{{"owner":"Ada Lovelace","publish":"published origin/main"}}', 'main', '[".", "{GLAZE}"]', 'c', 'u');
-INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, type, opened_at, updated_at, resolution, parent_rid) VALUES
-  (1, 'acme/kiln', 'A', 1, 'Fire the first bowls', 'done', NULL, '[]', '', 'plan', 'o', 'u', 'fired', NULL),
-  (2, 'acme/kiln', 'A', 2, 'Glaze the platters', 'done', NULL, '[]', '', 'plan', 'o', 'u', 'glazed', NULL),
-  (3, 'acme/kiln', 'T', 1, 'Stack the firewood', 'done', NULL, '[]', '', 'task', 'o', 'u', 'stacked at {}', 1),
-  (4, 'acme/kiln', 'T', 2, 'Mix the slip', 'done', NULL, '[]', '', 'task', 'o', 'u', 'mixed at {}', 2);
+INSERT INTO areas (id, project, name, description, position, priority) VALUES (1, 'acme/kiln', 'firing', '', 1, NULL);
+INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, type, opened_at, updated_at, resolution, parent_rid, area_id) VALUES
+  (1, 'acme/kiln', 'A', 1, 'Fire the first bowls', 'done', NULL, '[]', '', 'plan', 'o', 'u', 'fired', NULL, 1),
+  (2, 'acme/kiln', 'A', 2, 'Glaze the platters', 'done', NULL, '[]', '', 'plan', 'o', 'u', 'glazed', NULL, 1),
+  (3, 'acme/kiln', 'T', 1, 'Stack the firewood', 'done', NULL, '[]', '', 'task', 'o', 'u', 'stacked at {}', 1, 1),
+  (4, 'acme/kiln', 'T', 2, 'Mix the slip', 'done', NULL, '[]', '', 'task', 'o', 'u', 'mixed at {}', 2, 1);
 {cooled}
 "#,
             closes[0], closes[1]
@@ -493,15 +521,19 @@ fn test_a_snapshot_pinning_a_submodule_commit_with_no_published_counterpart_is_r
 
 /// Runs any `docket` verb in the checkout against the test server.
 fn docket(r: &Repo, args: &[&str]) -> String {
+    docket_in(&r.dir, &r.config, &r.server, args)
+}
+
+fn docket_in(dir: &Path, config: &Path, server: &Server, args: &[&str]) -> String {
     let out = Command::new(env!("CARGO_BIN_EXE_docket"))
         .args(["-p", "acme/kiln"])
         .args(args)
-        .current_dir(&r.dir)
-        .env("XDG_CONFIG_HOME", &r.config)
-        .env("DOCKET_SERVER", format!("http://{}", r.server.addr))
+        .current_dir(dir)
+        .env("XDG_CONFIG_HOME", config)
+        .env("DOCKET_SERVER", format!("http://{}", server.addr))
         .env("DOCKET_KEY", "key-owner")
         .env("USER", "nobody-in-particular")
-        .env("HOME", r.config.parent().unwrap())
+        .env("HOME", config.parent().unwrap())
         .env("DOCKET_PROJECT", "acme/kiln")
         .output()
         .unwrap();
@@ -545,4 +577,38 @@ fn test_an_unpushed_publication_is_an_act_ask_until_the_remote_ref_holds_it() {
         &format!("git update-ref refs/remotes/origin/main {tip}"),
     );
     assert!(docket(&r, &["todo"]).contains("Nothing waiting on you."));
+}
+
+#[test]
+fn test_the_push_ask_names_each_submodule_push_first_and_stays_open_until_all_are_pushed() {
+    let r = Nested::new(false);
+    let file = messages(&r.dir, "Fire the first bowls\nGlaze the platters\n");
+    let out = r.squash(&["--messages", &file]);
+    assert!(out.status.success(), "{}", text(&out));
+    let todo = docket_in(&r.dir, &r.config, &r.server, &["todo"]);
+    assert!(todo.contains("Push published to origin/main"), "{todo}");
+    let todo = docket_in(&r.dir, &r.config, &r.server, &["show", "T3"]);
+    let inner = todo
+        .find(&format!("git -C {GLAZE} push origin published:main"))
+        .unwrap_or_else(|| panic!("{todo}"));
+    let parent = todo
+        .find("git push origin published:main")
+        .unwrap_or_else(|| panic!("{todo}"));
+    assert!(inner < parent, "{todo}");
+
+    let tip = published(&r.dir).unwrap();
+    sh(
+        &r.dir,
+        &format!("git update-ref refs/remotes/origin/main {tip}"),
+    );
+    let todo = docket_in(&r.dir, &r.config, &r.server, &["todo"]);
+    assert!(todo.contains("Push published to origin/main"), "{todo}");
+
+    let tip = published(&r.glaze).unwrap();
+    sh(
+        &r.glaze,
+        &format!("git update-ref refs/remotes/origin/main {tip}"),
+    );
+    let todo = docket_in(&r.dir, &r.config, &r.server, &["todo"]);
+    assert!(todo.contains("Nothing waiting on you."), "{todo}");
 }

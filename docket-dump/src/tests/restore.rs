@@ -260,3 +260,27 @@ fn test_truthy_reads_values_as_python_does() {
         assert!(truthy(&v), "{v}");
     }
 }
+
+#[tokio::test]
+async fn test_restore_brings_back_publications_newest_first_with_their_plans() {
+    let (live, _db) = seeded().await;
+    for (published, work) in [('a', 'b'), ('c', 'd')] {
+        let body = json!({
+            "project": "o/p",
+            "published": published.to_string().repeat(40),
+            "work": work.to_string().repeat(40),
+            "plans": ["A1"],
+        });
+        call(&live, Method::POST, "/do/publication", Some(body)).await;
+    }
+    let before = call(&live, Method::GET, "/publications?project=o/p", None).await;
+    assert_eq!(before["publications"].as_array().unwrap().len(), 2);
+    let dir = tempfile::tempdir().unwrap();
+    write_all(dir.path(), &full_page(&live).await);
+    let db = Scratch::bare(2).await;
+    restore(dir.path(), &db.url()).await.unwrap();
+    let after = app(&db.db, Keys::parse("box owner k").unwrap());
+    let restored = call(&after, Method::GET, "/publications?project=o/p", None).await;
+    assert_eq!(restored, before);
+    assert_eq!(restored["publications"][0]["plans"], json!(["A1"]));
+}

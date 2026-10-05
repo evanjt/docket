@@ -10,7 +10,7 @@ use docket_core::api::{AskRequest, CloseRequest, Opened, Publications};
 use docket_core::cut::Group;
 use docket_core::fact::{Publish, publish};
 use docket_core::publication::{
-    LANDINGS_BEFORE_SQUASH, Publication, first_containing, push_command, push_title, squash_due,
+    LANDINGS_BEFORE_SQUASH, Publication, first_containing, push_title, squash_due,
 };
 
 use crate::cmd::audit::shas;
@@ -140,17 +140,15 @@ fn open_ask(ctx: &mut Ctx, title: &str) -> Result<Option<String>> {
 }
 
 /// Asks the owner to push the published ref, unless that ask is open already. It is filed in the
-/// area of the first of `plans` that has one.
-///
-/// # Errors
-/// The server refuses.
-pub fn ask_push(ctx: &mut Ctx, target: &Publish, groups: &[Group]) {
-    if let Err(why) = file_push(ctx, target, groups) {
+/// area of the first of `plans` that has one. The ask carries every push command, each
+/// submodule's before the parent's.
+pub fn ask_push(ctx: &mut Ctx, target: &Publish, groups: &[Group], pushes: &[String]) {
+    if let Err(why) = file_push(ctx, target, groups, pushes) {
         eprintln!("the push ask was not filed: {why}");
     }
 }
 
-fn file_push(ctx: &mut Ctx, target: &Publish, groups: &[Group]) -> Result<()> {
+fn file_push(ctx: &mut Ctx, target: &Publish, groups: &[Group], pushes: &[String]) -> Result<()> {
     let plans: Vec<&String> = groups
         .iter()
         .flat_map(|g| g.finished.iter().chain(&g.partial))
@@ -167,7 +165,7 @@ fn file_push(ctx: &mut Ctx, target: &Publish, groups: &[Group]) -> Result<()> {
             break;
         }
     }
-    let command = push_command(&target.local, &target.remote);
+    let command = pushes.join("\n");
     let mut req = docket_core::api::NewRequest {
         common: ctx.common(false)?,
         key: "T".into(),
@@ -194,6 +192,26 @@ fn file_push(ctx: &mut Ctx, target: &Publish, groups: &[Group]) -> Result<()> {
     Ok(())
 }
 
+/// Whether each submodule the published tip pins has its published ref on its remote ref. A
+/// submodule with no published ref of its own is public as it stands.
+fn submodules_pushed(p: &Published, tip: &str) -> bool {
+    let Ok(tree) = git(&p.repo, &["ls-tree", "-r", tip]) else {
+        return true;
+    };
+    let local = format!("refs/heads/{}", p.target.local);
+    let remote = format!("refs/remotes/{}", p.target.remote);
+    tree.lines()
+        .filter(|l| l.starts_with("160000 "))
+        .filter_map(|l| l.split_once('\t').map(|(_, path)| path))
+        .all(|path| {
+            let dir = p.repo.join(path);
+            let Some(inner) = rev(&dir, &local) else {
+                return true;
+            };
+            rev(&dir, &remote).is_some() && contains(&dir, &inner, &remote)
+        })
+}
+
 /// Closes the push ask once the remote ref holds the last publication.
 pub fn settle_push(ctx: &mut Ctx) {
     let Some(p) = open(ctx) else { return };
@@ -202,6 +220,9 @@ pub fn settle_push(ctx: &mut Ctx) {
     };
     let remote = format!("refs/remotes/{}", p.target.remote);
     if rev(&p.repo, &remote).is_none() || !contains(&p.repo, &last.published, &remote) {
+        return;
+    }
+    if !submodules_pushed(&p, &last.published) {
         return;
     }
     let title = push_title(&p.target.local, &p.target.remote);

@@ -138,10 +138,21 @@ pub fn squash(ctx: &mut Ctx, messages: Option<&str>, cap: Option<usize>) -> Resu
         };
         let _: Publications = ctx.api.post("publication", &req)?;
     }
+    let pushes = print_pushes(&target, &inners);
+    crate::cmd::published::ask_push(ctx, &target, &groups, &pushes);
+    println!("published {} commits on {}", made.len(), target.local);
+    println!("{}", pushes[pushes.len() - 1]);
+    Ok(0)
+}
+
+/// Prints what each submodule published and the push commands, the parent's last, and returns
+/// the commands.
+fn print_pushes(target: &Publish, inners: &[Inner]) -> Vec<String> {
     let (remote, branch) = target
         .remote
         .split_once('/')
         .unwrap_or((&target.remote, ""));
+    let mut pushes = Vec::new();
     for i in inners.iter().filter(|i| !i.new.is_empty()) {
         println!(
             "published {} commits on {} in {}",
@@ -149,12 +160,12 @@ pub fn squash(ctx: &mut Ctx, messages: Option<&str>, cap: Option<usize>) -> Resu
             target.local,
             i.path
         );
-        println!("git -C {} push {remote} {}:{branch}", i.path, target.local);
+        let line = format!("git -C {} push {remote} {}:{branch}", i.path, target.local);
+        println!("{line}");
+        pushes.push(line);
     }
-    crate::cmd::published::ask_push(ctx, &target, &groups);
-    println!("published {} commits on {}", made.len(), target.local);
-    println!("git push {remote} {}:{branch}", target.local);
-    Ok(0)
+    pushes.push(format!("git push {remote} {}:{branch}", target.local));
+    pushes
 }
 
 fn rev(repo: &Path, what: &str) -> Option<String> {

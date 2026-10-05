@@ -819,8 +819,9 @@ pub struct StaleBranch {
     pub name: String,
     /// Why it is stale: its item is closed or dropped, or nothing names the branch.
     pub why: String,
-    /// Commits on it whose patch is not on the work ref.
-    pub unique: usize,
+    /// Commits on it whose patch is not on the work ref, or `None` when git could not compare
+    /// them, as in a repository that lacks the work ref.
+    pub unique: Option<usize>,
 }
 
 /// The `lead/` and `audit/` branches in these directories whose item is closed or dropped, or that
@@ -860,7 +861,7 @@ pub fn stale_job_branches(
                 None => continue,
             };
             let unique = local::git(&["cherry", target, name], d)
-                .map_or(0, |o| o.lines().filter(|l| l.starts_with('+')).count());
+                .map(|o| o.lines().filter(|l| l.starts_with('+')).count());
             out.push(StaleBranch {
                 name: name.to_string(),
                 why,
@@ -877,7 +878,7 @@ pub fn stale_job_branches(
 pub fn prune_job_branches(dirs: &[PathBuf], stale: &[StaleBranch]) -> Vec<String> {
     let mut kept = Vec::new();
     for b in stale {
-        let removed = b.unique == 0
+        let removed = b.unique == Some(0)
             && dirs.iter().any(|d| {
                 let r = format!("refs/heads/{}", b.name);
                 local::git(&["rev-parse", "--verify", "-q", &r], d).is_some()
@@ -1024,10 +1025,13 @@ fn job_branches(ctx: &mut Ctx, slug: &str, project: &Value, prune: bool) -> Resu
     }
     println!("\nJob branches nothing needs:");
     for b in &stale {
-        let held = if b.unique == 0 {
-            "no commits the work ref lacks".to_string()
-        } else {
-            format!("{} commits the work ref lacks", b.unique)
+        let held = match b.unique {
+            Some(0) => "no commits the work ref lacks".to_string(),
+            Some(n) => format!("{n} commits the work ref lacks"),
+            None => {
+                "kept: the work ref is not in its repository, so its commits cannot be compared"
+                    .to_string()
+            }
         };
         let done = if prune && !kept.contains(&b.name) {
             ", removed"

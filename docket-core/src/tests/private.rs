@@ -141,3 +141,49 @@ fn test_theme_group_and_release_names_are_not_terms() {
     let p: Private = serde_json::from_str(sent).unwrap();
     assert!(terms(&p, &[], &[]).is_empty());
 }
+
+#[test]
+fn test_agent_in_a_message_is_a_tool_name_a_session_link_or_an_attribution_trailer() {
+    let link = format!("https://{}.ai/code/session_01abc", "claude");
+    let trailer = format!("{}-by: Some Tool <tool@example.com>", "Co-authored");
+    for line in [
+        "Add shelf sorting, generated with Claude",
+        "Ask Codex to sort the shelf",
+        &link,
+        &trailer,
+        "Session-Id: 4f2",
+    ] {
+        assert!(!agent_in_message(&[], line).is_empty(), "{line}");
+    }
+    assert!(agent_in_message(&[], "Add shelf sorting").is_empty());
+    assert!(agent_in_message(&[], "Sort the claudette shelf").is_empty());
+}
+
+#[test]
+fn test_a_public_name_allows_a_tool_name_but_not_a_link() {
+    let allowed = ["claude".to_string()];
+    assert!(agent_in_message(&allowed, "Parse the Claude config").is_empty());
+    let link = format!("https://{}.ai/code/session_01abc", "claude");
+    assert!(!agent_in_message(&allowed, &link).is_empty());
+}
+
+#[test]
+fn test_agent_in_an_added_line_is_a_session_link_or_a_trailer_not_a_tool_name() {
+    let link = format!("see https://{}.ai/code/session_01abc", "claude");
+    assert!(!agent_in_line(&link).is_empty());
+    assert!(agent_in_line("Claude is a name in prose").is_empty());
+}
+
+#[test]
+fn test_an_agent_instructions_path_is_a_file_or_a_directory_of_one() {
+    for p in [
+        "AGENTS.md",
+        "docs/CLAUDE.md",
+        ".claude/settings.json",
+        "a/.claude/x",
+    ] {
+        assert!(is_agent_path(p), "{p}");
+    }
+    assert!(!is_agent_path("docs/agents.md.txt"));
+    assert!(!is_agent_path("src/claude_client.rs"));
+}

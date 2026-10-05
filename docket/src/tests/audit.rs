@@ -301,10 +301,15 @@ fn test_prune_removes_stale_job_branches_without_unique_commits_and_names_the_re
     // A4 is claimed by a live job; A3 is open and named by nothing.
     let named: HashSet<String> = ["lead/a4-400".to_string()].into();
     let found = stale_job_branches(&dirs, Some("main"), state, &named);
-    let summary: Vec<(&str, usize)> = found.iter().map(|b| (b.name.as_str(), b.unique)).collect();
+    let summary: Vec<(&str, Option<usize>)> =
+        found.iter().map(|b| (b.name.as_str(), b.unique)).collect();
     assert_eq!(
         summary,
-        [("lead/a1-100", 0), ("lead/a2-200", 0), ("lead/a3-300", 1)]
+        [
+            ("lead/a1-100", Some(0)),
+            ("lead/a2-200", Some(0)),
+            ("lead/a3-300", Some(1))
+        ]
     );
 
     let kept = prune_job_branches(&dirs, &found);
@@ -314,4 +319,32 @@ fn test_prune_removes_stale_job_branches_without_unique_commits_and_names_the_re
         left.lines().collect::<Vec<_>>(),
         ["lead/a3-300", "lead/a4-400", "main"]
     );
+}
+
+#[test]
+fn test_prune_keeps_a_job_branch_in_a_repository_without_the_work_ref() {
+    let tmp = tempfile::tempdir().unwrap();
+    let first = tmp.path().join("first");
+    let second = tmp.path().join("second");
+    for d in [&first, &second] {
+        std::fs::create_dir(d).unwrap();
+    }
+    git_in(&first, &["init", "-b", "main"]);
+    commit_file(&first, "base", "base");
+    git_in(&second, &["init", "-b", "trunk"]);
+    commit_file(&second, "base", "base");
+    git_in(&second, &["checkout", "-b", "lead/x9-1"]);
+    commit_file(&second, "work", "work");
+    git_in(&second, &["checkout", "trunk"]);
+
+    let dirs = [first, second.clone()];
+    let state = |_: &str| Some("done".to_string());
+    let found = stale_job_branches(&dirs, Some("main"), state, &HashSet::new());
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].unique, None);
+
+    let kept = prune_job_branches(&dirs, &found);
+    assert_eq!(kept, ["lead/x9-1"]);
+    let left = git_in(&second, &["branch", "--format=%(refname:short)"]);
+    assert!(left.lines().any(|l| l == "lead/x9-1"));
 }

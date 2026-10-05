@@ -181,6 +181,9 @@ pub struct ProjectDump {
     /// Every label, by name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<crate::label::Label>,
+    /// Every publication, newest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub publications: Vec<crate::publication::Publication>,
 }
 
 /// What changed after a cursor: every project, the items to rewrite and the events to add. A full

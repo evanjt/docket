@@ -209,7 +209,7 @@ pub fn start(ctx: &mut Ctx, req: &StartRequest) -> Result<i32> {
         ),
         "audit" => println!(
             "\nThis is a plan. With nothing opened under it yet, file its tickets, link each with docket link T1 \
-             opened {i}, and release it; it comes back for its audit when they are all closed. With every ticket \
+             opened {i}, and unclaim it; it comes back for its audit when they are all closed. With every ticket \
              closed, this is its audit: check the plan in its body against the working tree and against every \
              item it opened (docket deps {i}), file each gap as a ticket linked the same way, and close it. One \
              round: the gaps are worked as tickets."

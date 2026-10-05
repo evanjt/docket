@@ -181,7 +181,7 @@ async fn run(d: &mut Dumped, steps: Vec<(&str, Value, &str)>) {
     for (verb, body, subject) in steps {
         assert_eq!(d.write(verb, body.clone()).await, subject, "{verb} {body}");
         if verb != "key" {
-            d.named.push(subject.to_string());
+            d.named.extend(subject.split("; ").map(str::to_string));
         }
     }
 }
@@ -285,7 +285,7 @@ async fn questions(d: &mut Dumped) {
         (
             "release",
             json!({ "id": "B3", "note": "later" }),
-            "Release B3",
+            "Unclaim B3",
         ),
         ("start", json!({ "id": "B3" }), "Start B3"),
         (
@@ -309,7 +309,7 @@ async fn moves(d: &mut Dumped) {
         (
             "wait",
             json!({ "id": "B2", "until": "the fleet is quiet" }),
-            "Wait B2",
+            "Open B5; Wait B2",
         ),
         ("resume", json!({ "id": "B2" }), "Resume B2"),
         (
@@ -327,7 +327,7 @@ async fn moves(d: &mut Dumped) {
             json!({ "key": "I", "kind": "research", "meaning": "investigations" }),
             "Key I",
         ),
-        ("add", json!({ "title": "Seen on the way" }), "Open B5"),
+        ("add", json!({ "title": "Seen on the way" }), "Open B6"),
     ];
     run(d, steps).await;
 }

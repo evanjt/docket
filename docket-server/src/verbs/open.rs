@@ -106,6 +106,9 @@ async fn open_item(
         },
         None => Vec::new(),
     };
+    if turn == "user" {
+        crate::verbs::turn::ensure_owner_room(&call).await?;
+    }
     let theme = theme_of(&call, req.release.as_deref(), req.theme).await?;
     let title = req.title.trim().to_string();
     let num = call.tx.next_num(&call.slug, &key).await?;
@@ -125,7 +128,14 @@ async fn open_item(
             tags,
         })
         .await?;
-    let data: Option<Value> = seen_by.map(|job| json!({ "observed_by": job }));
+    let mut data = serde_json::Map::new();
+    if let Some(job) = seen_by {
+        data.insert("observed_by".into(), json!(job));
+    }
+    if turn == "user" {
+        data.insert("turn".into(), json!(turn));
+    }
+    let data = Some(Value::Object(data));
     call.tx
         .event(
             &call.slug,

@@ -104,6 +104,8 @@ pub struct NextQuery {
     under: Option<String>,
     role: Option<String>,
     priority: Option<String>,
+    #[serde(default)]
+    current_release: bool,
 }
 
 fn ten() -> usize {
@@ -129,6 +131,37 @@ async fn rids_under(
         .map(|i| i.rid)
         .collect();
     Ok(members_of(&board.ties, &standing, target.rid))
+}
+
+/// The condition and values keeping the rows of `column` that lie under the plan, story or concept `id`,
+/// by the rule `next` applies; empty when no `id` is given.
+///
+/// # Errors
+/// 404 for an unknown `id`.
+pub(crate) async fn under_cond(
+    db: &DatabaseConnection,
+    slug: &str,
+    id: Option<&str>,
+    column: &str,
+) -> Result<(String, Vec<sea_orm::Value>), Failure> {
+    let Some(id) = id else {
+        return Ok((String::new(), vec![]));
+    };
+    let project = project_of(db, slug).await?;
+    let kinds = Kinds::of(&project);
+    let board = board(db, slug).await?;
+    let mut rids: Vec<i64> = rids_under(db, &board, &kinds, slug, id)
+        .await?
+        .into_iter()
+        .collect();
+    rids.sort_unstable();
+    if rids.is_empty() {
+        return Ok((" AND FALSE".to_string(), vec![]));
+    }
+    Ok((
+        format!(" AND {column} IN ({})", marks(rids.len())),
+        rids.into_iter().map(Into::into).collect(),
+    ))
 }
 
 /// `docket next`: the queue an agent takes from, most urgent first, narrowed to the roles asked, comma-separated,
@@ -171,6 +204,7 @@ pub async fn next(
         complexity: q.complexity.as_deref(),
         theme: q.theme.as_deref(),
         releases: &releases,
+        current_release_only: q.current_release,
     };
     let candidates: Vec<Candidate> = board.items.iter().map(|r| candidate(r, &kinds)).collect();
     let picked = queue(&candidates, &board.ties, &filter, q.n);

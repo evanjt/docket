@@ -82,7 +82,13 @@ async fn test_read_returns_the_stored_facts_without_the_retired_ones() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         out,
-        json!({ "project": SLUG, "skills": { "owner": "Ana" }, "owner": {} })
+        json!({
+            "project": SLUG,
+            "skills": { "owner": "Ana" },
+            "owner": {},
+            "priorities": ["critical", "high", "normal", "low"],
+            "levels": ["high", "medium", "low"],
+        })
     );
 }
 

@@ -145,13 +145,18 @@ async fn items(tx: &DatabaseTransaction, scope: &Scope) -> Result<Vec<ItemDump>,
          WHERE i.rid IN ({rids}) ORDER BY i.project, i.key, i.num"
     );
     let rows = tx.query_all_raw(sql(&text, values.clone())).await?;
-    let mut links = links(tx, &rids, values).await?;
+    let mut links = links(tx, &rids, values.clone()).await?;
+    let mut depends = depends(tx, &rids, values).await?;
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
         let superseded: Option<String> = row.try_get("", "superseded_id")?;
         let stored = to_item(item::Model::from_query_result(&row, "")?);
         let (related, opened) = links.remove(&stored.rid).unwrap_or_default();
-        out.push(item_dump(stored, superseded, related, opened));
+        let on = depends.remove(&stored.rid);
+        out.push(ItemDump {
+            depends: on,
+            ..item_dump(stored, superseded, related, opened)
+        });
     }
     Ok(out)
 }
@@ -177,6 +182,25 @@ async fn links(
         } else {
             entry.1.push(l.id);
         }
+    }
+    Ok(out)
+}
+
+/// `{rid: ids depended on}` for the items of a scope, oldest first.
+async fn depends(
+    tx: &DatabaseTransaction,
+    rids: &str,
+    values: Vec<Value>,
+) -> Result<HashMap<i64, Vec<String>>, DbErr> {
+    let text = format!(
+        "SELECT d.rid, t.id FROM dependencies d JOIN items t ON t.rid = d.on_rid \
+         WHERE d.rid IN ({rids}) ORDER BY d.rid, d.created_at, d.on_rid"
+    );
+    let mut out: HashMap<i64, Vec<String>> = HashMap::new();
+    for r in tx.query_all_raw(sql(&text, values)).await? {
+        out.entry(r.try_get_by_index(0)?)
+            .or_default()
+            .push(r.try_get_by_index(1)?);
     }
     Ok(out)
 }
@@ -216,6 +240,7 @@ fn item_dump(
         tags: r.tags,
         related,
         opened,
+        depends: None,
         opened_at: r.opened_at,
         updated_at: r.updated_at,
         body: r.body,

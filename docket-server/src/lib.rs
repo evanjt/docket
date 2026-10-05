@@ -29,7 +29,9 @@ use tower_http::services::{ServeDir, ServeFile};
 use utoipa_axum::router::OpenApiRouter;
 
 use crate::auth::{Keys, require_key};
-use crate::entities::{event::Event, item::Item, link::Link, project::Project};
+use crate::entities::{
+    assignment::Assignment, event::Event, item::Item, link::Link, project::Project,
+};
 
 pub use docket_migration::migrate;
 
@@ -107,6 +109,7 @@ fn routes(db: &DatabaseConnection, keys: Keys, stopping: watch::Receiver<bool>) 
         .nest("/items", Item::read_only_router(db))
         .nest("/events", Event::read_only_router(db))
         .nest("/links", Link::read_only_router(db))
+        .nest("/assignments", Assignment::read_only_router(db))
         .split_for_parts();
     Router::new()
         .route("/show/{id}", get(show::show))

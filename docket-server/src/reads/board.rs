@@ -21,7 +21,7 @@ use crate::reads::public::{Kinds, facts, open_members, sql};
 use crate::reads::rows::{project_model, rows};
 use crate::store::{self, STATE_COLUMNS, column, to_item};
 use crate::verbs::Failure;
-use crate::verbs::graph::live_overlaps;
+use crate::verbs::graph::{live_overlaps, open_dependencies, standing};
 
 #[derive(Deserialize)]
 pub struct InProject {
@@ -74,14 +74,6 @@ pub async fn counts(State(db): State<DatabaseConnection>) -> Result<Json<Value>,
     Ok(Json(Value::Array(out)))
 }
 
-/// `(word, count)` pairs in the order each word is first seen.
-fn bump(pairs: &mut Vec<(String, u64)>, word: &str) {
-    match pairs.iter_mut().find(|(w, _)| w == word) {
-        Some(p) => p.1 += 1,
-        None => pairs.push((word.to_string(), 1)),
-    }
-}
-
 /// The word of every item of a project, by state then rid.
 async fn words<C: ConnectionTrait>(
     db: &C,
@@ -108,38 +100,6 @@ async fn words<C: ConnectionTrait>(
             (r, w)
         })
         .collect())
-}
-
-/// `docket status --json`: the flow over the tickets and every key, each count in the order its word
-/// is first met.
-///
-/// # Errors
-/// 404 for an unknown project.
-pub async fn flow(
-    State(db): State<DatabaseConnection>,
-    Extension(caller): Extension<Caller>,
-    Query(q): Query<InProject>,
-) -> Result<Json<Value>, Failure> {
-    let model = project_model(&db, &q.project).await?;
-    let kinds = Kinds::of(&model);
-    let mut total: Vec<(String, u64)> = Vec::new();
-    let mut by_key: Vec<(String, Vec<(String, u64)>)> = Vec::new();
-    for (r, w) in words(&db, &q.project, &kinds).await? {
-        if kinds.kind(&r.key) != Kind::Package {
-            bump(&mut total, &w);
-        }
-        match by_key.iter_mut().find(|(k, _)| *k == r.key) {
-            Some((_, pairs)) => bump(pairs, &w),
-            None => by_key.push((r.key.clone(), vec![(w, 1)])),
-        }
-    }
-    Ok(Json(json!({
-        "project": q.project,
-        "host": caller.host,
-        "total": total.iter().map(|(_, n)| n).sum::<u64>(),
-        "by_word": total,
-        "by_key": by_key,
-    })))
 }
 
 /// One integrity problem, as data the client words.
@@ -190,7 +150,7 @@ pub async fn problems<C: ConnectionTrait>(
     );
     out.extend(undefined_keys(db, slug, &project).await?);
     out.extend(database_checks(db).await?);
-    out.extend(stalls(db, slug).await?);
+    out.extend(stalls(db, slug, board).await?);
     out.extend(audits_held(board));
     let cutoff = stamp(now_secs().saturating_sub(30 * 86_400));
     let waiting = rows(
@@ -307,7 +267,11 @@ struct Hold {
 
 /// What stalls the queue for good: open items holding each other in a cycle, through an item's wait
 /// or a container's wait on its open members, and an item held by one in a later release.
-async fn stalls<C: ConnectionTrait>(db: &C, slug: &str) -> Result<Vec<Value>, Failure> {
+async fn stalls<C: ConnectionTrait>(
+    db: &C,
+    slug: &str,
+    board: &Board,
+) -> Result<Vec<Value>, Failure> {
     let open = rows(
         db,
         &format!("SELECT {STATE_COLUMNS} FROM items WHERE project=? AND state='open' ORDER BY rid"),
@@ -317,12 +281,9 @@ async fn stalls<C: ConnectionTrait>(db: &C, slug: &str) -> Result<Vec<Value>, Fa
     let by_rid: HashMap<i64, &crate::entities::item::Model> =
         open.iter().map(|r| (r.rid, r)).collect();
     let holds = Hold::find_by_statement(sql(
-        "SELECT i.rid, i.wait_item AS to_rid FROM items i WHERE i.project=? AND i.state='open' \
-           AND i.wait_on='item' AND i.wait_item IS NOT NULL \
-         UNION ALL SELECT c.rid, l.rid FROM items c JOIN links l ON l.to_rid=c.rid AND l.kind='opened' \
-           WHERE c.project=? AND c.state='open' AND c.wait_on='condition' AND c.wait_ref=? \
-         ORDER BY 1, 2",
-        vec![slug.into(), slug.into(), GATE.into()],
+        "SELECT d.rid, d.on_rid AS to_rid FROM dependencies d JOIN items i ON i.rid=d.rid \
+           WHERE i.project=? AND i.state='open' ORDER BY 1, 2",
+        vec![slug.into()],
     ))
     .all(db)
     .await?;
@@ -331,6 +292,17 @@ async fn stalls<C: ConnectionTrait>(db: &C, slug: &str) -> Result<Vec<Value>, Fa
         if by_rid.contains_key(&h.rid) && by_rid.contains_key(&h.to_rid) {
             edges.entry(h.rid).or_default().push(h.to_rid);
         }
+    }
+    let gated: Vec<i64> = open
+        .iter()
+        .filter(|r| {
+            r.wait_on.as_deref() == Some("condition") && r.wait_ref.as_deref() == Some(GATE)
+        })
+        .map(|r| r.rid)
+        .collect();
+    let open_rids: HashSet<i64> = by_rid.keys().copied().collect();
+    for (plan, member) in docket_core::stall::gate_edges(&board.ties, &gated, &open_rids) {
+        edges.entry(plan).or_default().push(member);
     }
     let mut out: Vec<Value> = docket_core::stall::cycles(&edges)
         .into_iter()
@@ -353,6 +325,15 @@ async fn stalls<C: ConnectionTrait>(db: &C, slug: &str) -> Result<Vec<Value>, Fa
                     "release": releases[release_of(held)],
                     "later": releases[release_of(by)],
                 }),
+            ));
+        }
+    }
+    let st = standing(db, slug).await?;
+    for (rid, on) in open_dependencies(db, slug).await? {
+        if docket_core::stall::abandoned(on, &st.targets) {
+            out.push(problem(
+                "abandoned",
+                json!({ "id": st.id(rid), "on": st.id(on) }),
             ));
         }
     }

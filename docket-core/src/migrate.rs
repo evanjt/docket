@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde::Serialize;
 
+use crate::assignment;
 use crate::dump::{DumpPage, EventDump, ItemDump, ProjectDump};
 use crate::fact;
 use crate::item::Refused;
@@ -98,10 +99,12 @@ pub struct Release {
     pub from_fact: bool,
 }
 
-/// One attempt at an item, from its claim events or its claim now. No end is the claim held now.
+/// One attempt at an item, a claim or an ask, as `assignment::rebuild` gives it. No end is the
+/// attempt held now.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Assignment {
     pub id: String,
+    pub kind: &'static str,
     pub branch: String,
     pub host: String,
     pub started_at: String,
@@ -197,10 +200,14 @@ impl Change {
                     (Some(at), Some(o)) => format!("to {at}, {o}"),
                     (Some(at), None) => format!("to {at}, outcome unknown"),
                 };
-                format!(
-                    "{} attempt on {} at {} from {} {end}",
-                    a.id, a.branch, a.host, a.started_at
-                )
+                if a.kind == assignment::Kind::Ask.as_str() {
+                    format!("{} with the owner from {} {end}", a.id, a.started_at)
+                } else {
+                    format!(
+                        "{} attempt on {} at {} from {} {end}",
+                        a.id, a.branch, a.host, a.started_at
+                    )
+                }
             }
         }
     }
@@ -926,65 +933,33 @@ impl<'a> Project<'a> {
         self.out.grows.sort_by(|a, b| key_num(a).cmp(&key_num(b)));
     }
 
-    /// Past attempts from the claim events, and the claim held now.
+    /// Past attempts rebuilt from the events, made to agree with the claim and the ask held now.
     fn assignments(&mut self, events: &[&EventDump]) {
         let items = self.items.clone();
         for i in &items {
-            let mut rows: Vec<Assignment> = Vec::new();
-            let mut live: Option<Assignment> = None;
-            for e in events
+            let mine: Vec<assignment::Event> = events
                 .iter()
                 .filter(|e| e.item.as_deref() == Some(i.id.as_str()))
-            {
-                let outcome = match e.kind.as_str() {
-                    "claimed" => {
-                        if let Some(mut a) = live.take() {
-                            a.ended_at = Some(e.at.clone());
-                            a.outcome = Some("failed");
-                            rows.push(a);
-                        }
-                        live = Some(Assignment {
-                            id: i.id.clone(),
-                            branch: e.branch.clone().unwrap_or_default(),
-                            host: e.host.clone(),
-                            started_at: e.at.clone(),
-                            ended_at: None,
-                            outcome: None,
-                        });
-                        continue;
-                    }
-                    "closed" => "landed",
-                    "waited" => "blocked",
-                    "released" | "claim_lost" | "dropped" => "failed",
-                    _ => continue,
-                };
-                if let Some(mut a) = live.take() {
-                    a.ended_at = Some(e.at.clone());
-                    a.outcome = Some(outcome);
-                    rows.push(a);
-                }
-            }
-            match (live, &i.claim_branch) {
-                (Some(a), Some(_)) => rows.push(a),
-                (Some(mut a), None) => {
-                    a.ended_at = Some(i.updated_at.clone());
-                    rows.push(a);
-                }
-                (None, Some(branch)) => rows.push(Assignment {
-                    id: i.id.clone(),
-                    branch: branch.clone(),
-                    host: i.claim_host.clone().unwrap_or_default(),
-                    started_at: i.claim_since.clone().unwrap_or_default(),
-                    ended_at: None,
-                    outcome: None,
-                }),
-                (None, None) => {}
-            }
+                .map(|e| assignment::Event::from(*e))
+                .collect();
+            let mut rows = assignment::rebuild(&mine);
+            assignment::settle(&mut rows, &assignment::Now::of(i));
             if i.state == "open" && i.turn.as_deref() == Some("user") {
                 self.push(&i.id, Change::Assignee { id: i.id.clone() });
             }
             for a in rows {
-                self.push(&i.id, Change::Assignment(a));
+                self.push(
+                    &i.id,
+                    Change::Assignment(Assignment {
+                        id: i.id.clone(),
+                        kind: a.kind.as_str(),
+                        branch: a.branch.unwrap_or_default(),
+                        host: a.host,
+                        started_at: a.started_at,
+                        ended_at: a.ended_at,
+                        outcome: a.outcome.map(assignment::Outcome::as_str),
+                    }),
+                );
             }
         }
     }

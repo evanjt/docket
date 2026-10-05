@@ -36,6 +36,7 @@ INSERT INTO items (rid, project, key, num, title, state, turn, claim_branch, cla
      '- **Touches.** src/a.rs', '2026-01-01T00:00:00Z', 'u9');
 INSERT INTO items (rid, project, key, num, title, state, turn, wait_on, wait_item, wait_ref, wait_since, tags, opened_at, updated_at) VALUES
   (10, 'o/p', 'T', 6, 'Waits', 'open', 'agent', 'item', 1, 'T1', '2026-01-01T00:00:00Z', '[]', '2026-01-01T00:00:00Z', 'u10');
+INSERT INTO dependencies (rid, on_rid, created_at) VALUES (10, 1, '2026-01-01T00:00:00Z');
 INSERT INTO items (rid, project, key, num, title, state, turn, resolution, tags, body, opened_at, updated_at) VALUES
   (11, 'o/p', 'A', 2, 'Due plan', 'open', 'agent', NULL, '[]', 'x', '2026-01-01T00:00:00Z', 'u11'),
   (12, 'o/p', 'T', 7, 'Due work', 'done', NULL, 'def5678', '[]', 'x', '2026-01-01T00:00:00Z', 'u12');
@@ -142,30 +143,6 @@ async fn test_counts_every_project_by_state_and_last_event() {
     );
     assert_eq!(c[1]["slug"], "o/q");
     assert_eq!(c[1]["last_event"], Value::Null);
-}
-
-#[tokio::test]
-async fn test_flow_counts_tickets_in_the_order_first_met() {
-    let s = Seeded::new().await;
-    let f = s.ok("/flow?project=o/p").await;
-    assert_eq!(f["host"], "devbox");
-    assert_eq!(f["total"], 11);
-    let words: Vec<&str> = f["by_word"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|p| p[0].as_str().unwrap())
-        .collect();
-    assert!(
-        words.contains(&"building") && words.contains(&"blocked") && words.contains(&"standing")
-    );
-    let pk = f["by_key"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|p| p[0] == "PK")
-        .unwrap();
-    assert_eq!(pk[1], json!([["building", 1]]));
 }
 
 #[tokio::test]
@@ -373,8 +350,13 @@ INSERT INTO items (rid, project, key, num, title, state, turn, wait_on, wait_ite
   (105, 'o/s', 'PK', 3, 'Current package', 'open', 'agent', 'condition', NULL, 'everything it opened is closed', 'w', '1.0', '[]', 'x', 'o', 'u'),
   (106, 'o/s', 'T', 3, 'Later member', 'open', 'agent', NULL, NULL, NULL, NULL, '1.1', '[]', 'x', 'o', 'u'),
   (107, 'o/s', 'T', 4, 'Current waiter', 'open', 'agent', 'item', 108, 'T5', 'w', NULL, '[]', 'x', 'o', 'u'),
-  (108, 'o/s', 'T', 5, 'Later item', 'open', 'agent', NULL, NULL, NULL, NULL, '1.1', '[]', 'x', 'o', 'u');
+  (108, 'o/s', 'T', 5, 'Later item', 'open', 'agent', NULL, NULL, NULL, NULL, '1.1', '[]', 'x', 'o', 'u'),
+  (109, 'o/s', 'T', 6, 'Waiter on a drop', 'open', 'agent', NULL, NULL, NULL, NULL, NULL, '[]', 'x', 'o', 'u');
+INSERT INTO items (rid, project, key, num, title, state, resolution, tags, body, opened_at, updated_at) VALUES
+  (110, 'o/s', 'T', 7, 'Dropped', 'dropped', 'not needed', '[]', 'x', 'o', 'u');
 INSERT INTO links (rid, kind, to_rid) VALUES (103, 'opened', 101), (104, 'opened', 102), (106, 'opened', 105);
+INSERT INTO dependencies (rid, on_rid, created_at) VALUES (103, 102, 'w'), (104, 101, 'w'), (107, 108, 'w'),
+  (109, 110, 'w');
 "#;
 
 #[tokio::test]
@@ -391,6 +373,7 @@ async fn test_check_finds_a_cycle_through_containers_and_a_hold_by_a_later_relea
             { "kind": "cycle", "id": "T2" },
             { "kind": "held_later", "id": "PK3", "by": "T3", "release": "1.0", "later": "1.1" },
             { "kind": "held_later", "id": "T4", "by": "T5", "release": "1.0", "later": "1.1" },
+            { "kind": "abandoned", "id": "T6", "on": "T7" },
         ])
     );
 }

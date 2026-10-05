@@ -3,8 +3,9 @@
 
 use std::sync::Mutex;
 
-use docket_core::api::LeadState;
+use docket_core::api::{LeadState, Machines};
 use docket_core::flow::tally;
+use docket_core::machine::Machine;
 use docket_core::member::Tie;
 use docket_core::rows::{
     Derived, EventRow, ItemRow, KeySpec, Progress, ProjectRow, Row, Shown, Status,
@@ -70,6 +71,7 @@ fn items() -> Vec<ItemRow> {
     claimed.claim_branch = Some("audit/t2-1".into());
     claimed.claim_host = Some("devbox.lan".into());
     claimed.claim_job = Some("t2-b1".into());
+    claimed.claim_on = Some("rack".into());
     claimed.claim_since = Some("2026-10-01T09:00:00Z".into());
     let mut question = item(5, "Q1", "Which shelf holds the loaves", "open");
     question.turn = Some("user".into());
@@ -134,6 +136,8 @@ pub struct Fixture {
     pub facts: Mutex<Vec<(String, String)>>,
     /// The lead claim of every project, when one is held.
     pub lead: Mutex<Option<docket_core::lead::Lead>>,
+    /// Whether that lead claim went unrenewed past the lapse.
+    pub lapsed: Mutex<bool>,
 }
 
 impl Default for Fixture {
@@ -145,6 +149,7 @@ impl Default for Fixture {
             refuse: Mutex::new(None),
             facts: Mutex::new(Vec::new()),
             lead: Mutex::new(None),
+            lapsed: Mutex::new(false),
         }
     }
 }
@@ -175,6 +180,8 @@ impl Fixture {
             claim_host: i.claim_host.clone(),
             claim_since: i.claim_since.clone(),
             claim_job: i.claim_job.clone(),
+            claim_on: i.claim_on.clone(),
+            claim_runner: i.claim_job.as_ref().map(|_| "claude".to_string()),
             wait_on: i.wait_on.clone(),
             wait_ref: i.wait_ref.clone(),
             body: body(&i.id),
@@ -206,7 +213,20 @@ impl Source for Fixture {
         Ok(LeadState {
             project: slug.into(),
             lead: self.lead.lock().unwrap().clone(),
+            lapsed: *self.lapsed.lock().unwrap(),
             ..LeadState::default()
+        })
+    }
+
+    fn machines(&self) -> Result<Machines> {
+        let machine = |name: &str, slots: i64| Machine {
+            name: name.into(),
+            slots,
+            runners: vec!["claude".into()],
+            ..Machine::default()
+        };
+        Ok(Machines {
+            machines: vec![machine("rack", 2), machine("shed", 1)],
         })
     }
 

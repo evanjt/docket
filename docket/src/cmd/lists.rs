@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use docket_core::rows::Row;
 
-use crate::args::{Queue, Recent};
+use crate::args::{OwnerQueue, Queue, Recent};
 use crate::ctx::{Ctx, id};
 use crate::fail::Result;
 use crate::py::{Py, cut, or_none};
@@ -46,6 +46,10 @@ pub fn next(ctx: &mut Ctx, q: &Queue) -> Result<i32> {
             ("under", opt_id(q.under.as_ref())?),
             ("role", (!q.role.is_empty()).then(|| q.role.join(","))),
             ("priority", q.priority.clone()),
+            (
+                "current_release",
+                q.current_release.then(|| "true".to_string()),
+            ),
         ],
     )?;
     print_rows(ctx, &rows, "Nothing for an agent right now.");
@@ -54,10 +58,50 @@ pub fn next(ctx: &mut Ctx, q: &Queue) -> Result<i32> {
 
 /// # Errors
 /// As `next`.
-pub fn todo(ctx: &mut Ctx) -> Result<i32> {
-    let rows = ctx.read("/todo", &[])?;
-    print_rows(ctx, &rows, "Nothing waiting on you.");
+pub fn todo(ctx: &mut Ctx, q: &OwnerQueue) -> Result<i32> {
+    let pairs = [
+        ("n", q.n.map(|n| n.to_string())),
+        ("key", q.key.clone()),
+        ("theme", q.theme.clone()),
+        ("priority", q.priority.clone()),
+    ];
+    let rows = ctx.read("/todo", &pairs)?;
+    if ctx.json {
+        ctx.emit(&items_json(&rows, &[], &["owner_group"]));
+        return Ok(0);
+    }
+    let waiting = ctx.read("/todo/waiting", &pairs)?["waiting"]
+        .as_u64()
+        .unwrap_or(0);
+    let list = rows.as_array().cloned().unwrap_or_default();
+    if list.is_empty() {
+        println!("Nothing waiting on you.");
+    }
+    let mut group = "";
+    for v in &list {
+        let now = v["owner_group"].as_str().unwrap_or_default();
+        if now != group {
+            println!("{}:", group_title(now));
+            group = now;
+        }
+        println!("{}", fmt_row(&row_of(v), None));
+    }
+    if waiting > 0 {
+        println!("\n{waiting} more wait on something first.");
+    }
     Ok(0)
+}
+
+fn group_title(group: &str) -> &str {
+    match group {
+        "derived" => "Derived by agents, to confirm or overturn with answer",
+        "question" => "Questions",
+        "hold" => "A device or thing in hand",
+        "access" => "An account or store",
+        "act" => "An action from your machine",
+        "judge" => "A judgement",
+        _ => "Not said what is needed",
+    }
 }
 
 /// # Errors
@@ -120,13 +164,19 @@ pub fn waiting(ctx: &mut Ctx, on: Option<&String>) -> Result<i32> {
         print_rows(ctx, &rows, "Nothing.");
         return Ok(0);
     }
+    let targets: Vec<Value> = rows
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|r| r["wait_target"].clone())
+        .collect();
     let rows = rows_of(&rows);
     if rows.is_empty() {
         println!("Nothing waiting.");
         return Ok(0);
     }
     let mut last: Option<String> = None;
-    for r in rows {
+    for (r, t) in rows.iter().zip(&targets) {
         let wref = or_none(r.wait_ref.as_deref()).to_string();
         let item = r.wait_on.as_deref() == Some("item");
         let head = if item {
@@ -136,7 +186,6 @@ pub fn waiting(ctx: &mut Ctx, on: Option<&String>) -> Result<i32> {
         };
         if last.as_ref() != Some(&head) {
             if item {
-                let t = ctx.read(&format!("/show/{wref}"), &[])?;
                 println!(
                     "\n{head}  {}  {}",
                     t["word"].as_str().unwrap_or_default(),

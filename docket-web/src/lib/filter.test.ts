@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { applies, filterChanges, nextParams, pagedParams, parseFilter, remainingHref, searchParams, sortRows } from './filter';
 
-const parse = (s: string) => parseFilter(new URLSearchParams(s));
+const scale = { priorities: ['critical', 'high', 'normal', 'low'], levels: ['high', 'medium', 'low'] };
+const parse = (s: string, on = scale) => parseFilter(new URLSearchParams(s), on);
 
 describe('filter state', () => {
   it('round-trips through the query string', () => {
@@ -9,7 +10,7 @@ describe('filter state', () => {
     expect(f).toEqual({ key: 'B', priority: 'high', complexity: 'low', release: '1.1', under: 'A20', state: 'open', sort: 'priority' });
     const q = new URLSearchParams();
     for (const [k, v] of Object.entries(filterChanges(f))) if (v) q.set(k, v);
-    expect(parseFilter(q)).toEqual(f);
+    expect(parseFilter(q, scale)).toEqual(f);
   });
 
   it('drops values outside the options', () => {
@@ -17,12 +18,28 @@ describe('filter state', () => {
     expect(f).toEqual({ key: '', priority: '', complexity: '', release: '', under: '', state: '', sort: '' });
   });
 
+  it('takes the tiers and levels the server lists', () => {
+    const wider = { priorities: ['urgent', ...scale.priorities], levels: ['epic', ...scale.levels] };
+    expect(parse('priority=urgent&complexity=epic', wider)).toMatchObject({ priority: 'urgent', complexity: 'epic' });
+    expect(parse('priority=urgent&complexity=epic')).toMatchObject({ priority: '', complexity: '' });
+    const rows = [
+      { id: 'B1', priority: 'critical' },
+      { id: 'B2', priority: 'urgent' },
+    ];
+    expect(sortRows(rows, 'priority', wider.priorities).map((r) => r.id)).toEqual(['B2', 'B1']);
+    expect(rows.filter((r) => applies(r, parse('priority=urgent', wider), [], wider.priorities)).map((r) => r.id)).toEqual(['B2']);
+  });
+
+  it('keeps a value from the address until the lists are read', () => {
+    expect(parse('priority=high&complexity=low', { priorities: [], levels: [] })).toMatchObject({ priority: 'high', complexity: 'low' });
+  });
+
   it('maps to the parameters /next and /search take', () => {
     const f = parse('key=b&priority=high&complexity=low&release=1.1&under=A20&state=open');
     expect(nextParams(f)).toEqual({ key: 'b', priority: 'high', complexity: 'low', under: 'A20' });
-    expect(searchParams(f)).toEqual({ key: 'b', state: 'open' });
-    expect(pagedParams(f)).toEqual({ release: '1.1' });
-    expect(pagedParams(parse(''))).toEqual({ release: undefined });
+    expect(searchParams(f)).toEqual({ key: 'b', state: 'open', under: 'A20' });
+    expect(pagedParams(f)).toEqual({ release: '1.1', under: 'A20' });
+    expect(pagedParams(parse(''))).toEqual({ release: undefined, under: undefined });
   });
 
   it('applies what the routes leave out to rows', () => {
@@ -31,11 +48,11 @@ describe('filter state', () => {
       { id: 'B2', priority: 'critical', complexity: 'high', state: 'done', theme: null },
     ];
     const releases = ['1.0', '1.1'];
-    expect(rows.filter((r) => applies(r, parse('priority=high'), releases)).map((r) => r.id)).toEqual(['B2']);
-    expect(rows.filter((r) => applies(r, parse('complexity=low'), releases)).map((r) => r.id)).toEqual(['B1']);
-    expect(rows.filter((r) => applies(r, parse('release=1.0'), releases)).map((r) => r.id)).toEqual(['B2']);
-    expect(rows.filter((r) => applies(r, parse('state=done&key=B'), releases)).map((r) => r.id)).toEqual(['B2']);
-    expect(rows.filter((r) => applies(r, parse('key=T'), releases))).toEqual([]);
+    expect(rows.filter((r) => applies(r, parse('priority=high'), releases, scale.priorities)).map((r) => r.id)).toEqual(['B2']);
+    expect(rows.filter((r) => applies(r, parse('complexity=low'), releases, scale.priorities)).map((r) => r.id)).toEqual(['B1']);
+    expect(rows.filter((r) => applies(r, parse('release=1.0'), releases, scale.priorities)).map((r) => r.id)).toEqual(['B2']);
+    expect(rows.filter((r) => applies(r, parse('state=done&key=B'), releases, scale.priorities)).map((r) => r.id)).toEqual(['B2']);
+    expect(rows.filter((r) => applies(r, parse('key=T'), releases, scale.priorities))).toEqual([]);
   });
 
   it('sorts by priority, then id', () => {
@@ -44,9 +61,9 @@ describe('filter state', () => {
       { id: 'B2', priority: 'high' },
       { id: 'B1', priority: 'low' },
     ];
-    expect(sortRows(rows, 'priority').map((r) => r.id)).toEqual(['B2', 'B1', 'B10']);
-    expect(sortRows(rows, 'id').map((r) => r.id)).toEqual(['B1', 'B2', 'B10']);
-    expect(sortRows(rows, '').map((r) => r.id)).toEqual(['B10', 'B2', 'B1']);
+    expect(sortRows(rows, 'priority', scale.priorities).map((r) => r.id)).toEqual(['B2', 'B1', 'B10']);
+    expect(sortRows(rows, 'id', scale.priorities).map((r) => r.id)).toEqual(['B1', 'B2', 'B10']);
+    expect(sortRows(rows, '', scale.priorities).map((r) => r.id)).toEqual(['B10', 'B2', 'B1']);
   });
 
   it('links a plan to the work still open under it', () => {

@@ -16,13 +16,12 @@ const WIDTH: usize = 160;
 /// Rows each block shows before it says how many more.
 const SHOWN: usize = 21;
 
-/// `{word: count}` from the ordered pairs the flow route answers with.
-fn counts(pairs: &Value) -> Vec<(String, u64)> {
-    pairs
-        .as_array()
+/// `(word, count)` pairs from the `{word: count}` map the status route answers with.
+fn counts(map: &Value) -> Vec<(String, u64)> {
+    map.as_object()
         .into_iter()
         .flatten()
-        .filter_map(|p| Some((p[0].as_str()?.to_string(), p[1].as_u64()?)))
+        .filter_map(|(w, n)| Some((w.clone(), n.as_u64()?)))
         .collect()
 }
 
@@ -42,8 +41,8 @@ pub struct Read {
 /// # Errors
 /// The project cannot be resolved, or the server refuses.
 pub fn status(ctx: &mut Ctx) -> Result<i32> {
-    let flow = ctx.read("/flow", &[])?;
-    let total = counts(&flow["by_word"]);
+    let status = ctx.read("/status", &[])?;
+    let total = counts(&status["by_word"]);
     let slug = ctx.project()?;
     let read = Read {
         total,
@@ -55,25 +54,9 @@ pub fn status(ctx: &mut Ctx) -> Result<i32> {
     if ctx.json {
         let mut out = json_status(&read);
         for k in ["project", "host", "total"] {
-            out[k] = flow[k].clone();
+            out[k] = status[k].clone();
         }
-        let by_key: serde_json::Map<String, Value> = flow["by_key"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .map(|p| {
-                (
-                    p[0].as_str().unwrap_or_default().to_string(),
-                    Value::Object(
-                        counts(&p[1])
-                            .into_iter()
-                            .map(|(w, n)| (w, n.into()))
-                            .collect(),
-                    ),
-                )
-            })
-            .collect();
-        out["by_key"] = Value::Object(by_key);
+        out["by_key"] = status["by_key"].clone();
         ctx.emit(&Py::from_value(&out));
         return Ok(0);
     }
@@ -378,6 +361,13 @@ fn problem_line(p: &Value) -> String {
             s("release"),
             s("by"),
             s("later")
+        ),
+        "abandoned" => format!(
+            "{} depends on {}, dropped with no successor: docket dep rm {} {}, or wait on what replaced it",
+            s("id"),
+            s("on"),
+            s("id"),
+            s("on")
         ),
         "held_gate" => format!(
             "{} is held although everything it opened is closed: docket resume {}",

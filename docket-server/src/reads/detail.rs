@@ -74,7 +74,8 @@ pub async fn log(
 const TIES: [(&str, &str); 7] = [
     (
         "holds",
-        "SELECT * FROM items WHERE wait_item=? AND state='open' ORDER BY rid",
+        "SELECT i.* FROM dependencies d JOIN items i ON i.rid=d.rid WHERE d.on_rid=? AND i.state='open' \
+         ORDER BY i.rid",
     ),
     (
         "related",
@@ -103,7 +104,11 @@ const TIES: [(&str, &str); 7] = [
          JOIN items i ON i.rid=l2.rid WHERE l1.rid=? AND l1.kind IN ('cites_file','cites_test') \
          GROUP BY i.rid ORDER BY shared DESC, i.rid DESC LIMIT 15",
     ),
-    ("waits_on", "SELECT * FROM items WHERE rid=?"),
+    (
+        "waits_on",
+        "SELECT i.* FROM dependencies d JOIN items i ON i.rid=d.on_rid WHERE d.rid=? \
+         ORDER BY d.created_at, d.on_rid",
+    ),
 ];
 
 /// `docket deps`: everything an item is tied to, both ways, by the tie.
@@ -120,10 +125,6 @@ pub async fn deps(
     let mut out = Map::new();
     for (tie, text) in TIES {
         let values: Vec<sea_orm::Value> = match tie {
-            "waits_on" => match r.wait_item {
-                Some(w) => vec![w.into()],
-                None => continue,
-            },
             "related" => vec![r.rid.into(), r.rid.into()],
             _ => vec![r.rid.into()],
         };
@@ -133,6 +134,9 @@ pub async fn deps(
             &[]
         };
         let found = rows_with(&db, text, values, extras).await?;
+        if tie == "waits_on" && found.is_empty() {
+            continue;
+        }
         out.insert(tie.into(), json!(shaped(&db, &project, found).await?));
     }
     if let Some(g) = &r.group_name {
@@ -207,7 +211,8 @@ pub async fn context(
     }
     let holds: Vec<String> = store::column(
         &db,
-        "SELECT id FROM items WHERE wait_item=? AND state='open' ORDER BY rid",
+        "SELECT i.id FROM dependencies d JOIN items i ON i.rid=d.rid WHERE d.on_rid=? AND i.state='open' \
+         ORDER BY i.rid",
         vec![r.rid.into()],
     )
     .await?;

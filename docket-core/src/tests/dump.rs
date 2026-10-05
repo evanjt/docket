@@ -35,6 +35,7 @@ fn full_item() -> ItemDump {
         tags: strings(&["high", "single"]),
         related: strings(&["T10", "CON1", "T9"]),
         opened: strings(&["PK2", "A1"]),
+        depends: Some(strings(&["Q2", "B3"])),
         opened_at: "2026-01-01T00:00:00Z".into(),
         updated_at: "2026-01-03T00:00:00Z".into(),
         body: "**Evidence.** `src/a.rs:3` \u{e9}t\u{e9}\n\n- a\n\n\n".into(),

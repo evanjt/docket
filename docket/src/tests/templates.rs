@@ -355,3 +355,75 @@ fn test_no_text_orders_the_queue_by_priority_alone() {
         );
     }
 }
+
+/// Where the word names a release of the project (the theme an item ships in), not the act of
+/// giving a claim back or freeing a waiter.
+const RELEASE_NOUN: [&str; 29] = [
+    "--release",
+    "skills releases",
+    "the releases",
+    "releases fact",
+    "releases in order",
+    "current release",
+    "current-release",
+    "later release",
+    "next release",
+    "a release",
+    "the release",
+    "each release",
+    "its release",
+    "one release",
+    "this release",
+    "by release",
+    "in release",
+    "then release",
+    "release, then",
+    "release first",
+    "release work",
+    "release never",
+    "that release",
+    "'s release",
+    "<release>",
+    "release of",
+    "release and",
+    "release order",
+    "**release.**",
+];
+
+fn release_verbs(text: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for line in text.lines() {
+        let mut lower = line.to_lowercase();
+        for noun in RELEASE_NOUN {
+            lower = lower.replace(noun, "");
+        }
+        if lower.contains("releas") {
+            found.push(line.trim().to_string());
+        }
+    }
+    found
+}
+
+#[test]
+fn test_no_skill_or_brief_says_release_for_giving_a_claim_back_or_freeing_a_waiter() {
+    let mut all = texts();
+    for (name, text) in crate::job::BRIEFS {
+        all.push((format!("job/{name}.md"), text));
+    }
+    let mut found = Vec::new();
+    for (name, text) in all {
+        for line in release_verbs(text) {
+            found.push(format!("{name}: {line}"));
+        }
+    }
+    assert!(found.is_empty(), "{}", found.join("\n"));
+}
+
+#[test]
+fn test_no_lead_variant_merges_with_a_message_naming_the_branch() {
+    let lead = SKILLS.iter().find(|s| s.name == "lead").unwrap();
+    for text in [lead.claude, lead.codex] {
+        assert!(!text.contains("--no-edit"));
+        assert!(text.contains("merge --no-ff -m \"Merge <the job's commit subject>\""));
+    }
+}

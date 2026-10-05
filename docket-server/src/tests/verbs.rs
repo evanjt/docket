@@ -132,6 +132,31 @@ impl Scratch {
         events.as_array().unwrap().clone()
     }
 
+    /// The item's assignment rows, oldest first.
+    async fn assignments(&self, id: &str) -> Vec<Value> {
+        let filter = format!("{{\"project\":\"{SLUG}\",\"id\":\"{id}\"}}");
+        let (_, items) = self
+            .send(
+                Method::GET,
+                &format!("/items?filter={}", urlencode(&filter)),
+                "ownerkey",
+                None,
+            )
+            .await;
+        let rid = items[0]["rid"].as_i64().unwrap();
+        let filter = format!("{{\"rid\":{rid}}}");
+        let (status, rows) = self
+            .send(
+                Method::GET,
+                &format!("/assignments?filter={}&sort=id", urlencode(&filter)),
+                "ownerkey",
+                None,
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "assignments of {id}: {rows}");
+        rows.as_array().unwrap().clone()
+    }
+
     async fn open(&self, key: &str, title: &str) -> Value {
         self.ok("new", json!({ "key": key, "title": title })).await
     }
@@ -517,25 +542,189 @@ async fn test_drop_and_reopen() {
 }
 
 #[tokio::test]
-async fn test_wait_until_condition_and_resume() {
+async fn test_a_wait_until_a_condition_depends_on_a_task_for_the_owner() {
     let s = Scratch::new().await;
     s.open("B", "Wide rename").await;
     s.ok("wait", json!({ "id": "B1", "until": "the fleet is quiet" }))
         .await;
-    assert_eq!(s.item("B1").await["wait_ref"], "the fleet is quiet");
+    let task = s.item("T1").await;
+    assert_eq!(task["title"], "the fleet is quiet");
+    assert_eq!(task["turn"], "user");
+    assert_eq!(task["related"], json!(["B1"]));
+    assert_eq!(s.item("B1").await["wait_ref"], "T1");
     assert_eq!(
         s.refused("start", json!({ "id": "B1" })).await,
         format!(
-            "B1 is waiting on the fleet is quiet since {}. resume it first.",
+            "B1 is waiting on item T1 since {}. resume it first.",
             s.item("B1").await["wait_since"].as_str().unwrap()
         )
     );
-    s.ok("resume", json!({ "id": "B1" })).await;
+    s.ok("close", json!({ "id": "T1", "resolution": "it is quiet" }))
+        .await;
     assert_eq!(s.word("B1").await, "ready");
     assert_eq!(
         s.refused("wait", json!({ "id": "B1" })).await,
         "wait takes exactly one of --on ID or --until \"condition\"."
     );
+}
+
+#[tokio::test]
+async fn test_resume_clears_a_wait_and_the_dependencies_still_holding_it() {
+    let s = Scratch::new().await;
+    s.open("B", "Wide rename").await;
+    s.open("B", "Narrow rename").await;
+    s.ok("wait", json!({ "id": "B1", "on": "B2" })).await;
+    s.ok("resume", json!({ "id": "B1" })).await;
+    assert_eq!(s.word("B1").await, "ready");
+    s.ok("close", json!({ "id": "B2", "resolution": "abc1234" }))
+        .await;
+    assert_eq!(s.word("B1").await, "ready");
+    assert_eq!(
+        s.events("B1").await.last().unwrap()["note"],
+        "no longer depends on B2"
+    );
+}
+
+#[tokio::test]
+async fn test_an_item_on_two_dependencies_waits_until_both_are_satisfied() {
+    let s = Scratch::new().await;
+    s.open("T", "Glaze the bowls").await;
+    s.open("T", "Fire the kiln").await;
+    s.open("Q", "Which glaze").await;
+    s.ok("wait", json!({ "id": "T1", "on": "T2" })).await;
+    s.ok("dep", json!({ "id": "T1", "on": ["Q1"] })).await;
+    s.ok("close", json!({ "id": "T2", "resolution": "abc1234" }))
+        .await;
+    assert_eq!(s.word("T1").await, "blocked");
+    assert_eq!(s.item("T1").await["wait_ref"], "Q1");
+    let out = s
+        .ok("answer", json!({ "id": "Q1", "decision": "celadon" }))
+        .await;
+    assert_eq!(ids(&out["released"]), vec!["T1"]);
+    assert_eq!(s.word("T1").await, "ready");
+    assert_eq!(s.item("T1").await["turn"], "agent");
+}
+
+#[tokio::test]
+async fn test_a_dependency_that_closes_a_cycle_is_refused_with_its_path() {
+    let s = Scratch::new().await;
+    for title in ["Throw", "Trim", "Fire"] {
+        s.open("T", title).await;
+    }
+    s.ok("dep", json!({ "id": "T1", "on": ["T2"] })).await;
+    s.ok("dep", json!({ "id": "T2", "on": ["T3"] })).await;
+    assert_eq!(
+        s.refused("dep", json!({ "id": "T3", "on": ["T1"] })).await,
+        "T3 cannot depend on T1, which would close the cycle T1 -> T2 -> T3 -> T1."
+    );
+    assert_eq!(s.word("T3").await, "ready");
+    assert_eq!(
+        s.refused("dep", json!({ "id": "T3", "on": ["T3"] })).await,
+        "T3 cannot depend on itself."
+    );
+}
+
+#[tokio::test]
+async fn test_dropping_a_dependency_asks_the_owner_and_closing_one_resumes_the_agent() {
+    let s = Scratch::new().await;
+    s.open("T", "Order clay").await;
+    s.open("T", "Throw the mugs").await;
+    s.open("T", "Order porcelain").await;
+    s.open("T", "Throw the cups").await;
+    s.ok("wait", json!({ "id": "T2", "on": "T1" })).await;
+    s.ok("wait", json!({ "id": "T4", "on": "T3" })).await;
+    let out = s
+        .ok("drop", json!({ "id": "T1", "why": "the supplier closed" }))
+        .await;
+    assert_eq!(ids(&out["released"]), vec!["T2"]);
+    let waiter = s.item("T2").await;
+    assert_eq!(waiter["turn"], "user");
+    assert_eq!(
+        waiter["turn_note"],
+        "T1, which this waited on, was dropped. Still wanted?"
+    );
+    assert_eq!(waiter["wait_on"], Value::Null);
+    s.ok("close", json!({ "id": "T3", "resolution": "abc1234" }))
+        .await;
+    s.open("Q", "Which kiln").await;
+    s.open("I", "Measure the kiln").await;
+    s.ok("wait", json!({ "id": "Q1", "on": "I1" })).await;
+    s.ok(
+        "close",
+        json!({ "id": "I1", "resolution": "it reaches cone 10" }),
+    )
+    .await;
+    assert_eq!(s.item("Q1").await["turn"], "agent");
+    let waiter = s.item("T4").await;
+    assert_eq!(
+        (waiter["turn"].as_str(), s.word("T4").await.as_str()),
+        (Some("agent"), "ready")
+    );
+}
+
+#[tokio::test]
+async fn test_a_dependency_dropped_for_a_successor_holds_until_the_successor_closes() {
+    let s = Scratch::new().await;
+    s.open("T", "Old kiln wiring").await;
+    s.open("T", "Fire the bisque").await;
+    s.open("T", "New kiln wiring").await;
+    s.ok("wait", json!({ "id": "T2", "on": "T1" })).await;
+    s.ok("drop", json!({ "id": "T1", "superseded_by": "T3" }))
+        .await;
+    assert_eq!(s.word("T2").await, "blocked");
+    assert_eq!(s.item("T2").await["wait_ref"], "T3");
+    assert_eq!(s.item("T2").await["turn"], "agent");
+    s.ok("close", json!({ "id": "T3", "resolution": "abc1234" }))
+        .await;
+    assert_eq!(s.word("T2").await, "ready");
+}
+
+#[tokio::test]
+async fn test_removing_the_last_dependency_resumes_and_a_reopened_one_holds_again() {
+    let s = Scratch::new().await;
+    s.open("T", "Mix the slip").await;
+    s.open("T", "Cast the jugs").await;
+    s.ok("dep", json!({ "id": "T2", "on": ["T1"] })).await;
+    assert_eq!(
+        s.refused("dep", json!({ "id": "T1", "on": ["T2"], "remove": true }))
+            .await,
+        "T1 does not depend on T2."
+    );
+    s.ok("dep", json!({ "id": "T2", "on": ["T1"], "remove": true }))
+        .await;
+    assert_eq!(s.word("T2").await, "ready");
+    s.ok("dep", json!({ "id": "T2", "on": ["T1"] })).await;
+    s.ok("close", json!({ "id": "T1", "resolution": "abc1234" }))
+        .await;
+    assert_eq!(s.word("T2").await, "ready");
+    s.ok("reopen", json!({ "id": "T1", "why": "the slip split" }))
+        .await;
+    assert_eq!(s.word("T2").await, "blocked");
+    assert_eq!(
+        s.refused("dep", json!({ "id": "T2", "on": ["T1"] })).await,
+        "T2 already depends on T1."
+    );
+    s.open("T", "Glaze the jugs").await;
+    assert_eq!(
+        s.refused("dep", json!({ "id": "T3", "on": ["T1", "T1"] }))
+            .await,
+        "T3 already depends on T1."
+    );
+}
+
+#[tokio::test]
+async fn test_resuming_a_gated_plan_is_refused_while_a_member_is_open() {
+    let s = Scratch::new().await;
+    plan(&s).await;
+    s.open("B", "Port the proofer").await;
+    s.ok("link", json!({ "a": ["B1"], "kind": "opened", "b": "A1" }))
+        .await;
+    assert_eq!(
+        s.refused("resume", json!({ "id": "A1" })).await,
+        format!("A1 waits until {GATE}, and B1 is open. Close it first, or pass --force.")
+    );
+    s.ok("resume", json!({ "id": "A1", "force": true })).await;
+    assert_eq!(s.item("A1").await["wait_on"], Value::Null);
 }
 
 #[tokio::test]
@@ -569,7 +758,18 @@ async fn test_edit_fields_and_body() {
             json!({ "id": "B1", "set": [{ "field": "state", "value": "done" }] })
         )
         .await,
-        "state is not editable; fields are title, complexity, theme, group, tags, turn_note. State and turn move with their own verbs."
+        "state is not editable; fields are title, complexity, theme, group, tags, turn_note. State and turn move with their own verbs. Also priority: docket priority, release: --set theme=<release>."
+    );
+    let refused = s
+        .refused(
+            "edit",
+            json!({ "id": "B1", "set": [{ "field": "priority", "value": "high" }] }),
+        )
+        .await;
+    assert!(refused.contains("priority: docket priority"), "{refused}");
+    assert!(
+        refused.contains("release: --set theme=<release>"),
+        "{refused}"
     );
     s.ok("edit", json!({ "id": "B1", "append": "a dated note" }))
         .await;
@@ -736,7 +936,7 @@ async fn test_start_records_the_runner_and_job() {
         .unwrap();
     assert_eq!(
         claimed["data"],
-        json!({"model": "gpt-5.4", "role": "build", "runner": "codex"})
+        json!({"job": "pk2-s1", "machine": "devbox", "model": "gpt-5.4", "role": "build", "runner": "codex"})
     );
     s.ok("release", json!({ "id": "B1" })).await;
     assert_eq!(s.item("B1").await["claim_on"], Value::Null);
@@ -858,7 +1058,7 @@ async fn test_a_plans_ticket_is_claimed_and_closed_on_its_own_branch() {
         )
         .await,
         format!(
-            "B1 is held by audit/b1-1 on testbox since {}. close would take it out from under that agent. Merge or release the branch first, or pass --force.",
+            "B1 is held by audit/b1-1 on testbox since {}. close would take it out from under that agent. Merge or unclaim the branch first, or pass --force.",
             s.item("B1").await["claim_since"].as_str().unwrap()
         )
     );
@@ -882,7 +1082,7 @@ async fn test_an_audit_that_finds_work_goes_back_to_waiting() {
     assert_eq!(
         s.refused("close", json!({ "id": "A1", "resolution": "clean" }))
             .await,
-        "A1 opened work that is still open: B1. It closes only when nothing it opened is open; release it and it comes back when they close."
+        "A1 opened work that is still open: B1. It closes only when nothing it opened is open; unclaim it and it comes back when they close."
     );
     s.ok("release", json!({ "id": "A1" })).await;
     assert_eq!(s.word("A1").await, "blocked");
@@ -1366,4 +1566,227 @@ async fn test_linking_a_waiter_under_the_plan_it_waits_on_is_refused() {
         .await;
     assert!(said.contains("would wait forever"), "{said}");
     assert_eq!(s.item("B1").await["opened"], json!([]));
+}
+
+#[tokio::test]
+async fn test_an_unclaim_stores_its_outcome_and_who_gave_it_back() {
+    let s = Scratch::new().await;
+    s.open("B", "Kettle trips the fuse").await;
+    let (status, _) = s
+        .post_as(
+            "agentkey",
+            "start",
+            json!({ "id": "B1", "runner": "claude", "job": "b1-j", "on": "devbox", "model": "m-small", "effort": "low", "role": "build" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let open = s.assignments("B1").await;
+    assert_eq!(open.len(), 1, "{open:?}");
+    assert_eq!(open[0]["ended_at"], Value::Null);
+    assert_eq!(
+        (&open[0]["kind"], &open[0]["assignee"], &open[0]["actor"]),
+        (&json!("claim"), &json!("agent"), &json!("agent"))
+    );
+    assert_eq!(
+        (&open[0]["job"], &open[0]["machine"], &open[0]["effort"]),
+        (&json!("b1-j"), &json!("devbox"), &json!("low"))
+    );
+    assert_eq!(
+        s.status("release", json!({ "id": "B1", "outcome": "sideways" }))
+            .await,
+        StatusCode::BAD_REQUEST
+    );
+    s.ok(
+        "release",
+        json!({ "id": "B1", "outcome": "conflict", "note": "the branch did not merge" }),
+    )
+    .await;
+    let rows = s.assignments("B1").await;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["outcome"], "conflict");
+    assert_eq!(rows[0]["actor"], "owner");
+    assert_eq!(rows[0]["note"], "the branch did not merge");
+    assert_ne!(rows[0]["ended_at"], Value::Null);
+}
+
+#[tokio::test]
+async fn test_a_job_report_stores_its_tokens_and_cost_on_the_open_attempt() {
+    let s = Scratch::new().await;
+    s.open("B", "Kettle trips the fuse").await;
+    s.ok(
+        "start",
+        json!({ "id": "B1", "runner": "claude", "job": "b1-j" }),
+    )
+    .await;
+    s.ok(
+        "job-report",
+        json!({ "id": "B1", "start": "2026-10-05T10:00:00Z", "end": "2026-10-05T10:20:00Z",
+                "exit": 0, "tokens_in": 120, "tokens_out": 45, "cost_reported": 0.5 }),
+    )
+    .await;
+    let rows = s.assignments("B1").await;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["ended_at"], Value::Null);
+    assert_eq!(
+        (
+            &rows[0]["tokens_in"],
+            &rows[0]["tokens_out"],
+            &rows[0]["cost_reported"]
+        ),
+        (&json!(120), &json!(45), &json!(0.5))
+    );
+    s.ok("close", json!({ "id": "B1", "resolution": "abc1234" }))
+        .await;
+    assert_eq!(s.assignments("B1").await[0]["tokens_out"], json!(45));
+}
+
+#[tokio::test]
+async fn test_a_holder_that_waits_ends_its_attempt_blocked_and_a_close_lands_the_next() {
+    let s = Scratch::new().await;
+    s.open("B", "Kettle trips the fuse").await;
+    s.open("Q", "Which fuse rating").await;
+    s.ok("start", json!({ "id": "B1" })).await;
+    s.ok("wait", json!({ "id": "B1", "on": "Q1" })).await;
+    let rows = s.assignments("B1").await;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["outcome"], "blocked");
+    s.ok("answer", json!({ "id": "Q1", "decision": "thirteen amps" }))
+        .await;
+    s.ok("start", json!({ "id": "B1" })).await;
+    s.ok("close", json!({ "id": "B1", "resolution": "abc1234" }))
+        .await;
+    let outcomes: Vec<Value> = s
+        .assignments("B1")
+        .await
+        .iter()
+        .map(|a| a["outcome"].clone())
+        .collect();
+    assert_eq!(outcomes, [json!("blocked"), json!("landed")]);
+}
+
+#[tokio::test]
+async fn test_an_ask_assigns_the_owner_until_the_reply() {
+    let s = Scratch::new().await;
+    s.open("B", "Kettle trips the fuse").await;
+    s.ok("start", json!({ "id": "B1" })).await;
+    s.ok(
+        "ask",
+        json!({ "id": "B1", "note": "plug it in at the bench" }),
+    )
+    .await;
+    let rows = s.assignments("B1").await;
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert_eq!(rows[0]["outcome"], "blocked");
+    assert_eq!(
+        (&rows[1]["kind"], &rows[1]["assignee"], &rows[1]["note"]),
+        (
+            &json!("ask"),
+            &json!("owner"),
+            &json!("plug it in at the bench")
+        )
+    );
+    assert_eq!(rows[1]["ended_at"], Value::Null);
+    s.ok("reply", json!({ "id": "B1", "note": "it trips at once" }))
+        .await;
+    let rows = s.assignments("B1").await;
+    assert_ne!(rows[1]["ended_at"], Value::Null);
+    assert_eq!(rows[1]["outcome"], Value::Null);
+}
+
+async fn asked(s: &Scratch, key: &str, title: &str, extra: Value) -> String {
+    let id = s.open(key, title).await["item"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    s.ok("start", json!({ "id": id })).await;
+    let mut body = json!({ "id": id, "note": "needs a hand" });
+    body.as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().cloned().unwrap_or_default());
+    s.ok("ask", body).await;
+    id
+}
+
+#[tokio::test]
+async fn test_an_ask_past_the_owner_limit_is_refused_naming_the_limit() {
+    let s = Scratch::new().await;
+    s.db.seed(&format!(
+        "UPDATE projects SET skills = '{{\"owner_limit\": \"2\"}}' WHERE slug = '{SLUG}'"
+    ))
+    .await;
+    asked(&s, "B", "Kettle trips the fuse", json!({})).await;
+    asked(&s, "B", "Toaster hums", json!({})).await;
+    let third = s.open("B", "Fan rattles").await["item"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    s.ok("start", json!({ "id": third })).await;
+    let why = s
+        .refused("ask", json!({ "id": third, "note": "needs a hand" }))
+        .await;
+    assert!(why.contains("owner_limit"), "{why}");
+    let why = s
+        .refused("new", json!({ "key": "Q", "title": "Which fan" }))
+        .await;
+    assert!(why.contains("owner_limit"), "{why}");
+}
+
+#[tokio::test]
+async fn test_an_ask_keeps_its_need_and_the_owner_queue_groups_by_it() {
+    let s = Scratch::new().await;
+    let act = asked(&s, "B", "Run the migration", json!({ "need": "act" })).await;
+    let hold = asked(&s, "B", "Plug in the meter", json!({ "need": "hold" })).await;
+    let rows = s.assignments(&hold).await;
+    assert_eq!(rows.last().unwrap()["need"], "hold");
+    let (_, todo) = s
+        .send(
+            Method::GET,
+            &format!("/todo?project={SLUG}"),
+            "ownerkey",
+            None,
+        )
+        .await;
+    let listed: Vec<(&str, &str)> = todo
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            (
+                r["id"].as_str().unwrap(),
+                r["owner_group"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(listed, [(hold.as_str(), "hold"), (act.as_str(), "act")]);
+    let why = s
+        .refused("ask", json!({ "id": hold, "note": "x", "need": "sing" }))
+        .await;
+    assert!(why.contains("hold"), "{why}");
+}
+
+#[tokio::test]
+async fn test_a_derived_answer_lists_first_in_the_owner_queue_until_it_is_confirmed() {
+    let s = Scratch::new().await;
+    s.open("Q", "One cache or two").await;
+    s.open("Q", "Which colour for the alert").await;
+    s.ok(
+        "answer",
+        json!({ "id": "Q2", "decision": "Two", "derived": "CID3, one owner per cache" }),
+    )
+    .await;
+    let todo = async || {
+        let (_, rows) = s
+            .send(
+                Method::GET,
+                &format!("/todo?project={SLUG}"),
+                "ownerkey",
+                None,
+            )
+            .await;
+        ids(&rows)
+    };
+    assert_eq!(todo().await, ["Q2", "Q1"]);
+    s.ok("answer", json!({ "id": "Q2", "decision": "Two" }))
+        .await;
+    assert_eq!(todo().await, ["Q1"]);
 }

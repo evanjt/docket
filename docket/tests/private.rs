@@ -264,3 +264,21 @@ fn test_a_range_checks_every_commits_message_and_changes() {
         text(&newest)
     );
 }
+
+#[test]
+fn test_a_branch_name_with_an_item_id_in_a_message_is_found() {
+    let c = Checkout::new();
+    let commit = "git -c user.name=t -c user.email=t@example.org commit -qm";
+    c.write("a.rs", "fn main() {}\n");
+    sh(
+        &c.repo,
+        &format!("git add -A && {commit} \"Merge branch 'lead/t14-123' into lead/batch\""),
+    );
+    let range = c.check(&["--range", "main"]);
+    assert_eq!(range.status.code(), Some(1), "{}", text(&range));
+    assert!(text(&range).contains("t14"), "{}", text(&range));
+    c.write("msg", "Merge branch 'lead/t14-123' into lead/batch\n");
+    let msg = c.check(&["--message", "msg"]);
+    assert_eq!(msg.status.code(), Some(1), "{}", text(&msg));
+    assert!(text(&msg).contains("t14"), "{}", text(&msg));
+}

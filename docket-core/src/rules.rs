@@ -87,7 +87,7 @@ pub fn require_hold(row: &Item, ctx: &Ctx, verb: &str) -> Result<(), Refused> {
         return Ok(());
     }
     Err(Refused(format!(
-        "{} is held by {} on {} since {}. {verb} would take it out from under that agent. Merge or release the branch first, or pass --force.",
+        "{} is held by {} on {} since {}. {verb} would take it out from under that agent. Merge or unclaim the branch first, or pass --force.",
         row.id,
         opt(row.claim_branch.as_ref()),
         opt(row.claim_host.as_ref()),
@@ -174,11 +174,11 @@ pub fn start(row: &Item, ctx: &Ctx) -> Result<Vec<Field>, Refused> {
 /// # Errors
 /// Refused when the item is not open, not claimed, or held elsewhere.
 pub fn release(row: &Item, ctx: &Ctx) -> Result<Vec<Field>, Refused> {
-    require_open(row, "release")?;
+    require_open(row, "unclaim")?;
     if row.claim_branch.is_none() {
         return Err(Refused(format!("{} is not claimed.", row.id)));
     }
-    require_hold(row, ctx, "release")?;
+    require_hold(row, ctx, "unclaim")?;
     Ok(unclaimed())
 }
 
@@ -240,7 +240,7 @@ pub fn close_plan(row: &Item, open_under: &[String], due: bool) -> Result<(), Re
     let shown: Vec<&str> = open_under.iter().take(10).map(String::as_str).collect();
     let more = if open_under.len() > 10 { " ..." } else { "" };
     Err(Refused(format!(
-        "{} opened work that is still open: {}{more}. It closes only when nothing it opened is open; release it and it comes back when they close.",
+        "{} opened work that is still open: {}{more}. It closes only when nothing it opened is open; unclaim it and it comes back when they close.",
         row.id,
         shown.join(", ")
     )))
@@ -315,44 +315,45 @@ pub fn reopen(row: &Item, why: Option<&str>, turn: &str) -> Result<Vec<Field>, R
     ])
 }
 
+/// An item may depend on any number of others, never on itself.
+///
 /// # Errors
-/// Refused when the item is not open, held elsewhere, waiting already, or would wait on itself.
-pub fn wait(
-    row: &Item,
-    ctx: &Ctx,
-    on: &str,
-    target_rid: Option<i64>,
-    reference: &str,
-) -> Result<Vec<Field>, Refused> {
+/// Refused when the item is not open, held elsewhere, or would depend on itself.
+pub fn depend(row: &Item, ctx: &Ctx, on_rid: i64) -> Result<(), Refused> {
     require_open(row, "wait")?;
     require_hold(row, ctx, "wait")?;
-    if row.wait_on.is_some() {
-        return Err(Refused(format!(
-            "{} already waits on {} since {}. resume it first.",
-            row.id,
-            opt(row.wait_ref.as_ref()),
-            opt(row.wait_since.as_ref())
-        )));
+    if on_rid == row.rid {
+        return Err(Refused(format!("{} cannot depend on itself.", row.id)));
     }
-    if on == "item" && target_rid == Some(row.rid) {
-        return Err(Refused(format!("{} cannot wait on itself.", row.id)));
-    }
-    let mut out = vec![
-        Field::WaitOn(Some(on.to_string())),
-        Field::WaitItem(target_rid),
-        Field::WaitRef(Some(reference.to_string())),
-        Field::WaitSince(Some(ctx.now.clone())),
-    ];
-    out.extend(unclaimed());
-    Ok(out)
+    Ok(())
 }
 
+/// A plan's gate opens by hand only once nothing it opened is open, or by force: `open_members` are
+/// the ids of the open items under it.
+///
 /// # Errors
-/// Refused when the item is not open or not waiting.
-pub fn resume(row: &Item) -> Result<Vec<Field>, Refused> {
+/// Refused when the item is not open or not waiting, or is a gated plan with open members and force
+/// is not given.
+pub fn resume(row: &Item, open_members: &[String], force: bool) -> Result<Vec<Field>, Refused> {
     require_open(row, "resume")?;
     if row.wait_on.is_none() {
         return Err(Refused(format!("{} is not waiting.", row.id)));
+    }
+    let gated =
+        row.wait_on.as_deref() == Some("condition") && row.wait_ref.as_deref() == Some(GATE);
+    if gated && !open_members.is_empty() && !force {
+        let shown: Vec<&str> = open_members.iter().take(10).map(String::as_str).collect();
+        let more = if open_members.len() > 10 { " ..." } else { "" };
+        let (verb, them) = if open_members.len() == 1 {
+            ("is", "it")
+        } else {
+            ("are", "them")
+        };
+        return Err(Refused(format!(
+            "{} waits until {GATE}, and {}{more} {verb} open. Close {them} first, or pass --force.",
+            row.id,
+            shown.join(", ")
+        )));
     }
     let mut out = unwaiting();
     out.push(Field::Turn(Some("agent".to_string())));

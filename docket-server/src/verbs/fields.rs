@@ -13,7 +13,8 @@ use docket_core::word::Kind;
 
 use crate::auth::Caller;
 use crate::verbs::graph::{
-    held_wait, keys_of, refuse_later, refuse_later_after_theme, release_list, settle_audits,
+    holds_of, keys_of, refuse_later, refuse_later_after_theme, release_list, settle_audits,
+    standing,
 };
 use crate::verbs::view::{item_view, item_views};
 use crate::verbs::{Call, Failure};
@@ -147,7 +148,7 @@ pub async fn edit(
 fn set_field(r: &Item, k: &str, v: &str) -> Result<Field, Failure> {
     if !EDITABLE.contains(&k) {
         return Err(Failure::Refused(format!(
-            "{k} is not editable; fields are {}. State and turn move with their own verbs.",
+            "{k} is not editable; fields are {}. State and turn move with their own verbs. Also priority: docket priority, release: --set theme=<release>.",
             EDITABLE.join(", ")
         )));
     }
@@ -224,9 +225,21 @@ pub async fn link(
             .event(&call.slug, Some(a.rid), "edited", Some(&note), None, None)
             .await?;
     }
-    if req.kind == "opened" && !req.remove {
-        if let Some(refused) = held_wait(&call.tx.conn, &call.project).await? {
-            return Err(refused);
+    if req.kind == "opened" && !req.remove && b.state == "open" {
+        let st = standing(&call.tx.conn, &call.slug).await?;
+        let holds = holds_of(&call.tx.conn, &call.project, &st).await?;
+        for a in many.iter().filter(|a| a.state == "open") {
+            if let Some(path) = docket_core::stall::path(&holds, a.rid, b.rid) {
+                let mut around = vec![b.rid];
+                around.extend(&path[..path.len() - 1]);
+                return Err(Failure::Refused(format!(
+                    "{} cannot hold {}, which would close the cycle {}, so {} would wait forever. Remove a dependency on it first.",
+                    b.id,
+                    a.id,
+                    st.cycle(&around),
+                    a.id
+                )));
+            }
         }
     }
     if req.kind == "opened" {

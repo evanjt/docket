@@ -122,9 +122,27 @@ fn test_claude_final_is_the_longest_result_and_tokens_sum() {
             last: Some("NOTE n\nDONE abcdef1".into()),
             tokens: Some(7),
             error: None,
+            ..Read::default()
         }
     );
     assert_eq!(read_events("claude", ""), Read::default());
+}
+
+#[test]
+fn test_input_and_output_tokens_and_the_reported_cost_sum_over_results() {
+    let events = [
+        r#"{"type":"result","result":"a","total_cost_usd":0.25,"usage":{"input_tokens":10,"output_tokens":2}}"#,
+        r#"{"type":"result","result":"b","total_cost_usd":0.5,"usage":{"input_tokens":4,"output_tokens":5}}"#,
+    ]
+    .join("\n");
+    let read = read_events("claude", &events);
+    assert_eq!(
+        (read.tokens_in, read.tokens, read.cost),
+        (Some(14), Some(7), Some(0.75))
+    );
+    let codex = r#"{"type":"turn.completed","usage":{"input_tokens":9,"output_tokens":3}}"#;
+    let read = read_events("codex", codex);
+    assert_eq!((read.tokens_in, read.cost), (Some(9), None));
 }
 
 #[test]

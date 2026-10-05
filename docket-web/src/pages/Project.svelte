@@ -28,6 +28,8 @@
   const questions = resource(() => api.list('questions', slug));
   const facts = resource(() => api.facts(slug));
   const releases = $derived(facts.data?.project === slug ? releaseList(facts.data.skills) : []);
+  const priorities = $derived(facts.data?.project === slug ? facts.data.priorities : []);
+  const levels = $derived(facts.data?.project === slug ? facts.data.levels : []);
   const b = $derived(graph.data?.project === slug ? board(graph.data) : undefined);
   const yours = $derived(new Set([...(todo.data ?? []), ...(questions.data ?? [])].map((r) => r.id)).size);
   const open = $derived(at.params.get('i'));
@@ -44,6 +46,12 @@
     },
     get releases() {
       return releases;
+    },
+    get priorities() {
+      return priorities;
+    },
+    get levels() {
+      return levels;
     },
     item(id: string) {
       const q = new URLSearchParams(at.params);

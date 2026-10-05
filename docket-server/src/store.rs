@@ -1,6 +1,7 @@
 //! One write's transaction: the rows, their events and links, the index and the dump mark.
 
 use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 
 use sea_orm::{
@@ -10,10 +11,11 @@ use sea_orm::{
 use serde_json::Value as Json;
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
-use docket_core::clock;
 use docket_core::item::{Field, Item, KeySpec, Project, Refused};
 use docket_core::pyjson;
 use docket_core::text::{citations, split_id};
+use docket_core::{assignment, clock};
+use docket_migration::assignments;
 
 use crate::changes::CHANNEL;
 use crate::entities::{item, project};
@@ -87,6 +89,11 @@ pub fn project_row(m: project::Model) -> ProjectRow {
 /// The advisory lock every write transaction holds, so writes commit one at a time and their events
 /// become visible in `seq` order.
 pub(crate) const WRITES: i64 = 0x0064_6f63_6b65_7401;
+
+/// Events written by this process. A uid carries the count after its moment, so a log ordered by
+/// `(at, uid)` keeps the order events were written in within one second, and the rows rebuilt from
+/// it, such as assignments, come out as they were written.
+static WRITTEN: AtomicU64 = AtomicU64::new(0);
 
 /// A statement for text written with `?` marks.
 pub fn sql(text: &str, values: Vec<Value>) -> Statement {
@@ -256,6 +263,8 @@ pub struct Tx {
     pub conn: DatabaseTransaction,
     pub host: String,
     pub now: String,
+    /// Whose key the writes are made with, owner or agent, recorded on the assignment rows they move.
+    pub actor: Option<String>,
     touched: BTreeSet<i64>,
     touched_projects: BTreeSet<String>,
     _queue: OwnedMutexGuard<()>,
@@ -275,6 +284,7 @@ impl Tx {
             conn: tx,
             host: host.to_string(),
             now: clock::now(),
+            actor: None,
             touched: BTreeSet::new(),
             touched_projects: BTreeSet::new(),
             _queue: queue,
@@ -444,12 +454,12 @@ impl Tx {
         branch: Option<&str>,
         data: Option<&Json>,
     ) -> Result<(), DbErr> {
-        let data = data
-            .filter(|d| d.as_object().is_some_and(|m| !m.is_empty()))
-            .map_or(Value::Json(None), |d| json(d.clone()));
+        let given = data.filter(|d| d.as_object().is_some_and(|m| !m.is_empty()));
+        let data = given.map_or(Value::Json(None), |d| json(d.clone()));
         let uid = format!(
-            "{}-{}-{:06x}",
+            "{}-{:012}-{}-{:06x}",
             self.now,
+            WRITTEN.fetch_add(1, Ordering::Relaxed),
             self.host,
             rand::random::<u32>() & 0x00ff_ffff
         );
@@ -469,6 +479,34 @@ impl Tx {
             ],
         )
         .await?;
+        if let Some(rid) = rid {
+            let e = assignment::Event {
+                kind: kind.to_string(),
+                at: self.now.clone(),
+                host: self.host.clone(),
+                branch: branch.map(str::to_string),
+                note: note.map(str::to_string),
+                data: given.cloned(),
+            };
+            self.assign(rid, &e).await?;
+        }
+        Ok(())
+    }
+
+    /// The item's assignment rows moved as the event says, in the event's transaction.
+    async fn assign(&self, rid: i64, e: &assignment::Event) -> Result<(), DbErr> {
+        let open = assignments::open(&self.conn, rid).await?;
+        let step = assignment::step(e, open.map(|(_, kind)| kind));
+        if let (Some(end), Some((id, _))) = (&step.end, open) {
+            assignments::end(&self.conn, id, &e.at, end, self.actor.as_deref()).await?;
+        }
+        if let (Some(u), Some((id, _))) = (&step.usage, open) {
+            assignments::report(&self.conn, id, u).await?;
+        }
+        if let Some(mut row) = step.open {
+            row.actor.clone_from(&self.actor);
+            assignments::insert(&self.conn, rid, &row).await?;
+        }
         Ok(())
     }
 

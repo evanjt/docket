@@ -12,7 +12,10 @@ scratch = ["dep:tokio"]
 [dependencies]
 sea-orm = { workspace = true }
 sea-orm-migration = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true, optional = true }
+
+docket-core = { path = "../docket-core" }
 
 [dev-dependencies]
 tokio = { workspace = true }

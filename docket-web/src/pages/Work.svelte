@@ -1,7 +1,7 @@
 <script lang="ts">
   import { api } from '../lib/api';
   import { project } from '../lib/context';
-  import { ASIDE, FLOW, PRIORITIES, byId } from '../lib/flow';
+  import { ASIDE, FLOW, byId } from '../lib/flow';
   import { resource } from '../lib/live.svelte';
   import { SORTS, applies, filterChanges, nextParams, pagedParams, parseFilter, searchParams, sortRows } from '../lib/filter';
   import { caption, countOf, pageSize, queueNodes, wordList } from '../lib/lists';
@@ -34,7 +34,7 @@
   const wordRoute = $derived(word ? wordList(word) : null);
   const list = $derived(q ? null : word ? wordRoute : (at.params.get('list') ?? 'next'));
   const selected = $derived(at.params.get('i'));
-  const filter = $derived(parseFilter(at.params));
+  const filter = $derived(parseFilter(at.params, ctx));
   const release = $derived(filter.release);
   const narrowed = $derived(Object.values({ ...filter, sort: '' }).some(Boolean));
 
@@ -47,7 +47,7 @@
 
   const fetched = resource<Shape[]>(() => {
     if (q) return api.search(ctx.slug, q, 200, searchParams(filter));
-    if (word && !wordRoute) return null;
+    if (word && !wordRoute) return filter.under ? api.list('under', ctx.slug, 5000, { under: filter.under }) : null;
     // With a filter chosen, the whole queue is read: next lists the earlier releases first.
     if (list === 'next') return api.next(ctx.slug, narrowed ? 5000 : Math.max(200, pageSize(more, false)), nextParams(filter));
     if (list === 'derived') {
@@ -55,7 +55,7 @@
         ds.map((d) => ({ id: d.id, title: d.title, word: d.state, turn_note: `${d.chose ?? ''} (from ${d.basis})` })),
       );
     }
-    return api.list(list ?? 'next', ctx.slug, pageSize(more, narrowed), list === 'done' || list === 'dropped' ? pagedParams(filter) : {}).then((rows) =>
+    return api.list(list ?? 'next', ctx.slug, pageSize(more, narrowed), list === 'groups' ? {} : pagedParams(filter)).then((rows) =>
       list === 'groups' ? rows.map((r) => ({ ...r, aside: r.group ?? '' })) : rows,
     );
   });
@@ -63,28 +63,14 @@
   /** A word no list route covers is read from the board, leaving out the plans and packages the Plans page shows. */
   const rows = $derived.by<Shape[]>(() => {
     if (word && !wordRoute) {
-      if (!ctx.board) return [];
+      if (!ctx.board || (filter.under && !fetched.data)) return [];
+      const held = filter.under ? new Set(fetched.data?.map((r) => r.id)) : null;
       return queueNodes(ctx.board, word)
+        .filter((n) => !held || held.has(n.id))
         .sort((a, b) => byId(a.id, b.id))
         .map((n) => ({ id: n.id, title: n.title, word: n.word, theme: n.theme }));
     }
     return fetched.data ?? [];
-  });
-
-  /** Every item below the plan, story or concept the filter names, for the lists the server does not narrow by it. */
-  const below = $derived.by(() => {
-    if (!filter.under || !ctx.board) return null;
-    const seen = new Set<string>();
-    const walk = (id: string) => {
-      for (const c of [...(ctx.board!.children.get(id) ?? []), ...(ctx.board!.related.get(id) ?? [])]) {
-        if (!seen.has(c)) {
-          seen.add(c);
-          walk(c);
-        }
-      }
-    };
-    walk(filter.under);
-    return seen;
   });
 
   /** The rows that pass the filter, each with its release when the project sets releases, in the sort chosen. */
@@ -93,15 +79,16 @@
       rows
         .map((r) => ({ ...r, theme: r.theme ?? ctx.board?.nodes.get(r.id)?.theme }))
         .map((r) => ({ ...r, release: releaseOf(r.theme, ctx.releases) }))
-        .filter((r) => applies(r, filter, ctx.releases) && (!below || list === 'next' || below.has(r.id))),
+        .filter((r) => applies(r, filter, ctx.releases, ctx.priorities)),
       filter.sort,
+      ctx.priorities,
     ),
   );
 
   const total = $derived(narrowed || q || word || !list ? null : countOf(list, status.data));
   const cut = $derived(!narrowed && !q && !word && list !== 'next' && list !== 'groups' && list !== 'derived' && total !== null && total > shown.length);
 
-  const loading = $derived(word && !wordRoute ? !ctx.board : fetched.loading && !fetched.data);
+  const loading = $derived(word && !wordRoute ? !ctx.board || (!!filter.under && !fetched.data) : fetched.loading && !fetched.data);
   const heading = $derived(q ? `Search: ${q}` : word ? `Every item ${word}` : LISTS.find((l) => l.name === list)?.label);
 
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -125,8 +112,8 @@
 
   const CHOICES = $derived<{ name: 'key' | 'priority' | 'complexity' | 'state'; label: string; options: readonly string[] }[]>([
     { name: 'key', label: 'Any key', options: keys },
-    { name: 'priority', label: 'Any priority', options: PRIORITIES },
-    { name: 'complexity', label: 'Any complexity', options: ['high', 'medium', 'low'] },
+    { name: 'priority', label: 'Any priority', options: ctx.priorities },
+    { name: 'complexity', label: 'Any complexity', options: ctx.levels },
     { name: 'state', label: 'Any state', options: ['open', 'done', 'dropped'] },
   ]);
 
@@ -237,7 +224,7 @@
           <a class="chip" href={withParams({ under: undefined, i: undefined })}>under {filter.under} ×</a>
         {/if}
         {#if narrowed}
-          <a class="chip" href={withParams({ ...filterChanges(parseFilter(new URLSearchParams())), sort: filter.sort || undefined, i: undefined })}>clear filters</a>
+          <a class="chip" href={withParams({ ...filterChanges(parseFilter(new URLSearchParams(), ctx)), sort: filter.sort || undefined, i: undefined })}>clear filters</a>
         {/if}
       </div>
       <nav class="words" aria-label="Words">
@@ -258,7 +245,7 @@
         <strong>{marks.size} marked</strong>
         <select onchange={(e) => { prioritise(e.currentTarget.value); e.currentTarget.value = ''; }} aria-label="Set priority">
           <option value="">Set priority</option>
-          {#each PRIORITIES as p (p)}<option value={p}>{p}</option>{/each}
+          {#each ctx.priorities as p (p)}<option value={p}>{p}</option>{/each}
         </select>
         <button class="btn small" onclick={() => (marks = new Set())}>Clear</button>
       </div>

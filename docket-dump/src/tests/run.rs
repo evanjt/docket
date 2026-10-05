@@ -82,6 +82,8 @@ fn checkout() -> tempfile::TempDir {
         &["init", "-q"][..],
         &["config", "user.name", "Dump"],
         &["config", "user.email", "dump@example.com"],
+        &["config", "commit.gpgsign", "false"],
+        &["config", "tag.gpgsign", "false"],
     ] {
         git::git(dir.path(), args).unwrap();
     }

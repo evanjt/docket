@@ -1,6 +1,6 @@
 //! The command line: every verb, its arguments and the flags taken before or after it.
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand};
 
 const COMPLEXITIES: [&str; 3] = ["high", "medium", "low"];
 const PRIORITIES: [&str; 4] = ["critical", "high", "normal", "low"];
@@ -8,6 +8,8 @@ const TURNS: [&str; 2] = ["agent", "user"];
 const STATES: [&str; 4] = ["open", "done", "dropped", "any"];
 const RUNNERS: [&str; 3] = ["codex", "claude", "remote"];
 const ROLES: [&str; 5] = ["build", "rebase", "review", "plan", "audit"];
+const OUTCOMES: [&str; 5] = docket_core::assignment::OUTCOMES;
+const NEEDS: [&str; 4] = docket_core::queue::NEEDS;
 const WAITS: [&str; 2] = ["item", "condition"];
 const QUEUE_ROLES: [&str; 3] = ["plan", "work", "audit"];
 const JOB_ROLES: [&str; 3] = ["build", "audit", "plan"];
@@ -31,15 +33,6 @@ pub struct Cli {
     /// the branch acting; default: git HEAD here
     #[arg(long, global = true)]
     pub branch: Option<String>,
-    /// bare command: seconds between samples
-    #[arg(long, default_value_t = 5)]
-    pub every: u64,
-    /// bare command: seconds of movements shown
-    #[arg(long, default_value_t = 86_400)]
-    pub window: u64,
-    /// bare command: closes the pace is read from
-    #[arg(long, default_value_t = 20)]
-    pub recent: u64,
     /// bare command: print and clear instead of the screen
     #[arg(long)]
     pub plain: bool,
@@ -68,6 +61,23 @@ pub struct Queue {
     /// only this priority and anything more urgent
     #[arg(long, value_parser = PRIORITIES)]
     pub priority: Option<String>,
+    /// only the current release, the first of the releases fact; later releases are left out
+    #[arg(long)]
+    pub current_release: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct OwnerQueue {
+    pub n: Option<i64>,
+    /// only this theme
+    #[arg(long)]
+    pub theme: Option<String>,
+    /// only this key
+    #[arg(long)]
+    pub key: Option<String>,
+    /// only this priority and anything more urgent
+    #[arg(long, value_parser = PRIORITIES)]
+    pub priority: Option<String>,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -89,8 +99,8 @@ pub enum Cmd {
         #[arg(long)]
         theme: Option<String>,
     },
-    /// the owner's queue: open items on the user's turn
-    Todo,
+    /// the owner's queue: derived answers to confirm, questions, then asks by what the owner must hold or do
+    Todo(OwnerQueue),
     /// claimed items, by host
     Wip {
         #[arg(long)]
@@ -199,10 +209,13 @@ pub enum Cmd {
         /// the model that did the work
         #[arg(long)]
         model: Option<String>,
+        /// how the attempt ended, recorded on its assignment
+        #[arg(long, value_parser = OUTCOMES)]
+        outcome: Option<String>,
         #[arg(long)]
         force: bool,
     },
-    /// done, under a sha or what it opened; releases waiters
+    /// done, under a sha or what it opened; unblocks waiters
     #[command(alias = "built")]
     Close {
         id: String,
@@ -230,7 +243,7 @@ pub enum Cmd {
     },
     /// a done or dropped item back to open, with a reason
     Reopen { id: String, why: String },
-    /// park an item behind another, or until a condition
+    /// park an item behind another, or until a condition, which becomes a task for the owner
     #[command(alias = "block")]
     Wait {
         id: String,
@@ -243,19 +256,34 @@ pub enum Cmd {
         #[arg(long)]
         force: bool,
     },
-    /// clear a wait by hand
-    Resume { id: String, note: Option<String> },
+    /// clear a wait by hand, and every dependency still holding the item
+    Resume {
+        id: String,
+        note: Option<String>,
+        /// open a plan's gate while items it opened are still open
+        #[arg(long)]
+        force: bool,
+    },
+    /// what an item depends on: it waits until every dependency is satisfied
+    Dep {
+        #[command(subcommand)]
+        what: DepCmd,
+    },
     /// hand an item to the owner: their turn, with what is needed
     #[command(aliases = ["manual", "park"])]
     Ask {
         id: String,
         note: String,
+        /// what the owner must do: hold a device or thing, have an account or store, act from their
+        /// machine, or judge
+        #[arg(long, value_parser = NEEDS)]
+        need: Option<String>,
         #[arg(long)]
         force: bool,
     },
     /// hand it back to the agents, with what happened
     Reply { id: String, note: String },
-    /// record a decision on a question; releases what waited on it
+    /// record a decision on a question; unblocks what waited on it
     Answer {
         id: String,
         decision: String,
@@ -290,6 +318,7 @@ pub enum Cmd {
     /// fields, an appended note, or the whole body
     Edit {
         id: String,
+        /// title, complexity, theme, group, tags or `turn_note`; priority has `docket priority`
         #[arg(long = "set", value_name = "FIELD=VALUE")]
         set: Vec<String>,
         #[arg(long, value_name = "TEXT")]
@@ -325,6 +354,7 @@ pub enum Cmd {
         no_files: bool,
     },
     /// add a key to the project's matrix, or change what it means
+    #[command(hide = true)]
     Key {
         key: String,
         #[arg(value_parser = KINDS)]
@@ -373,6 +403,7 @@ pub enum Cmd {
         deep: bool,
     },
     /// rebuild the search rows and citation links from every item's body
+    #[command(hide = true)]
     Reindex,
     /// citations that no longer resolve
     Stale {
@@ -404,6 +435,7 @@ pub enum Cmd {
     },
     /// the docket block in the AGENTS.md at the project's root: install writes it, diff lists what
     /// install would change
+    #[command(hide = true)]
     Instructions {
         #[arg(value_parser = ["install", "diff"], default_value = "diff")]
         what: String,
@@ -414,6 +446,7 @@ pub enum Cmd {
     /// give an item the loop parked or sent back a fresh start
     Retry { id: String, note: Option<String> },
     /// a job under a lead on this machine: run one, list them, stop one, read its events
+    #[command(hide = true)]
     Job {
         #[command(subcommand)]
         what: JobCmd,
@@ -421,6 +454,7 @@ pub enum Cmd {
     /// the machines jobs run on, this one marked
     Machines,
     /// set or remove a machine, on the owner's key; set changes only the fields given
+    #[command(hide = true)]
     Machine {
         #[arg(value_parser = ["set", "remove"])]
         what: String,
@@ -444,6 +478,7 @@ pub enum Cmd {
         path: Option<String>,
     },
     /// the project's lead claim: show who leads, or take, renew or give it back
+    #[command(hide = true)]
     Lead {
         #[arg(value_parser = ["show", "take", "renew", "give"], default_value = "show")]
         what: String,
@@ -453,6 +488,7 @@ pub enum Cmd {
     },
     /// a lead's dispatch: claim the item on a fresh branch, push the base to a machine with a free
     /// slot and start a job there, on the model the models fact gives its complexity
+    #[command(hide = true)]
     Dispatch {
         id: String,
         /// the machine to run it on; default: the one with the most free slots for the runner
@@ -472,6 +508,7 @@ pub enum Cmd {
         force: bool,
     },
     /// the project's jobs on every machine, read over ssh: running, done, failed or lost
+    #[command(hide = true)]
     Jobs {
         /// return when one of the running jobs ends, printing them all
         #[arg(long)]
@@ -488,6 +525,7 @@ pub enum Cmd {
     },
     /// commit a finished job's change here, on its branch, with the message it proposed, and clear
     /// the job from the machine it ran on
+    #[command(hide = true)]
     Collect {
         id: String,
         /// clear the job without committing anything: for a job that failed, was lost, or waits on
@@ -496,6 +534,7 @@ pub enum Cmd {
         discard: bool,
     },
     /// what a public repository must not carry: the owner's private names, read from the server
+    #[command(hide = true)]
     Private {
         #[command(subcommand)]
         what: PrivateCmd,
@@ -506,10 +545,32 @@ pub enum Cmd {
         what: AdminCmd,
     },
     /// bind this directory to a project by hand
+    #[command(hide = true)]
     Bind {
         slug: Option<String>,
         #[arg(long)]
         root: Option<String>,
+    },
+}
+
+/// `docket dep`: an item's dependencies, added or removed.
+#[derive(Subcommand, Debug)]
+pub enum DepCmd {
+    /// ID depends on each ON as well; refused when one would close a cycle
+    Add {
+        id: String,
+        #[arg(required = true)]
+        on: Vec<String>,
+        #[arg(long)]
+        force: bool,
+    },
+    /// ID no longer depends on each ON; it resumes when nothing holds it
+    Rm {
+        id: String,
+        #[arg(required = true)]
+        on: Vec<String>,
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -608,6 +669,85 @@ pub enum JobCmd {
         #[arg(short = 'n', long, default_value_t = 20)]
         n: usize,
     },
+}
+
+const GROUPS: [(&str, &[&str]); 3] = [
+    (
+        "Owner",
+        &[
+            "status",
+            "todo",
+            "waiting",
+            "questions",
+            "research",
+            "derived",
+            "answer",
+            "reply",
+            "projects",
+            "done",
+            "dropped",
+            "audit",
+            "graph",
+            "groups",
+            "skills",
+            "admin",
+        ],
+    ),
+    (
+        "Agent",
+        &[
+            "next", "complex", "show", "log", "new", "add", "start", "unclaim", "close", "drop",
+            "reopen", "wait", "dep", "resume", "ask", "decide", "rate", "priority", "edit", "link",
+            "search", "similar", "deps", "files", "check", "stale",
+        ],
+    ),
+    ("Lead", &["wip", "retry", "machines"]),
+];
+
+/// The command with its verbs listed under Owner, Agent and Lead; plumbing stays out of the list.
+pub fn command() -> clap::Command {
+    use std::fmt::Write;
+    let cmd = Cli::command();
+    let mut text = String::new();
+    for (heading, verbs) in GROUPS {
+        let _ = writeln!(text, "{heading}:");
+        for v in verbs {
+            let about = cmd
+                .find_subcommand(v)
+                .and_then(|c| c.get_about())
+                .map(ToString::to_string)
+                .unwrap_or_default();
+            let about = about.lines().next().unwrap_or("").to_string();
+            let _ = writeln!(text, "  {v:<10} {about}");
+        }
+        text.push('\n');
+    }
+    text.push_str("`docket help --all` lists the plumbing verbs too.");
+    let names: Vec<String> = cmd
+        .get_subcommands()
+        .map(|c| c.get_name().to_string())
+        .collect();
+    let mut cmd = cmd
+        .override_usage("docket [OPTIONS] [COMMAND]")
+        .after_help(text)
+        .help_template("{about}\n\n{usage-heading} {usage}\n\n{after-help}\n\nOptions:\n{options}");
+    for n in names {
+        cmd = cmd.mut_subcommand(n, |c| c.hide(true));
+    }
+    cmd
+}
+
+/// The command with every verb listed in one block, for `docket help --all`.
+pub fn full_help() -> String {
+    let mut cmd = Cli::command();
+    let names: Vec<String> = cmd
+        .get_subcommands()
+        .map(|c| c.get_name().to_string())
+        .collect();
+    for n in names {
+        cmd = cmd.mut_subcommand(n, |c| c.hide(false));
+    }
+    cmd.render_help().to_string()
 }
 
 #[cfg(test)]

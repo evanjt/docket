@@ -97,7 +97,7 @@ fn test_holds_same_branch_or_force() {
     assert!(holds(&held_elsewhere("B1"), &forced));
     assert_eq!(
         refusal(require_hold(&held_elsewhere("B1"), &ctx(), "close")),
-        "B1 is held by audit/other-2 on otherbox since 2026-09-30T00:00:00Z. close would take it out from under that agent. Merge or release the branch first, or pass --force."
+        "B1 is held by audit/other-2 on otherbox since 2026-09-30T00:00:00Z. close would take it out from under that agent. Merge or unclaim the branch first, or pass --force."
     );
 }
 
@@ -202,7 +202,7 @@ fn test_a_plan_closes_with_its_gaps_open_only_once_due() {
     assert!(close_plan(&plan, &gaps, true).is_ok());
     assert_eq!(
         refusal(close_plan(&plan, &gaps, false)),
-        "A1 opened work that is still open: B7. It closes only when nothing it opened is open; release it and it comes back when they close."
+        "A1 opened work that is still open: B7. It closes only when nothing it opened is open; unclaim it and it comes back when they close."
     );
 }
 
@@ -307,33 +307,19 @@ fn test_reopen_needs_a_closed_item_and_a_reason() {
 }
 
 #[test]
-fn test_wait_on_item_or_condition() {
-    let got = wait(&claimed("B1"), &ctx(), "item", Some(7), "Q1").unwrap();
-    let mut want = vec![
-        Field::WaitOn(Some("item".into())),
-        Field::WaitItem(Some(7)),
-        Field::WaitRef(Some("Q1".into())),
-        Field::WaitSince(Some("2026-10-01T12:00:00Z".into())),
-    ];
-    want.extend(unclaimed());
-    assert_eq!(got, want);
-    assert_eq!(
-        wait(&open("B1"), &ctx(), "condition", None, "the fleet is quiet").unwrap()[1],
-        Field::WaitItem(None)
-    );
-    assert_eq!(
-        refusal(wait(&open("B1"), &ctx(), "item", Some(1), "B1")),
-        "B1 cannot wait on itself."
-    );
+fn test_an_item_depends_on_another_never_on_itself() {
+    assert!(depend(&claimed("B1"), &ctx(), 7).is_ok());
     let mut row = open("B1");
     row.wait_on = Some("item".into());
     row.wait_ref = Some("Q1".into());
     row.wait_since = Some("t".into());
+    assert!(depend(&row, &ctx(), 7).is_ok(), "a second dependency");
     assert_eq!(
-        refusal(wait(&row, &ctx(), "item", Some(2), "Q2")),
-        "B1 already waits on Q1 since t. resume it first."
+        refusal(depend(&open("B1"), &ctx(), 1)),
+        "B1 cannot depend on itself."
     );
-    assert!(wait(&held_elsewhere("B1"), &ctx(), "item", Some(2), "Q2").is_err());
+    assert!(depend(&held_elsewhere("B1"), &ctx(), 7).is_err());
+    assert!(depend(&done("B1"), &ctx(), 7).is_err());
 }
 
 #[test]
@@ -344,8 +330,26 @@ fn test_resume_clears_the_wait_and_hands_it_to_an_agent() {
     row.wait_since = Some("t".into());
     let mut want = unwaiting();
     want.push(Field::Turn(Some("agent".into())));
-    assert_eq!(resume(&row).unwrap(), want);
-    assert_eq!(refusal(resume(&open("B1"))), "B1 is not waiting.");
+    assert_eq!(resume(&row, &[], false).unwrap(), want);
+    assert_eq!(
+        refusal(resume(&open("B1"), &[], false)),
+        "B1 is not waiting."
+    );
+}
+
+#[test]
+fn test_resume_on_a_gated_plan_is_refused_while_a_member_is_open() {
+    let mut row = open("A1");
+    row.wait_on = Some("condition".into());
+    row.wait_ref = Some(GATE.into());
+    row.wait_since = Some("t".into());
+    let members = ["T4".to_string()];
+    assert_eq!(
+        refusal(resume(&row, &members, false)),
+        "A1 waits until everything it opened is closed, and T4 is open. Close it first, or pass --force."
+    );
+    assert!(resume(&row, &members, true).is_ok());
+    assert!(resume(&row, &[], false).is_ok());
 }
 
 #[test]
@@ -537,4 +541,16 @@ fn repeat_answer_is_the_stored_decision() {
     assert!(is_repeat_answer(&row, " Go home\n", None));
     assert!(!is_repeat_answer(&row, "Stay", None));
     assert!(!is_repeat_answer(&row, "Go home", Some("a basis")));
+}
+
+#[test]
+fn test_refusals_say_unclaim_for_giving_a_claim_back() {
+    let held = refusal(require_hold(&held_elsewhere("B1"), &ctx(), "close"));
+    assert!(held.contains("Merge or unclaim the branch first"), "{held}");
+    assert!(!held.contains("release"), "{held}");
+    let plan = refusal(close_plan(&open("A1"), &["B7".to_string()], false));
+    assert!(plan.contains("unclaim it and it comes back"), "{plan}");
+    assert!(!plan.contains("release"), "{plan}");
+    let own = refusal(release(&done("B1"), &ctx()));
+    assert!(own.contains("unclaim needs an open item"), "{own}");
 }

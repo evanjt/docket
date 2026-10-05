@@ -14,7 +14,21 @@ INSERT INTO projects (slug, keys, themes, skills, created_at, updated_at) VALUES
   '[{"key":"T","kind":"work"},{"key":"Q","kind":"decision"},{"key":"A","kind":"audit"},
     {"key":"PK","kind":"package"},{"key":"CON","kind":"concept"}]',
   '[{"name":"sync"}]', '{}', 'c', 'u'),
-  ('o/r', '[{"key":"T","kind":"work"},{"key":"Q","kind":"decision"}]', '[]', '{"releases":"1.0 1.1 1.2"}', 'c', 'u');
+  ('o/r', '[{"key":"T","kind":"work"},{"key":"Q","kind":"decision"}]', '[]', '{"releases":"1.0 1.1 1.2"}', 'c', 'u'),
+  ('o/s', '[{"key":"T","kind":"work"},{"key":"A","kind":"audit"},{"key":"CON","kind":"concept"}]', '[]', '{}', 'c', 'u');
+INSERT INTO items (rid, project, key, num, title, state, resolution, tags, body, opened_at, updated_at) VALUES
+  (302, 'o/s', 'T', 1, 'Opened and done', 'done', 'ok', '[]', '', 'o02', 'u02'),
+  (303, 'o/s', 'T', 2, 'Opened and dropped', 'dropped', 'dup', '[]', '', 'o03', 'u03'),
+  (304, 'o/s', 'T', 3, 'Related and done', 'done', 'ok', '[]', '', 'o04', 'u04'),
+  (305, 'o/s', 'T', 4, 'Related and dropped', 'dropped', 'dup', '[]', '', 'o05', 'u05');
+INSERT INTO items (rid, project, key, num, title, state, turn, wait_on, wait_ref, wait_since, tags, body, opened_at, updated_at) VALUES
+  (300, 'o/s', 'A', 1, 'Plan', 'open', 'agent', NULL, NULL, NULL, '[]', '', 'o00', 'u00'),
+  (301, 'o/s', 'CON', 1, 'Concept', 'open', 'agent', NULL, NULL, NULL, '[]', '', 'o01', 'u01'),
+  (306, 'o/s', 'T', 5, 'Opened and waiting', 'open', 'agent', 'condition', 'later', 'w06', '[]', '', 'o06', 'u06'),
+  (307, 'o/s', 'T', 6, 'Related and waiting', 'open', 'agent', 'condition', 'later', 'w07', '[]', '', 'o07', 'u07');
+INSERT INTO links (rid, kind, to_rid) VALUES
+  (302, 'opened', 300), (303, 'opened', 300), (306, 'opened', 300),
+  (300, 'related', 301), (304, 'related', 301), (305, 'related', 301), (307, 'related', 301);
 INSERT INTO items (rid, project, key, num, title, state, turn, tags, theme, body, opened_at, updated_at) VALUES
   (130, 'o/r', 'T', 1, 'Two releases out', 'open', 'agent', '["high"]', '1.2', '', 'o30', 'u30'),
   (131, 'o/r', 'T', 2, 'Next release', 'open', 'agent', '[]', '1.1', '', 'o31', 'u31'),
@@ -64,7 +78,10 @@ INSERT INTO search (rid, id, title, body, files) VALUES
   (8, 'Q1', 'Open lantern choice', '', ''),
   (9, 'Q2', 'Decided lantern choice', '', ''),
   (13, 'T9', 'Held theme', 'sync', ''),
-  (17, 'T11', 'Synced thing', 'the sync queue body', 'src/sync.py');
+  (17, 'T11', 'Synced thing', 'the sync queue body', 'src/sync.py'),
+  (302, 'T1', 'Opened and done', 'lamp', ''),
+  (303, 'T2', 'Opened and dropped', 'lamp', ''),
+  (304, 'T3', 'Related and done', 'lamp', '');
 "#;
 
 async fn seeded() -> (Router, Scratch) {
@@ -164,14 +181,16 @@ async fn test_next_refuses_bad_choices_and_unknown_targets() {
 
 #[tokio::test]
 async fn test_owner_lists_todo_questions_research() {
-    assert_eq!(ids("/todo").await, ["Q1"]);
+    assert_eq!(ids("/todo").await, ["Q2", "Q1"]);
     assert_eq!(ids("/questions").await, ["Q1"]);
     assert_eq!(ids("/questions?theme=SYN").await, ["Q1"]);
     assert!(ids("/questions?theme=road").await.is_empty());
     assert_eq!(ids("/research").await, ["Q2"]);
     let (_, todo) = get("/todo").await;
-    assert_eq!(todo[0]["word"], "parked");
-    assert_eq!(todo[0]["group"], Value::Null);
+    assert_eq!(todo[0]["owner_group"], "derived");
+    assert_eq!(todo[1]["word"], "parked");
+    assert_eq!(todo[1]["owner_group"], "question");
+    assert_eq!(todo[1]["group"], Value::Null);
 }
 
 #[tokio::test]
@@ -198,6 +217,17 @@ async fn test_list_rows_carry_no_body_and_show_does() {
     }
     let (_, shown) = get("/show/T11").await;
     assert_eq!(shown["body"], "the sync queue body");
+}
+
+#[tokio::test]
+async fn test_waiting_rows_carry_the_word_and_title_of_an_item_target() {
+    let (_, rows) = get("/waiting").await;
+    let held = rows.as_array().unwrap().iter().find(|r| r["id"] == "T6");
+    let target = &held.unwrap()["wait_target"];
+    assert_eq!(target["word"], "ready");
+    assert_eq!(target["title"], "Plain fix");
+    let condition = rows.as_array().unwrap().iter().find(|r| r["id"] == "A1");
+    assert_eq!(condition.unwrap()["wait_target"], Value::Null);
 }
 
 #[tokio::test]
@@ -229,6 +259,35 @@ async fn test_done_and_dropped_filter_by_release_before_the_page_is_cut() {
         get("/done?project=o/r&release=9.9").await.0,
         StatusCode::BAD_REQUEST
     );
+}
+
+#[tokio::test]
+async fn test_lists_under_a_plan_hold_what_it_opened_and_not_what_its_concept_relates() {
+    let under = |route: &str, id: &str| format!("/{route}?project=o/s&under={id}");
+    assert_eq!(ids(&under("done", "A1")).await, ["T1"]);
+    assert_eq!(ids(&under("dropped", "A1")).await, ["T2"]);
+    assert_eq!(ids(&under("waiting", "A1")).await, ["T5"]);
+    assert_eq!(ids(&under("done", "CON1")).await, ["T3", "T1"]);
+    assert_eq!(ids("/done?project=o/s").await, ["T3", "T1"]);
+    assert_eq!(get(&under("done", "T99")).await.0, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_search_under_a_plan_holds_what_it_opened() {
+    let under = |id: &str| format!("/search?project=o/s&q=lamp&state=any&under={id}");
+    assert_eq!(ids("/search?project=o/s&q=lamp&state=any").await.len(), 3);
+    let mut opened = ids(&under("A1")).await;
+    opened.sort_unstable();
+    assert_eq!(opened, ["T1", "T2"]);
+    assert_eq!(get(&under("T99")).await.0, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_under_lists_every_item_a_plan_opened_whatever_its_word() {
+    let under = |id: &str| format!("/under?project=o/s&under={id}");
+    assert_eq!(ids(&under("A1")).await, ["T1", "T2", "T5"]);
+    assert_eq!(get("/under?project=o/s").await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(get(&under("T99")).await.0, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

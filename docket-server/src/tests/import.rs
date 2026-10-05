@@ -136,6 +136,8 @@ async fn test_import_builds_search_and_moves_each_key_past_the_copy() {
     let app = app(&s.db, Keys::parse("box owner k").unwrap());
     let found = call(&app, Method::GET, "/search?project=o/p&q=tests/t.rs", None).await;
     assert_eq!(found[0]["id"], "T1");
+    let deps = call(&app, Method::GET, "/deps/T1?project=o/p", None).await;
+    assert_eq!(deps["waits_on"][0]["id"], "T2");
 
     let body =
         json!({"project": "o/p", "key": "T", "title": "After the copy", "body": "`src/b.rs:1`"});

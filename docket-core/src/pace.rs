@@ -11,7 +11,7 @@ pub const VERBS: [&str; 12] = [
 /// Events that move an item without changing the open count, and the verb a row uses for each.
 const ACTIVITY: [(&str, &str); 8] = [
     ("claimed", "claimed"),
-    ("released", "released"),
+    ("released", "unclaimed"),
     ("claim_lost", "lost"),
     ("asked", "parked"),
     ("replied", "replied"),

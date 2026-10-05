@@ -12,6 +12,7 @@ use docket_core::word::{Kind, PRIORITIES};
 use crate::entities::{item, link};
 use crate::reads::public::{Failure, Kinds, id_of, internal, item_of, project_of, public};
 use crate::store::to_item;
+use crate::verbs::graph::{came_due, open_under};
 
 #[derive(Deserialize)]
 pub struct InProject {
@@ -113,9 +114,23 @@ pub async fn offers(
     let row = item_of(&db, &q.project, &id).await?;
     let kind = Kinds::of(&project).kind(&row.key);
     let id = row.id.clone();
+    let (pending, due) = if kind == Kind::Audit {
+        let pending = open_under(&db, row.rid)
+            .await
+            .map_err(|e| internal(&e))?
+            .into_iter()
+            .map(|x| x.id)
+            .collect();
+        (
+            pending,
+            came_due(&db, row.rid).await.map_err(|e| internal(&e))?,
+        )
+    } else {
+        (Vec::new(), false)
+    };
     Ok(Json(json!({
         "id": id,
-        "verbs": rules_offers(&to_item(row), kind),
+        "verbs": rules_offers(&to_item(row), kind, &pending, due),
         "priorities": PRIORITIES,
         "levels": COMPLEXITIES,
     })))

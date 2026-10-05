@@ -1,11 +1,17 @@
 //! The docket schema as migrations, applied by the server before it listens, and the statements every
 //! raw query is sent as.
 
+pub mod assignments;
 mod m20261001_000001_schema;
 mod m20261002_000001_machines_and_leads;
 mod m20261005_000001_owner_facts;
 mod m20261005_000002_runner_limits;
 mod m20261005_000003_machine_path;
+mod m20261005_000004_assignments;
+mod m20261006_000001_dependencies;
+mod m20261006_000002_condition_waits;
+mod m20261006_000003_ask_need;
+mod m20261006_000004_job_reports;
 #[cfg(any(test, feature = "scratch"))]
 pub mod scratch;
 
@@ -30,6 +36,11 @@ impl MigratorTrait for Migrator {
             Box::new(m20261005_000001_owner_facts::Migration),
             Box::new(m20261005_000002_runner_limits::Migration),
             Box::new(m20261005_000003_machine_path::Migration),
+            Box::new(m20261005_000004_assignments::Migration),
+            Box::new(m20261006_000001_dependencies::Migration),
+            Box::new(m20261006_000002_condition_waits::Migration),
+            Box::new(m20261006_000003_ask_need::Migration),
+            Box::new(m20261006_000004_job_reports::Migration),
         ]
     }
 }

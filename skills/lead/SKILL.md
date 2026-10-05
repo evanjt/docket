@@ -65,7 +65,8 @@ each.
 
 Take the one list in the order `next` gives it: earliest release first, then
 audits, plans and investigations, then tickets, then most urgent. A later
-release never goes ahead of a current-release ticket. Send each with its role:
+release never goes ahead of a current-release ticket. To hold the fleet to the current release
+even when it has nothing ready, add `--current-release` to each `next`. Send each with its role:
 an audit-due plan as `--role audit`, a plan or investigation as `--role plan`,
 a ticket with none:
 
@@ -124,7 +125,7 @@ Collect every job that ended, then merge them all into one batch branch in a
 worktree, so your checkout only ever fast-forwards:
 
     git worktree add ../merge-batch -b lead/batch <your branch>
-    git -C ../merge-batch merge --no-ff --no-edit <each job's branch>
+    git -C ../merge-batch merge --no-ff -m "Merge <the job's commit subject>" <each job's branch>
 
 **A conflict is yours to resolve, there and then.** Read both sides and the
 items behind them, keep what each change meant, finish the merge and go on to
@@ -142,7 +143,7 @@ it), which runs the gates, or with the gates by hand and
   into the item, give the ticket back and dispatch it again at once:
 
       docket edit T14 --append "fails <gate> on <sha>: <the failing lines>"
-      docket --branch <the job's branch> unclaim T14 "fails <gate> on <sha>: fix on the new head"
+      docket --branch <the job's branch> unclaim T14 --outcome gate "fails <gate> on <sha>: fix on the new head"
       docket dispatch T14
 
 Once landed, close each item with its own commit, now on your branch, and
@@ -171,7 +172,7 @@ ticket, then close it with the note, or for a decided question, with what it
 opened: `docket --branch <branch> close Q7 "opened T22, T23"`.
 
 **WAITING Q\<n\>.** The job filed a question and the item waits on it. The
-wait already gave the claim back, so `release` is refused: note the wait on the
+wait already gave the claim back, so `unclaim` is refused: note the wait on the
 item and clear the job:
 
     docket collect T14 --discard
@@ -192,7 +193,7 @@ on its machine with `docket job log NAME`). Clear it with `docket collect T14
 dispatch it once more on the other runner. A second failure hands it to the
 owner:
 
-    docket --branch <branch> unclaim T14 "failed on <runner>: <why>"
+    docket --branch <branch> unclaim T14 --outcome failed "failed on <runner>: <why>"
     docket ask T14 "two jobs failed: <why, in one line>"
 
 Three failed jobs in a row, of any items, mean something is wrong with a
@@ -210,7 +211,7 @@ every item left is blocked, parked on the owner or held by another session.
   asks of a merge. Only a build whose own behaviour fails goes back to a job.
 - Every claim is a running job. A finished build is landed or given back in
   the same pass, never held while more jobs run.
-- Never push. Never `--force` a claim, and never release one you did not make.
+- Never push. Never `--force` a claim, and never unclaim one you did not make.
 - Never kill a running job unless it outruns `job_timeout` minutes: `docket
   job kill NAME` on its machine, then as FAILED.
 - A question is never yours to answer: it waits for the owner.

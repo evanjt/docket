@@ -18,8 +18,10 @@ owner can do here: see `docket skills hands`.
 
 Run from the project root, the directory `docket skills` names.
 
-    docket todo               every item on their turn, questions first, with
-                              the asked note under each
+    docket todo               derived answers to confirm first, then questions, then
+                              asks by what they need (hold, access, act, judge), each
+                              group by release, priority and age; waiting items are
+                              left out and counted
     docket show B546          one in full
     docket deps B546          what waits on it, which is its weight
     docket questions          the questions alone, in answer order
@@ -31,13 +33,13 @@ across both kinds.
 ## Order
 
 Take stock first, in one table the owner can read in ten seconds: each item's
-id, its release, what it needs, and how many items it releases (`docket deps`,
+id, its release, what it needs, and how many items it unblocks (`docket deps`,
 the waiters). Then work in this order:
 
 1. **Release first.** Every item of the current release before any of a later
    one (`docket skills releases` lists them in order). An item with no theme
    counts as the current release's.
-2. **Inside a release, whatever releases the most.** An asked item holding six
+2. **Inside a release, whatever unblocks the most.** An asked item holding six
    blocked bugs beats a question holding none. Count the waiters, and the
    waiters' waiters.
 3. **Ship blockers**, then keys in the project's order.
@@ -111,7 +113,7 @@ to: closed, replied, opened, and the next item and group up.
 
 ## Take stock
 
-At each group boundary: closed, replied, opened, what was released for the
+At each group boundary: closed, replied, opened, what was unblocked for the
 agents, and what remains in the `yours` column. The `docket` screen's owner line
 shows the same numbers live, so name them the way it does: on your side,
 questions, asked, and how many wait behind them.

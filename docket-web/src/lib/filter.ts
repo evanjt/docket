@@ -1,8 +1,7 @@
-import { PRIORITIES, byId } from './flow';
+import { byId } from './flow';
 import { releaseOf } from './releases';
 import { ROOT } from './route';
 
-const COMPLEXITIES = ['high', 'medium', 'low'];
 const STATES = ['open', 'done', 'dropped'];
 export const SORTS = [
   { name: '', label: 'Queue order' },
@@ -26,13 +25,20 @@ export interface Filter {
   sort: string;
 }
 
-const choice = (v: string | null, options: readonly string[]) => (v && options.includes(v) ? v : '');
+/** The server's lists of tiers and levels; both are empty until they are read. */
+export interface Scale {
+  priorities: readonly string[];
+  levels: readonly string[];
+}
 
-export function parseFilter(params: URLSearchParams): Filter {
+/** A value among the options; any value while the options are not read yet. */
+const choice = (v: string | null, options: readonly string[]) => (v && (!options.length || options.includes(v)) ? v : '');
+
+export function parseFilter(params: URLSearchParams, scale: Scale): Filter {
   return {
     key: (params.get('key') ?? '').replace(/[^A-Za-z]/g, ''),
-    priority: choice(params.get('priority'), PRIORITIES),
-    complexity: choice(params.get('complexity'), COMPLEXITIES),
+    priority: choice(params.get('priority'), scale.priorities),
+    complexity: choice(params.get('complexity'), scale.levels),
     release: params.get('release') ?? '',
     under: params.get('under') ?? '',
     state: choice(params.get('state'), STATES),
@@ -50,14 +56,14 @@ export function nextParams(f: Filter) {
   return { key: f.key || undefined, priority: f.priority || undefined, complexity: f.complexity || undefined, under: f.under || undefined };
 }
 
-/** What `/done`, `/dropped` and `/derived` take of a filter: the release, which they apply before the page is cut. */
+/** What the stored lists take of a filter: the release, which `/done`, `/dropped` and `/derived` apply before the page is cut, and the plan, story or concept the rows lie under. */
 export function pagedParams(f: Filter) {
-  return { release: f.release || undefined };
+  return { release: f.release || undefined, under: f.under || undefined };
 }
 
 /** What `/search` takes of a filter; the rest is applied to the rows. */
 export function searchParams(f: Filter) {
-  return { key: f.key || undefined, state: f.state || undefined };
+  return { key: f.key || undefined, state: f.state || undefined, under: f.under || undefined };
 }
 
 export interface Filterable {
@@ -69,9 +75,9 @@ export interface Filterable {
 }
 
 /** Whether a row passes every field of the filter, for the routes that do not take them all. */
-export function applies(r: Filterable, f: Filter, releases: string[]): boolean {
+export function applies(r: Filterable, f: Filter, releases: string[], priorities: readonly string[]): boolean {
   if (f.key && !new RegExp(`^${f.key}\\d`, 'i').test(r.id)) return false;
-  if (f.priority && r.priority !== undefined && PRIORITIES.indexOf(r.priority as never) > PRIORITIES.indexOf(f.priority as never)) return false;
+  if (f.priority && r.priority !== undefined && priorities.indexOf(r.priority) > priorities.indexOf(f.priority)) return false;
   if (f.complexity && r.complexity !== f.complexity) return false;
   if (f.state && r.state !== undefined && r.state !== f.state) return false;
   if (f.release && releaseOf(r.theme, releases) !== f.release) return false;
@@ -79,8 +85,8 @@ export function applies(r: Filterable, f: Filter, releases: string[]): boolean {
 }
 
 /** The rows in a sort; the queue order is the order the server gave. */
-export function sortRows<T extends { id: string; priority?: string; updated_at?: string; opened_at?: string }>(rows: T[], sort: string): T[] {
-  const tier = (r: T) => PRIORITIES.indexOf((r.priority ?? 'normal') as never);
+export function sortRows<T extends { id: string; priority?: string; updated_at?: string; opened_at?: string }>(rows: T[], sort: string, priorities: readonly string[]): T[] {
+  const tier = (r: T) => priorities.indexOf(r.priority ?? 'normal');
   const newest = (a?: string, z?: string) => (z ?? '').localeCompare(a ?? '');
   if (sort === 'id') return [...rows].sort((a, z) => byId(a.id, z.id));
   if (sort === 'priority') return [...rows].sort((a, z) => tier(a) - tier(z) || byId(a.id, z.id));

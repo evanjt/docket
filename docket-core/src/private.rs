@@ -187,14 +187,32 @@ pub fn is_comment(line: &str) -> bool {
 /// alone, as `A3` or `PK12`.
 #[must_use]
 pub fn ids(keys: &[String], line: &str) -> Vec<String> {
+    ids_in(keys, line, false)
+}
+
+/// The item ids a commit message cites: as `ids`, and also in lower case, so the `<key><n>-` of a
+/// branch name such as `lead/t14-123` is found.
+#[must_use]
+pub fn message_ids(keys: &[String], line: &str) -> Vec<String> {
+    ids_in(keys, line, true)
+}
+
+fn ids_in(keys: &[String], line: &str, any_case: bool) -> Vec<String> {
+    let letter = |c: char| {
+        if any_case {
+            c.is_ascii_alphabetic()
+        } else {
+            c.is_ascii_uppercase()
+        }
+    };
     let mut out = Vec::new();
     let chars: Vec<char> = line.chars().collect();
     let mut i = 0;
     while i < chars.len() {
         let starts = i == 0 || !chars[i - 1].is_alphanumeric();
-        if starts && chars[i].is_ascii_uppercase() {
+        if starts && letter(chars[i]) {
             let mut j = i;
-            while j < chars.len() && chars[j].is_ascii_uppercase() {
+            while j < chars.len() && letter(chars[j]) {
                 j += 1;
             }
             let mut k = j;
@@ -202,7 +220,7 @@ pub fn ids(keys: &[String], line: &str) -> Vec<String> {
                 k += 1;
             }
             let ends = k == chars.len() || !chars[k].is_alphanumeric();
-            let key: String = chars[i..j].iter().collect();
+            let key: String = chars[i..j].iter().collect::<String>().to_uppercase();
             if k > j && ends && keys.contains(&key) {
                 out.push(chars[i..k].iter().collect());
             }

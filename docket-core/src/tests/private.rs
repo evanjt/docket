@@ -83,6 +83,18 @@ fn test_ids_finds_keys_followed_by_a_number() {
 }
 
 #[test]
+fn test_message_ids_find_a_branch_name_in_any_case() {
+    let keys = strings(&["T", "PK"]);
+    assert_eq!(
+        message_ids(&keys, "Merge branch 'lead/t14-123' into lead/batch"),
+        ["t14"]
+    );
+    assert_eq!(message_ids(&keys, "Closes T9 and pk12"), ["T9", "pk12"]);
+    assert!(message_ids(&keys, "Merge the job; sha256, t-1, utf8").is_empty());
+    assert!(ids(&keys, "lead/t14-123").is_empty());
+}
+
+#[test]
 fn test_comments_are_told_from_code() {
     assert!(is_comment("    /// The lead"));
     assert!(is_comment("# a heading"));

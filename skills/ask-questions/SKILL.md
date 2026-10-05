@@ -1,6 +1,6 @@
 ---
 name: ask-questions
-description: Go through the open Q questions in the docket of the project you are in, with the owner, and record the decisions. One question at a time in prose, ordered by release and then by what answering releases, so the owner is not context switching. Every question gets at least three options, one marked as the recommendation with the reasoning behind it, a worked example, and a code snippet where that is what makes it concrete. Use when asked to go through the questions, do questiontime, or answer the open Qs.
+description: Go through the open Q questions in the docket of the project you are in, with the owner, and record the decisions. One question at a time in prose, ordered by release and then by what answering unblocks, so the owner is not context switching. Every question gets at least three options, one marked as the recommendation with the reasoning behind it, a worked example, and a code snippet where that is what makes it concrete. Use when asked to go through the questions, do questiontime, or answer the open Qs.
 ---
 
 # ask-questions
@@ -29,7 +29,7 @@ question; a derived answer made for a ticket carries it with `--carried-by`.
 
 **Take them in the order `docket questions` prints them.** The order is by
 release first (`docket skills releases` lists them, the current first), then by
-what answering releases, then the order to ask them in. The first question
+what answering unblocks, then the order to ask them in. The first question
 listed is the one to ask first. Do not re-rank from the `holds` lines: a
 question that has moved is a question somebody re-weighed on purpose.
 
@@ -192,7 +192,7 @@ goes to a later release (`docket skills releases` lists them):
     docket answer Q116 "..."
 
 Quote the owner's own words where they carry the intent. `answer` appends the
-decision to the body, dated, and releases every item waiting on the question.
+decision to the body, dated, and unblocks every item waiting on the question.
 The question stays open, on the agents' turn, until a research agent turns the
 decision into items and runs `docket close Q116 "opened ..."`.
 

@@ -26,6 +26,8 @@ fn checkout() -> (TempDir, TempDir) {
 fn identify(repo: &Path) {
     git(repo, &["config", "user.name", "Dump"]).unwrap();
     git(repo, &["config", "user.email", "dump@example.com"]).unwrap();
+    git(repo, &["config", "commit.gpgsign", "false"]).unwrap();
+    git(repo, &["config", "tag.gpgsign", "false"]).unwrap();
     git(repo, &["checkout", "-q", "-B", "main"]).unwrap();
 }
 

@@ -15,12 +15,12 @@ pub mod status;
 pub mod write;
 
 use docket_core::api::{
-    AnswerRequest, AskRequest, DecideRequest, DropRequest, KeyRequest, PriorityRequest,
+    AnswerRequest, AskRequest, DecideRequest, DepRequest, DropRequest, KeyRequest, PriorityRequest,
     RateRequest, ReleaseRequest, ReopenRequest, ReplyRequest, ResumeRequest, RetryRequest,
     StartRequest, WaitRequest,
 };
 
-use crate::args::{Cmd, Queue};
+use crate::args::{Cmd, DepCmd, Queue};
 use crate::ctx::Ctx;
 use crate::fail::Result;
 
@@ -44,7 +44,7 @@ pub fn run(ctx: &mut Ctx, cmd: Option<&Cmd>) -> Result<i32> {
             };
             lists::next(ctx, &q)
         }
-        Cmd::Todo => lists::todo(ctx),
+        Cmd::Todo(q) => lists::todo(ctx, q),
         Cmd::Wip { host } => lists::wip(ctx, host.as_ref()),
         Cmd::Waiting { on } => lists::waiting(ctx, on.as_ref()),
         Cmd::Questions { theme } => lists::questions(ctx, theme.as_ref()),
@@ -246,6 +246,7 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
                 model: opt(model.as_ref()),
                 on: opt(on.as_ref()),
                 role: opt(role.as_ref()),
+                effort: None,
             };
             write::start(ctx, &req)
         }
@@ -256,6 +257,7 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             rebase,
             runner,
             model,
+            outcome,
             force,
         } => {
             let req = ReleaseRequest {
@@ -266,6 +268,7 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
                 rebase: opt(rebase.as_ref()),
                 runner: opt(runner.as_ref()),
                 model: opt(model.as_ref()),
+                outcome: opt(outcome.as_ref()),
             };
             write::release(ctx, &req)
         }
@@ -323,19 +326,38 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             };
             write::moved(ctx, "wait", &req)
         }
-        Cmd::Resume { id, note } => {
+        Cmd::Resume { id, note, force } => {
             let req = ResumeRequest {
-                common: ctx.common(false)?,
+                common: ctx.common(*force)?,
                 id: id.clone(),
                 note: opt(note.as_ref()),
             };
             write::moved(ctx, "resume", &req)
         }
-        Cmd::Ask { id, note, force } => {
+        Cmd::Dep { what } => {
+            let (id, on, force, remove) = match what {
+                DepCmd::Add { id, on, force } => (id, on, force, false),
+                DepCmd::Rm { id, on, force } => (id, on, force, true),
+            };
+            let req = DepRequest {
+                common: ctx.common(*force)?,
+                id: id.clone(),
+                on: on.clone(),
+                remove,
+            };
+            write::moved(ctx, "dep", &req)
+        }
+        Cmd::Ask {
+            id,
+            note,
+            need,
+            force,
+        } => {
             let req = AskRequest {
                 common: ctx.common(*force)?,
                 id: id.clone(),
                 note: note.clone(),
+                need: need.clone(),
             };
             write::ask(ctx, &req)
         }

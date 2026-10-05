@@ -15,6 +15,7 @@ use crate::entities::{item, link, project};
 use crate::reads::public::{
     Failure, Kinds, failure, internal, item_of, open_members, project_of, public, sql,
 };
+use crate::reads::queue::under_cond;
 
 const STATES: [&str; 4] = ["open", "done", "dropped", "any"];
 
@@ -28,6 +29,8 @@ pub(crate) struct Narrow {
     pub exclude: Option<i64>,
     pub theme: Option<String>,
     pub without_theme: Option<String>,
+    /// Only items under this plan, story or concept, by the rule `next` applies.
+    pub under: Option<String>,
     pub n: i64,
 }
 
@@ -41,7 +44,12 @@ const SNIPPET: &str =
 /// The items of a project matching a `websearch_to_tsquery` text, best first, as `i.*` with the
 /// matched body, the query and the score. The query's separators are read as the index reads them.
 /// The score is the rank negated: lower is closer.
-pub(crate) fn ranked(slug: &str, query: &str, narrow: &Narrow) -> (String, Vec<sea_orm::Value>) {
+pub(crate) fn ranked(
+    slug: &str,
+    query: &str,
+    narrow: &Narrow,
+    under: (String, Vec<sea_orm::Value>),
+) -> (String, Vec<sea_orm::Value>) {
     let mut text = format!(
         "SELECT i.*, s.body AS matched, q, (-ts_rank({WEIGHTS}, s.doc, q))::float8 AS score \
          FROM search s JOIN items i ON i.rid = s.rid, websearch_to_tsquery('simple', translate(?, '/:<>@?=&#%~+', '            ')) q \
@@ -74,6 +82,8 @@ pub(crate) fn ranked(slug: &str, query: &str, narrow: &Narrow) -> (String, Vec<s
         text.push_str(" AND (i.theme IS NULL OR i.theme NOT ILIKE ? ESCAPE '')");
         values.push(format!("%{theme}%").into());
     }
+    text.push_str(&under.0);
+    values.extend(under.1);
     text.push_str(" ORDER BY score, i.rid LIMIT ?");
     values.push(narrow.n.into());
     (text, values)
@@ -86,7 +96,8 @@ pub(crate) async fn search_rows(
     query: &str,
     narrow: &Narrow,
 ) -> Result<Vec<(item::Model, f64, String)>, Failure> {
-    let (inner, values) = ranked(slug, query, narrow);
+    let under = under_cond(db, slug, narrow.under.as_deref(), "i.rid").await?;
+    let (inner, values) = ranked(slug, query, narrow, under);
     let text = format!(
         "SELECT m.*, ts_headline('simple', m.matched, m.q, {SNIPPET}) AS snip FROM ({inner}) m \
          ORDER BY m.score, m.rid"
@@ -145,6 +156,7 @@ pub struct SearchQuery {
     raw: bool,
     theme: Option<String>,
     without_theme: Option<String>,
+    under: Option<String>,
 }
 
 fn twenty() -> i64 {
@@ -174,6 +186,7 @@ pub async fn search(
         exclude: None,
         theme: q.theme,
         without_theme: q.without_theme,
+        under: q.under,
         n: q.n,
     };
     let rows = search_rows(&db, &q.project, &query, &narrow).await?;

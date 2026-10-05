@@ -1050,8 +1050,10 @@ dependencies = [
 name = "docket-migration"
 version = "0.1.0"
 dependencies = [
+ "docket-core",
  "sea-orm",
  "sea-orm-migration",
+ "serde_json",
  "tokio",
 ]
 

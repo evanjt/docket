@@ -67,6 +67,7 @@ async fn seeded() -> (Router, Scratch) {
         ("drop", json!({"id": "B2", "superseded_by": "B1"})),
         ("new", json!({"key": "B", "title": "After shelves"})),
         ("wait", json!({"id": "B3", "on": "A1"})),
+        ("dep", json!({"id": "B3", "on": ["B1"]})),
         ("answer", json!({"id": "Q1", "decision": "Two"})),
         ("start", json!({"id": "Q1"})),
         (
@@ -91,9 +92,38 @@ fn as_map(page: &DumpPage) -> BTreeMap<String, String> {
     files(page, |_| None).into_iter().collect()
 }
 
+/// Each assignment row but its actor, which only a live write knows.
+async fn attempts(db: &Scratch) -> Vec<serde_json::Value> {
+    let rows = db
+        .db
+        .query_all_raw(docket_migration::statement(
+            "SELECT i.id, a.kind, a.assignee, a.started_at, a.ended_at, a.outcome, a.branch, a.host \
+             FROM assignments a JOIN items i USING (rid) ORDER BY i.id, a.id",
+            vec![],
+        ))
+        .await
+        .unwrap();
+    rows.iter()
+        .map(|r| {
+            let text = |n| r.try_get_by_index::<Option<String>>(n).unwrap();
+            json!([
+                text(0),
+                text(1),
+                text(2),
+                text(3),
+                text(4),
+                text(5),
+                text(6),
+                text(7)
+            ])
+        })
+        .collect()
+}
+
 #[tokio::test]
 async fn test_restore_round_trips_a_full_dump() {
-    let before = full_page(&seeded().await.0).await;
+    let (live, seeded_db) = seeded().await;
+    let before = full_page(&live).await;
     let dir = tempfile::tempdir().unwrap();
     write_all(dir.path(), &before);
     let db = Scratch::bare(2).await;
@@ -116,6 +146,13 @@ async fn test_restore_round_trips_a_full_dump() {
     .await
     .unwrap();
     assert_eq!(cites, 3);
+    let restored = attempts(&db).await;
+    assert!(!restored.is_empty());
+    assert_eq!(attempts(&seeded_db).await, restored);
+    let depends: i64 = scalar(&db.db, "SELECT COUNT(*) FROM dependencies", vec![])
+        .await
+        .unwrap();
+    assert_eq!(depends, 3);
 }
 
 #[tokio::test]

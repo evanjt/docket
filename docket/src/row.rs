@@ -140,7 +140,10 @@ fn tail_lines(r: &Row, flag: Option<&str>) -> Vec<String> {
     if r.turn.as_deref() == Some("user")
         && let Some(note) = r.turn_note.as_deref().filter(|n| !n.is_empty())
     {
-        tail.push(format!("asked: {note}"));
+        tail.push(format!(
+            "asked: {}",
+            cut(note.lines().next().unwrap_or_default(), 120)
+        ));
     }
     if r.state == "open"
         && let Some(d) = r.decision.as_deref().filter(|d| !d.is_empty())

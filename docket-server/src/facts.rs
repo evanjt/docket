@@ -12,6 +12,8 @@ use serde_json::Value;
 
 use docket_core::api::{FactRequest, FactSet, Facts};
 use docket_core::fact;
+use docket_core::rules::COMPLEXITIES;
+use docket_core::word::PRIORITIES;
 
 use crate::auth::Caller;
 use crate::store::{Tx, json, scalar, sql};
@@ -84,6 +86,8 @@ pub async fn read(
         project: q.project,
         skills,
         owner: owner(&db).await?,
+        priorities: PRIORITIES.map(String::from).to_vec(),
+        levels: COMPLEXITIES.map(String::from).to_vec(),
     }))
 }
 

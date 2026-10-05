@@ -8,7 +8,9 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use docket_core::api::Facts;
-use docket_core::api::{Common, EditRequest, ReleaseRequest, StartRequest, Started};
+use docket_core::api::{
+    Common, EditRequest, JobReportRequest, ReleaseRequest, StartRequest, Started,
+};
 use docket_core::clock;
 use docket_core::fact::{self, Model, Role};
 use docket_core::machine::{Limit, Machine};
@@ -76,6 +78,7 @@ pub fn dispatch(ctx: &mut Ctx, ask: &Ask) -> Result<i32> {
             model: Some(model.model.clone()),
             on: Some(m.name.clone()),
             role: Some(role.clone()),
+            effort: model.effort.clone(),
         },
     )?;
     let url = via.git_url(&checkout);
@@ -94,14 +97,11 @@ pub fn dispatch(ctx: &mut Ctx, ask: &Ask) -> Result<i32> {
     );
     if let Err(why) = started {
         let _ = git(&repo, &["push", &url, &format!(":refs/heads/{branch}")]);
-        let _: Value = ctx.api.post(
-            "release",
-            &ReleaseRequest {
-                common,
-                id: id.clone(),
-                note: Some(format!("dispatch to {} failed: {why}", m.name)),
-                ..ReleaseRequest::default()
-            },
+        give_back(
+            ctx,
+            common,
+            &id,
+            format!("dispatch to {} failed: {why}", m.name),
         )?;
         return Err(Fail::refused(format!(
             "dispatch of {id} to {} failed, the claim given back: {why}",
@@ -165,6 +165,21 @@ fn place(
         },
     )?;
     Ok((model, m.clone()))
+}
+
+/// The claim of a job that never started given back, its attempt ended as failed.
+fn give_back(ctx: &mut Ctx, common: Common, id: &str, note: String) -> Result<()> {
+    let _: Value = ctx.api.post(
+        "release",
+        &ReleaseRequest {
+            common,
+            id: id.to_string(),
+            note: Some(note),
+            outcome: Some("failed".to_string()),
+            ..ReleaseRequest::default()
+        },
+    )?;
+    Ok(())
 }
 
 /// The project's jobs on every machine, or every project's; with `wait`, read again until one of
@@ -285,6 +300,7 @@ pub fn collect(ctx: &mut Ctx, id: &str, discard: bool) -> Result<i32> {
         None
     };
     append_observations(ctx, &id, name, &row)?;
+    report_usage(ctx, &id, &row);
     record_limits(ctx, &[with_machine(&row, on)]);
     let reference = format!("refs/heads/{branch}");
     let commits = if git(&repo, &["rev-parse", "--verify", "--quiet", &reference]).is_ok() {
@@ -304,6 +320,31 @@ pub fn collect(ctx: &mut Ctx, id: &str, discard: bool) -> Result<i32> {
     };
     said.print(ctx.json);
     Ok(0)
+}
+
+/// The job's times, exit, tokens and reported cost posted to the item's open claim. A server that
+/// cannot take them is said on standard error: the change is collected all the same.
+fn report_usage(ctx: &mut Ctx, id: &str, row: &Value) {
+    let stamp = |k: &str| row[k].as_u64().map(clock::stamp);
+    let sent = ctx.common(false).and_then(|common| {
+        let _: Value = ctx.api.post(
+            "job-report",
+            &JobReportRequest {
+                common,
+                id: id.to_string(),
+                start: stamp("started"),
+                end: stamp("ended"),
+                exit: row["exit"].as_i64().and_then(|e| i32::try_from(e).ok()),
+                tokens_in: row["tokens_in"].as_i64(),
+                tokens_out: row["tokens"].as_i64(),
+                cost_reported: row["cost"].as_f64(),
+            },
+        )?;
+        Ok(())
+    });
+    if let Err(why) = sent {
+        eprintln!("docket: the usage of {id}'s job was not recorded: {why}");
+    }
 }
 
 /// A job's row with the machine it ran on added, as `jobs` reads it.

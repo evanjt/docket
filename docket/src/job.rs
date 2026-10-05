@@ -292,11 +292,14 @@ pub fn message(text: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// What a session's event stream says: its final message and the output tokens it spent.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// What a session's event stream says: its final message, the tokens it spent and the cost it reported.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Read {
     pub last: Option<String>,
     pub tokens: Option<u64>,
+    pub tokens_in: Option<u64>,
+    /// The cost the runner reported, summed over its results; Codex reports none.
+    pub cost: Option<f64>,
     /// The last error the runner's own stream reported, which is where a usage limit shows when the
     /// session ended without a final message.
     pub error: Option<String>,
@@ -336,6 +339,12 @@ pub fn read_events(runner: &str, events: &str) -> Read {
         };
         if counted && let Some(n) = e["usage"]["output_tokens"].as_u64() {
             out.tokens = Some(out.tokens.unwrap_or(0) + n);
+        }
+        if counted && let Some(n) = e["usage"]["input_tokens"].as_u64() {
+            out.tokens_in = Some(out.tokens_in.unwrap_or(0) + n);
+        }
+        if counted && let Some(c) = e["total_cost_usd"].as_f64() {
+            out.cost = Some(out.cost.unwrap_or(0.0) + c);
         }
     }
     out
@@ -431,7 +440,7 @@ fn number(dir: &Path, file: &str) -> Option<i32> {
 }
 
 /// One job as `status` lists it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Row {
     pub name: String,
     pub project: String,
@@ -444,6 +453,13 @@ pub struct Row {
     pub state: State,
     pub minutes: u64,
     pub tokens: Option<u64>,
+    pub tokens_in: Option<u64>,
+    /// The cost the runner reported.
+    pub cost: Option<f64>,
+    /// Seconds since the epoch at the job's start and end.
+    pub started: u64,
+    pub ended: u64,
+    pub exit: Option<i32>,
     pub report: Option<String>,
     pub note: Option<String>,
     /// The one-line commit message the job proposes.
@@ -507,6 +523,11 @@ pub fn row(dir: &Path, at: u64) -> Option<Row> {
         state: st,
         minutes: ended.saturating_sub(meta.started) / 60,
         tokens: got.tokens,
+        tokens_in: got.tokens_in,
+        cost: got.cost,
+        started: meta.started,
+        ended,
+        exit: exit.as_deref().and_then(|e| e.trim().parse().ok()),
         report: said.map(|r| r.line()),
         note,
         message: last.as_deref().and_then(message),

@@ -3,6 +3,8 @@
 
 use std::collections::BTreeSet;
 
+use docket_core::api::LeadState;
+use docket_core::machine::Machine;
 use docket_core::pace::{Minute, Net, Pace};
 use docket_core::rows::{Derived, EventRow, ItemRow, ProjectRow, Row, Shown, Status};
 
@@ -96,6 +98,11 @@ pub struct ProjectData {
     /// The current release's tickets closed against those opened in the last hour.
     pub net: Net,
     pub now: i64,
+    /// Who leads the project; `None` when the route could not be read.
+    pub lead: Option<LeadState>,
+    pub machines: Vec<Machine>,
+    /// Opened and closed per day for the last week, oldest first.
+    pub trend: Vec<(u64, u64)>,
 }
 
 #[derive(Clone)]

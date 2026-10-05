@@ -1,6 +1,6 @@
 //! A SQLite docket database copied into an empty Postgres one: every row kept with its rid, event
-//! seq and link id, the search rows rebuilt, and the counts compared per project and table before
-//! the copy commits.
+//! seq and link id, the search and assignment rows rebuilt, and the counts compared per project and
+//! table before the copy commits.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -192,6 +192,11 @@ const SEARCH: &str = "INSERT INTO search (rid, id, title, body, files) \
      ORDER BY l.to_path) FROM links l WHERE l.rid = i.rid AND l.kind IN ('cites_file', 'cites_test')), '') \
      FROM items i";
 
+/// Each open item's wait on another, as the dependency it is.
+const DEPENDS: &str = "INSERT INTO dependencies (rid, on_rid, created_at) \
+     SELECT rid, wait_item, wait_since FROM items \
+     WHERE state = 'open' AND wait_on = 'item' AND wait_item IS NOT NULL";
+
 /// The bind values Postgres takes at most in one statement.
 const MAX_VALUES: usize = 65_535;
 
@@ -217,7 +222,13 @@ pub async fn import(from: &str, to: &DatabaseConnection) -> Result<Counts, Strin
     tx.execute_unprepared(SEARCH)
         .await
         .map_err(|e| e.to_string())?;
+    tx.execute_unprepared(DEPENDS)
+        .await
+        .map_err(|e| e.to_string())?;
     docket_migration::reset_identities(&tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    docket_migration::assignments::rebuild_all(&tx)
         .await
         .map_err(|e| e.to_string())?;
     let had = counts(&source).await?;

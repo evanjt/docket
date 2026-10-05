@@ -31,7 +31,7 @@ Run from the project root. Note the branch the session started on (`git branch
        docket --branch audit/t14-$n start T14
 
    A refusal means another session holds it, it waits, or it is the owner's
-   turn: take another. Never `--force` a live claim, never `release` one you
+   turn: take another. Never `--force` a live claim, never `unclaim` one you
    did not make. A group on the row is one session's work: claim each member
    as you reach it. Then `docket similar T14`, so work landed under another id
    is not repeated.
@@ -43,7 +43,7 @@ Run from the project root. Note the branch the session started on (`git branch
 4. `docket skills merge` prints the merge; run it and read git's exit code.
    If another session merged first, rebase and merge again. Check content:
    `git show HEAD:<file> | grep <symbol>`. Never push. Then
-   `docket close T14 <sha>`. A plan it names as released is due for an audit,
+   `docket close T14 <sha>`. A plan it names as unblocked is due for an audit,
    another session's work.
 5. Repeat until `docket next --role work` offers nothing you can claim, or the
    number you were asked for is reached.
@@ -67,7 +67,10 @@ and accounts) is a question for the owner: `docket new Q "..." --body -` with
 every option, its `file:line` evidence, what is ruled out and the fact that
 would settle it, then `docket wait T14 --on Q<n>` and take another ticket. A
 measurement nobody has taken is `docket new I`. Work only the owner can do is
-`docket ask T14 "what is needed"`.
+`docket ask T14 "what is needed" --need hold|access|act|judge` (a device or thing in hand, an
+account or store, an action from their machine, a judgement). The owner holds at most
+`owner_limit` open asks; past it `ask` is refused: derive the choice, depend on an ask
+already open, or wait.
 
 Every item filed names its release with `--release`, by what it is: a
 crash, hang, data loss, wrong numbers, upgrade safety, security, privacy or
@@ -94,7 +97,7 @@ A lead may run the same queue, claiming each ticket and starting a job for it
 with `docket job run`. A job follows its brief, not this skill: it leaves its
 change uncommitted for the lead, never claims, merges or closes, and ends with
 its report.
-`docket` refuses `start`, `release`, `close`, `drop` and `reopen` inside a
+`docket` refuses `start`, `unclaim`, `close`, `drop` and `reopen` inside a
 job. Beside a lead, take only what `docket next --role work` still offers.
 
 Say `stop` when done. No summary.

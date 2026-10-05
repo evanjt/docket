@@ -170,6 +170,8 @@ pub struct StartRequest {
     pub on: Option<String>,
     #[serde(default)]
     pub role: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -187,6 +189,29 @@ pub struct ReleaseRequest {
     pub runner: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    /// How the attempt ended: landed, conflict, gate, blocked or failed.
+    #[serde(default)]
+    pub outcome: Option<String>,
+}
+
+/// What a finished job's own records say, posted to the open claim of its item.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct JobReportRequest {
+    #[serde(flatten)]
+    pub common: Common,
+    pub id: String,
+    #[serde(default)]
+    pub start: Option<String>,
+    #[serde(default)]
+    pub end: Option<String>,
+    #[serde(default)]
+    pub exit: Option<i32>,
+    #[serde(default)]
+    pub tokens_in: Option<i64>,
+    #[serde(default)]
+    pub tokens_out: Option<i64>,
+    #[serde(default)]
+    pub cost_reported: Option<f64>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -234,6 +259,17 @@ pub struct WaitRequest {
     pub until: Option<String>,
 }
 
+/// `dep add` and `dep rm`: the items `id` depends on, added or removed.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct DepRequest {
+    #[serde(flatten)]
+    pub common: Common,
+    pub id: String,
+    pub on: Vec<String>,
+    #[serde(default)]
+    pub remove: bool,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ResumeRequest {
     #[serde(flatten)]
@@ -250,6 +286,9 @@ pub struct AskRequest {
     pub common: Common,
     pub id: String,
     pub note: String,
+    /// What the ask needs of the owner: one of `queue::NEEDS`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub need: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -481,6 +520,12 @@ pub struct Facts {
     /// The owner-level agent settings, held on the server for every project.
     #[serde(default)]
     pub owner: BTreeMap<String, String>,
+    /// The priority tiers, most urgent first.
+    #[serde(default)]
+    pub priorities: Vec<String>,
+    /// The complexity levels, highest first.
+    #[serde(default)]
+    pub levels: Vec<String>,
 }
 
 /// One fact written: the facts as they stand after it.

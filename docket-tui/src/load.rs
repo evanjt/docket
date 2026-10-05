@@ -81,7 +81,14 @@ impl<S: Source> App<S> {
             let next = self.source.next(&slug, NEXT_ROWS, &Filter::default())?;
             let wip = self.source.list("wip", &slug)?;
             let recent = self.source.recent(&slug)?;
-            Ok(project_data(&board, status, next, wip, &recent, now()))
+            let mut data = project_data(&board, status, next, wip, &recent, now());
+            data.lead = self.source.lead(&slug).ok();
+            data.machines = self
+                .source
+                .machines()
+                .map(|m| m.machines)
+                .unwrap_or_default();
+            Ok(data)
         };
         match read() {
             Ok(data) => {
@@ -323,7 +330,49 @@ pub fn project_data(
         minutes: rows,
         stale,
         now,
+        lead: None,
+        machines: Vec::new(),
+        trend: daily(recent, TREND_DAYS, now),
     }
+}
+
+/// The days of the trend line.
+const TREND_DAYS: usize = 7;
+
+/// Opened and closed counts per local day for the `days` days ending today, oldest first. Days older
+/// than the oldest event read are left out, so a page of events that does not reach back the whole
+/// window never shows a false zero.
+#[must_use]
+pub fn daily(recent: &[EventRow], days: usize, now: i64) -> Vec<(u64, u64)> {
+    use chrono::{Duration, Local, TimeZone};
+    let Some(today) = Local.timestamp_opt(now, 0).single().map(|t| t.date_naive()) else {
+        return Vec::new();
+    };
+    let stamps: Vec<(chrono::NaiveDate, &str)> = recent
+        .iter()
+        .filter_map(|e| {
+            let at = Local.timestamp_opt(epoch(&e.at)?, 0).single()?;
+            Some((at.date_naive(), e.kind.as_str()))
+        })
+        .collect();
+    let Some(oldest) = stamps.iter().map(|(d, _)| *d).min() else {
+        return Vec::new();
+    };
+    let span = i64::try_from(days).unwrap_or(0);
+    (0..span)
+        .rev()
+        .map(|back| today - Duration::days(back))
+        .filter(|day| *day > oldest)
+        .map(|day| {
+            let on = |kind: &str| {
+                stamps
+                    .iter()
+                    .filter(|(d, k)| *d == day && *k == kind)
+                    .count() as u64
+            };
+            (on("opened"), on("closed"))
+        })
+        .collect()
 }
 
 /// The moves of a project's newest events, oldest first, standing items left out.

@@ -119,7 +119,10 @@ fn test_check_refuses_an_unknown_key_naming_every_fact() {
         why.starts_with("colour is not a skill fact. One of: owner, worktree, merge"),
         "{why}"
     );
-    assert!(why.ends_with("stale_claim, lead_lapse, flow"), "{why}");
+    assert!(
+        why.ends_with("stale_claim, lead_lapse, owner_limit, flow"),
+        "{why}"
+    );
 }
 
 #[test]
@@ -430,4 +433,11 @@ fn test_model_without_a_runner_takes_the_entry_on_another() {
         model_without(&one_runner, &skills(&[]), Role::Build, None, &["codex"]),
         None
     );
+}
+
+#[test]
+fn test_owner_limit_defaults_to_twenty_and_is_a_count() {
+    assert_eq!(default_of("owner_limit"), Some("20"));
+    assert_eq!(check("owner_limit", "5"), Ok(()));
+    assert!(check("owner_limit", "0").is_err());
 }

@@ -1,6 +1,5 @@
 <script lang="ts">
   import { project } from '../lib/context';
-  import { LEVELS, PRIORITIES } from '../lib/flow';
   import { newItemDefaults, newItemRequests } from '../lib/newitem';
   import { go } from '../lib/router.svelte';
   import { act } from '../lib/session.svelte';
@@ -64,12 +63,12 @@
       placeholder={'**Evidence.** What shows it, with file:line.\n**Fix.** What changes.\n**Failing case.** The test that fails first.'}></textarea>
     <div class="pair">
       <label>Priority
-        <select class="field" bind:value={priority}>{#each PRIORITIES as p (p)}<option value={p}>{p}</option>{/each}</select>
+        <select class="field" bind:value={priority}>{#each ctx.priorities as p (p)}<option value={p}>{p}</option>{/each}</select>
       </label>
       <label>Effort
         <select class="field" bind:value={complexity}>
           <option value="">unrated</option>
-          {#each LEVELS as l (l)}<option value={l}>{l}</option>{/each}
+          {#each ctx.levels as l (l)}<option value={l}>{l}</option>{/each}
         </select>
       </label>
     </div>

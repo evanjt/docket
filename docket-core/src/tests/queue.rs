@@ -281,3 +281,186 @@ fn test_next_over_several_roles_orders_by_release_then_role() {
     };
     assert_eq!(ids(next(&items, &ties, &f, 10)), vec![2, 1, 4, 5]);
 }
+
+#[test]
+fn test_next_current_release_only_drops_later_releases() {
+    let items = vec![
+        Candidate {
+            theme: Some("1.1"),
+            tier: 0,
+            ..item(1, "A", Kind::Audit)
+        },
+        Candidate {
+            theme: Some("docs"),
+            ..item(2, "B", Kind::Work)
+        },
+        Candidate {
+            theme: Some("1.0"),
+            ..item(3, "B", Kind::Work)
+        },
+        item(4, "B", Kind::Work),
+    ];
+    let r = releases(&["1.0", "1.1"]);
+    let f = Filter {
+        releases: &r,
+        current_release_only: true,
+        ..Filter::default()
+    };
+    assert_eq!(ids(next(&items, &[], &f, 10)), vec![2, 3, 4]);
+}
+
+#[test]
+fn test_bare_next_leaves_out_a_plan_with_an_open_member() {
+    let items = vec![
+        item(1, "A", Kind::Audit),
+        item(2, "B", Kind::Work),
+        item(3, "A", Kind::Audit),
+    ];
+    let ties = opened(2, 1);
+    assert_eq!(ids(next(&items, &ties, &Filter::default(), 10)), vec![2, 3]);
+}
+
+fn owed<'a>(rid: i64, key: &'static str, kind: Kind) -> OwnerRow<'a> {
+    OwnerRow {
+        rid,
+        key,
+        kind,
+        waiting: false,
+        derived: false,
+        need: None,
+        theme: None,
+        tier: 2,
+        asked_at: "2026-01-01",
+    }
+}
+
+fn owner_ids(q: &OwnerQueue) -> Vec<i64> {
+    q.rows.iter().map(|(rid, _)| *rid).collect()
+}
+
+#[test]
+fn test_owner_queue_groups_by_need_then_release_priority_and_age() {
+    let rows = vec![
+        OwnerRow {
+            need: Some("act"),
+            ..owed(1, "B", Kind::Work)
+        },
+        OwnerRow {
+            need: Some("hold"),
+            theme: Some("0.4.1"),
+            ..owed(2, "B", Kind::Work)
+        },
+        OwnerRow {
+            need: Some("hold"),
+            theme: Some("0.4.0"),
+            tier: 2,
+            asked_at: "2026-01-03",
+            ..owed(3, "B", Kind::Work)
+        },
+        OwnerRow {
+            need: Some("hold"),
+            theme: Some("0.4.0"),
+            tier: 2,
+            asked_at: "2026-01-02",
+            ..owed(4, "B", Kind::Work)
+        },
+        OwnerRow {
+            need: Some("hold"),
+            theme: Some("0.4.0"),
+            tier: 0,
+            asked_at: "2026-01-09",
+            ..owed(5, "B", Kind::Work)
+        },
+        owed(6, "B", Kind::Work),
+        OwnerRow {
+            need: Some("judge"),
+            ..owed(7, "B", Kind::Work)
+        },
+    ];
+    let q = owner_queue(&rows, &OwnerFilter::of(&releases(&["0.4.0", "0.4.1"])));
+    assert_eq!(owner_ids(&q), vec![5, 4, 3, 2, 1, 7, 6]);
+    let groups: Vec<&str> = q.rows.iter().map(|(_, g)| *g).collect();
+    assert_eq!(
+        groups,
+        vec!["hold", "hold", "hold", "hold", "act", "judge", "other"]
+    );
+}
+
+#[test]
+fn test_owner_queue_lists_derived_answers_first() {
+    let rows = vec![
+        OwnerRow {
+            need: Some("hold"),
+            ..owed(1, "B", Kind::Work)
+        },
+        OwnerRow {
+            derived: true,
+            tier: 4,
+            ..owed(2, "Q", Kind::Decision)
+        },
+        owed(3, "Q", Kind::Decision),
+    ];
+    let q = owner_queue(&rows, &OwnerFilter::of(&releases(&["0.4.0", "0.4.1"])));
+    assert_eq!(owner_ids(&q), vec![2, 3, 1]);
+    assert_eq!(q.rows[0].1, "derived");
+    assert_eq!(q.rows[1].1, "question");
+}
+
+#[test]
+fn test_owner_queue_puts_the_question_then_the_critical_current_item_first_and_drops_waiting() {
+    let rows = vec![
+        OwnerRow {
+            theme: Some("0.4.1"),
+            ..owed(1, "B", Kind::Work)
+        },
+        OwnerRow {
+            tier: 0,
+            theme: Some("0.4.0"),
+            ..owed(2, "B", Kind::Work)
+        },
+        OwnerRow {
+            waiting: true,
+            ..owed(3, "PL", Kind::Audit)
+        },
+        OwnerRow {
+            theme: Some("ci"),
+            ..owed(4, "B", Kind::Work)
+        },
+        owed(5, "Q", Kind::Decision),
+    ];
+    let q = owner_queue(&rows, &OwnerFilter::of(&releases(&["0.4.0", "0.4.1"])));
+    assert_eq!(owner_ids(&q), vec![5, 2, 4, 1]);
+    assert_eq!(q.waiting, 1);
+}
+
+#[test]
+fn test_owner_queue_narrows_by_key_priority_and_count() {
+    let rows = vec![
+        OwnerRow {
+            tier: 0,
+            ..owed(1, "B", Kind::Work)
+        },
+        owed(2, "B", Kind::Work),
+        owed(3, "T", Kind::Work),
+    ];
+    let releases = releases(&["0.4.0", "0.4.1"]);
+    let keyed = OwnerFilter {
+        key: Some("B"),
+        priority: Some(0),
+        ..OwnerFilter::of(&releases)
+    };
+    assert_eq!(owner_ids(&owner_queue(&rows, &keyed)), vec![1]);
+    let two = OwnerFilter {
+        limit: Some(2),
+        ..OwnerFilter::of(&releases)
+    };
+    assert_eq!(owner_ids(&owner_queue(&rows, &two)), vec![1, 2]);
+}
+
+#[test]
+fn test_the_owner_limit_refuses_the_ask_past_it() {
+    assert!(owner_limit_refusal(1, 2).is_none());
+    let why = owner_limit_refusal(2, 2).expect("refused at the limit");
+    assert!(why.contains("owner_limit"), "{why}");
+    assert!(why.contains('2'), "{why}");
+}

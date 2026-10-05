@@ -25,6 +25,8 @@ const ASIDE: [&str; 3] = ["checking", "blocked", "parked"];
 const ROWS: usize = 5;
 /// Rows of NEXT, and of MOVES until `m` shows them all.
 const NEXT: usize = 5;
+/// Cell heights of the trend lines, lowest first.
+const SPARK: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 const MOVES: usize = 5;
 
 #[must_use]
@@ -105,7 +107,11 @@ fn sidebar(board: &Board, data: &ProjectData, width: usize) -> Doc {
     let mut d = Doc::default();
     progress(&mut d, data, width);
     d.blank();
+    lead(&mut d, data, width);
+    d.blank();
     claimed(&mut d, board, &data.wip, data.now, width);
+    d.blank();
+    machines(&mut d, data, width);
     d.blank();
     yours(&mut d, board, width);
     d.blank();
@@ -137,6 +143,10 @@ fn progress(d: &mut Doc, data: &ProjectData, width: usize) {
     if !net.is_empty() {
         d.plain(cut(&format!(" {net}"), width), Style::default());
     }
+    let trend = trend(&data.trend);
+    if !trend.is_empty() {
+        d.plain(cut(&format!(" {trend}"), width), Style::default());
+    }
     let mut segs = vec![seg(" ", Style::default())];
     let shown = FLOW
         .iter()
@@ -154,6 +164,32 @@ fn progress(d: &mut Doc, data: &ProjectData, width: usize) {
     d.line(fit(segs, width));
 }
 
+/// Opened and closed per day as two sparklines, oldest day first.
+fn trend(days: &[(u64, u64)]) -> String {
+    if days.is_empty() {
+        return String::new();
+    }
+    let peak = days.iter().map(|(o, c)| (*o).max(*c)).max().unwrap_or(0);
+    let line = |pick: fn(&(u64, u64)) -> u64| -> String {
+        days.iter()
+            .map(|d| {
+                let n = pick(d);
+                if n == 0 {
+                    return ' ';
+                }
+                let level = usize::try_from(n * 7 / peak.max(1)).unwrap_or(7).min(7);
+                SPARK[level]
+            })
+            .collect()
+    };
+    format!(
+        "{}d opened [{}] closed [{}]",
+        days.len(),
+        line(|d| d.0),
+        line(|d| d.1)
+    )
+}
+
 /// The pace of closes and how long the open work takes at it, when anything closed lately.
 fn pace(data: &ProjectData) -> String {
     let Some(per_hour) = data.pace.per_hour() else {
@@ -165,6 +201,51 @@ fn pace(data: &ProjectData) -> String {
     }
     let eta = i64::try_from(todo * 3600 / per_hour).unwrap_or(0);
     format!("closing {per_hour}/h   clear in {}", duration(eta))
+}
+
+/// LEAD: who leads the project and when the claim was last renewed, or that it lapsed or is free.
+fn lead(d: &mut Doc, data: &ProjectData, width: usize) {
+    d.plain("LEAD", style::bold());
+    let now = data.now;
+    let line = match data.lead.as_ref() {
+        None => " lead unread".to_string(),
+        Some(state) => match &state.lead {
+            None => " none holds the lead".to_string(),
+            Some(l) => {
+                let when = docket_core::pace::epoch(&l.renewed_at).map_or_else(
+                    || l.renewed_at.clone(),
+                    |t| format!("{} ago", duration(now - t)),
+                );
+                let host = l.host.split('.').next().unwrap_or("");
+                let word = if state.lapsed { "lapsed" } else { "renewed" };
+                format!(" {} on {host}, {word} {when}", l.session)
+            }
+        },
+    };
+    let tone = match data.lead.as_ref() {
+        Some(s) if s.lapsed => style::alarm(),
+        _ => Style::default(),
+    };
+    d.plain(cut(&line, width), tone);
+}
+
+/// MACHINES: each machine's slots in use, counted from the claims running on it.
+fn machines(d: &mut Doc, data: &ProjectData, width: usize) {
+    d.plain("MACHINES", style::bold());
+    if data.machines.is_empty() {
+        d.plain(" none set", style::dim());
+    }
+    for m in &data.machines {
+        let used = data
+            .wip
+            .iter()
+            .filter(|r| r.claim_on.as_deref() == Some(m.name.as_str()))
+            .count();
+        d.plain(
+            cut(&format!(" {} {used}/{}", m.name, m.slots), width),
+            Style::default(),
+        );
+    }
 }
 
 /// CLAIMED NOW: every claim, its branch, the host it was claimed on and for how long.
@@ -188,10 +269,16 @@ fn claimed(d: &mut Doc, board: &Board, wip: &[Row], now: i64, width: usize) {
             .and_then(docket_core::pace::epoch)
             .map_or_else(String::new, |t| duration(now - t));
         let branch = r.claim_branch.clone().unwrap_or_default();
+        let runner = match (r.claim_runner.as_deref(), r.claim_job.as_deref()) {
+            (Some(runner), Some(job)) => format!("  {runner} {job}"),
+            (None, Some(job)) => format!("  {job}"),
+            (Some(runner), None) => format!("  {runner}"),
+            (None, None) => String::new(),
+        };
         let mut segs = vec![seg(" ", Style::default())];
         segs.extend(item_spot(board, &r.id, 7));
         segs.push(seg(
-            format!("{branch} on {host}  {since}"),
+            format!("{branch} on {host}  {since}{runner}"),
             Style::default(),
         ));
         d.line(fit(segs, width));

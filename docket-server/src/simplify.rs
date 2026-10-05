@@ -285,7 +285,8 @@ async fn close_held_rounds(
         let row = tx.update(a.rid, &cols).await?;
         tx.event(slug, Some(a.rid), "closed", Some(&resolution), None, None)
             .await?;
-        release_waiters(tx, slug, &row, "closed").await?;
+        let p = tx.project(slug).await?;
+        release_waiters(tx, &p, &row, "closed").await?;
         c.closed.push(a.id);
     }
     Ok(())

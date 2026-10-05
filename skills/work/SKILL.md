@@ -49,7 +49,7 @@ Read what `start` printed.
 - The row with your branch on it: the ticket is yours, carry on.
 - A refusal: another session holds it, it waits on something, or it is the
   owner's turn. Take another. Never pass `--force` to take a claim that is
-  not abandoned, and never `release` a ticket you did not claim.
+  not abandoned, and never `unclaim` a ticket you did not claim.
 
 `start` names the other files a live claim touches beside yours, and the
 other members of a ticket's group: a group is one session's work, each member
@@ -88,7 +88,7 @@ added>`. Never push: the owner pushes.
     docket close T14 <sha>
 
 The printed row is the proof; a refused close prints why and changes nothing.
-When the close was a plan's last open ticket, the plan is named as released:
+When the close was a plan's last open ticket, the plan is named as unblocked:
 it is due for its audit, which is another session's work.
 
 Close a ticket to its full fix. A part that turns out wrong, blocked or out of
@@ -136,7 +136,10 @@ itself when the question is answered. Then take another ticket. Never end a
 reply by asking the owner to choose: the question is in the docket.
 
 Work only the owner can do (`docket skills hands`), a login, a device, an
-account, is handed over with `docket ask T14 "what is needed"`.
+account, is handed over with `docket ask T14 "what is needed" --need hold|access|act|judge`
+(a device or thing in hand, an account or store, an action from their machine, a
+judgement). The owner holds at most `owner_limit` open asks; past it `ask` is
+refused: derive the choice, depend on an ask already open, or wait.
 
 Every item filed names its release with `--release`, chosen by what it is,
 in this order. Its nature: a crash, a hang, data loss or wrong numbers,
@@ -165,7 +168,7 @@ for it with `docket job run`. A job follows the brief it was started with,
 not this skill: it builds on the branch it was given and leaves its change
 uncommitted for the lead to commit on its own machine, never claims, merges
 or closes, and ends with a one-line report the lead reads.
-`docket` refuses `start`, `release`, `close`, `drop` and `reopen` inside a
+`docket` refuses `start`, `unclaim`, `close`, `drop` and `reopen` inside a
 job. Beside a lead, take only what `docket next --role work` still offers;
 the claims keep the two apart.
 

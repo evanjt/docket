@@ -5,7 +5,9 @@
 
 use std::path::{Path, PathBuf};
 
-use docket_core::private::{Private, Titles, hits, ids, is_comment, shapes, ssh_hosts, terms};
+use docket_core::private::{
+    Private, Titles, hits, ids, is_comment, message_ids, shapes, ssh_hosts, terms,
+};
 
 use crate::args::PrivateCmd;
 use crate::ctx::Ctx;
@@ -156,35 +158,43 @@ fn check(ctx: &mut Ctx, scope: &Scope) -> Result<i32> {
     let mut found = Vec::new();
     let mut read = 0;
     let want_ids = scope.ids;
-    let scan = |name: &str, n: usize, line: &str, code: bool, found: &mut Vec<Hit>| {
-        let at = format!("{name}:{n}");
-        for t in hits(&look.terms, line) {
-            found.push(Hit {
-                at: at.clone(),
-                found: t.to_string(),
-            });
-        }
-        for t in look.titles.hits(line) {
-            found.push(Hit {
-                at: at.clone(),
-                found: format!("\"{t}\" (a docket item's title)"),
-            });
-        }
-        for t in shapes(line) {
-            found.push(Hit {
-                at: at.clone(),
-                found: format!("{t} (a private address or a token)"),
-            });
-        }
-        if want_ids && code && is_comment(line) {
-            for id in ids(&look.keys, line) {
+    let scan =
+        |name: &str, n: usize, line: &str, code: bool, message: bool, found: &mut Vec<Hit>| {
+            let at = format!("{name}:{n}");
+            for t in hits(&look.terms, line) {
                 found.push(Hit {
                     at: at.clone(),
-                    found: format!("{id} (a docket item cited in a comment)"),
+                    found: t.to_string(),
                 });
             }
-        }
-    };
+            for t in look.titles.hits(line) {
+                found.push(Hit {
+                    at: at.clone(),
+                    found: format!("\"{t}\" (a docket item's title)"),
+                });
+            }
+            for t in shapes(line) {
+                found.push(Hit {
+                    at: at.clone(),
+                    found: format!("{t} (a private address or a token)"),
+                });
+            }
+            if message {
+                for id in message_ids(&look.keys, line) {
+                    found.push(Hit {
+                        at: at.clone(),
+                        found: format!("{id} (a docket item cited in a commit message)"),
+                    });
+                }
+            } else if want_ids && code && is_comment(line) {
+                for id in ids(&look.keys, line) {
+                    found.push(Hit {
+                        at: at.clone(),
+                        found: format!("{id} (a docket item cited in a comment)"),
+                    });
+                }
+            }
+        };
     if let Some(range) = scope.range {
         let mut args = vec![
             "log",
@@ -207,7 +217,14 @@ fn check(ctx: &mut Ctx, scope: &Scope) -> Result<i32> {
                 in_message = false;
             } else if in_message {
                 n += 1;
-                scan(&format!("{commit} message"), n, line, true, &mut found);
+                scan(
+                    &format!("{commit} message"),
+                    n,
+                    line,
+                    true,
+                    true,
+                    &mut found,
+                );
             } else if let Some(f) = line.strip_prefix("+++ ") {
                 file = f.strip_prefix("b/").unwrap_or(f).to_string();
             } else if let Some(h) = line.strip_prefix("@@ ") {
@@ -224,6 +241,7 @@ fn check(ctx: &mut Ctx, scope: &Scope) -> Result<i32> {
                         n,
                         added,
                         is_code(&file),
+                        false,
                         &mut found,
                     );
                 }
@@ -240,7 +258,7 @@ fn check(ctx: &mut Ctx, scope: &Scope) -> Result<i32> {
             .enumerate()
             .filter(|(_, l)| !l.starts_with('#'))
         {
-            scan("commit message", i + 1, line, true, &mut found);
+            scan("commit message", i + 1, line, true, true, &mut found);
         }
         read = 1;
     } else if scope.staged {
@@ -262,7 +280,7 @@ fn check(ctx: &mut Ctx, scope: &Scope) -> Result<i32> {
                     .and_then(|p| p.parse().ok())
                     .unwrap_or(1);
             } else if let Some(added) = line.strip_prefix('+') {
-                scan(&file, n, added, is_code(&file), &mut found);
+                scan(&file, n, added, is_code(&file), false, &mut found);
                 n += 1;
             }
         }
@@ -279,7 +297,7 @@ fn check(ctx: &mut Ctx, scope: &Scope) -> Result<i32> {
             };
             read += 1;
             for (i, line) in text.lines().enumerate() {
-                scan(name, i + 1, line, is_code(name), &mut found);
+                scan(name, i + 1, line, is_code(name), false, &mut found);
             }
         }
     }

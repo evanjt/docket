@@ -318,7 +318,7 @@ fn test_waits_openers_turn_tags_and_standing_kinds_map_to_the_core() {
 }
 
 #[test]
-fn test_claims_past_and_present_become_assignment_rows() {
+fn test_claims_past_and_present_become_assignment_rows_with_the_outcome_their_notes_name() {
     let c = planned(decided());
     let rows: Vec<&Assignment> = c
         .changes
@@ -336,10 +336,7 @@ fn test_claims_past_and_present_become_assignment_rows() {
     };
     assert_eq!(
         of("T1"),
-        [
-            ("build/t1-1", Some("failed")),
-            ("build/t1-2", Some("landed"))
-        ]
+        [("build/t1-1", Some("gate")), ("build/t1-2", Some("landed"))]
     );
     assert_eq!(of("T11"), [("build/t11-1", None)]);
 }

@@ -6,9 +6,10 @@ use sea_orm::{DatabaseConnection, Value};
 use serde_json::{Map, Value as Json_, json};
 
 use docket_core::api::{
-    CloseRequest, Closed, DropRequest, Dropped, Moved, ReleaseRequest, ReopenRequest, Share,
-    StartRequest, Started,
+    CloseRequest, Closed, DropRequest, Dropped, JobReportRequest, Moved, ReleaseRequest,
+    ReopenRequest, Share, StartRequest, Started,
 };
+use docket_core::assignment::OUTCOMES;
 use docket_core::item::Item;
 use docket_core::rules;
 use docket_core::text::{gates_result, opened_ids};
@@ -16,7 +17,9 @@ use docket_core::word::Kind;
 
 use crate::auth::Caller;
 use crate::store::item_opt;
-use crate::verbs::graph::{came_due, live_overlaps, open_under, release_waiters, settle_audits};
+use crate::verbs::graph::{
+    came_due, hold_waiters, live_overlaps, open_under, release_waiters, settle_audits,
+};
 use crate::verbs::view::{brief, item_view, kind};
 use crate::verbs::{Call, Failure, ROLES, RUNNERS, choice, given};
 
@@ -70,8 +73,15 @@ pub async fn start(
         )));
     }
     let mut data = Map::new();
-    if let Some(role) = given(req.role.as_deref()) {
-        data.insert("role".into(), json!(role));
+    for (name, value) in [
+        ("role", &req.role),
+        ("effort", &req.effort),
+        ("job", &req.job),
+        ("machine", &req.on),
+    ] {
+        if let Some(v) = given(value.as_deref()) {
+            data.insert(name.into(), json!(v));
+        }
     }
     data.extend(run_facts(req.runner.as_deref(), req.model.as_deref()));
     let row = claim_row(&mut call, &r, &cols, &req).await?;
@@ -171,11 +181,15 @@ pub async fn release(
     Extension(caller): Extension<Caller>,
     Json(req): Json<ReleaseRequest>,
 ) -> Result<Json<Moved>, Failure> {
+    choice("outcome", req.outcome.as_deref(), &OUTCOMES)?;
     let mut call = Call::begin(&db, &caller, &req.common).await?;
     let r = call.item(&req.id).await?;
     let cols = rules::release(&r, &call.ctx)?;
     let row = call.tx.update(r.rid, &cols).await?;
     let mut data = run_facts(req.runner.as_deref(), req.model.as_deref());
+    if let Some(outcome) = given(req.outcome.as_deref()) {
+        data.insert("outcome".into(), json!(outcome));
+    }
     if req.bounce {
         data.insert("bounce".into(), json!(true));
     }
@@ -194,6 +208,50 @@ pub async fn release(
         .await?;
     settle_audits(&mut call.tx, &call.project, &[row.rid]).await?;
     let row = call.tx.fresh(row.rid).await?;
+    let item = item_view(&call.tx.conn, &call.project, &row).await?;
+    call.tx.commit().await?;
+    Ok(Json(Moved { item }))
+}
+
+/// The job's own records kept on the open claim: its times and exit in the event, its tokens and
+/// reported cost on the attempt's row.
+///
+/// # Errors
+/// 409 when the item is not claimed.
+pub async fn job_report(
+    State(db): State<DatabaseConnection>,
+    Extension(caller): Extension<Caller>,
+    Json(req): Json<JobReportRequest>,
+) -> Result<Json<Moved>, Failure> {
+    let call = Call::begin(&db, &caller, &req.common).await?;
+    let r = call.item(&req.id).await?;
+    if r.claim_branch.is_none() {
+        return Err(Failure::Refused(format!("{} holds no claim", r.id)));
+    }
+    let mut data = Map::new();
+    for (name, value) in [
+        ("start", given(req.start.as_deref()).map(|v| json!(v))),
+        ("end", given(req.end.as_deref()).map(|v| json!(v))),
+        ("exit", req.exit.map(|v| json!(v))),
+        ("tokens_in", req.tokens_in.map(|v| json!(v))),
+        ("tokens_out", req.tokens_out.map(|v| json!(v))),
+        ("cost_reported", req.cost_reported.map(|v| json!(v))),
+    ] {
+        if let Some(v) = value {
+            data.insert(name.into(), v);
+        }
+    }
+    call.tx
+        .event(
+            &call.slug,
+            Some(r.rid),
+            "job_reported",
+            None,
+            Some(call.branch()),
+            data_or_none(data).as_ref(),
+        )
+        .await?;
+    let row = call.tx.fresh(r.rid).await?;
     let item = item_view(&call.tx.conn, &call.project, &row).await?;
     call.tx.commit().await?;
     Ok(Json(Moved { item }))
@@ -267,7 +325,7 @@ pub async fn close(
             }
         }
     }
-    let mut released = release_waiters(&mut call.tx, &call.slug, &row, "closed").await?;
+    let mut released = release_waiters(&mut call.tx, &call.project, &row, "closed").await?;
     released.extend(settle_audits(&mut call.tx, &call.project, &[r.rid]).await?);
     let out = Closed {
         item: item_view(&call.tx.conn, &call.project, &row).await?,
@@ -310,7 +368,7 @@ pub async fn drop(
             None,
         )
         .await?;
-    let mut released = release_waiters(&mut call.tx, &call.slug, &row, "dropped").await?;
+    let mut released = release_waiters(&mut call.tx, &call.project, &row, "dropped").await?;
     released.extend(settle_audits(&mut call.tx, &call.project, &[r.rid]).await?);
     let out = Dropped {
         item: item_view(&call.tx.conn, &call.project, &row).await?,
@@ -345,6 +403,7 @@ pub async fn reopen(
         .await?;
     settle_audits(&mut call.tx, &call.project, &[r.rid]).await?;
     let row = call.tx.fresh(r.rid).await?;
+    hold_waiters(&mut call.tx, &call.project, &row).await?;
     let item = item_view(&call.tx.conn, &call.project, &row).await?;
     call.tx.commit().await?;
     Ok(Json(Moved { item }))

@@ -1,4 +1,5 @@
 //! A Postgres database rebuilt from a dump checkout, for disaster recovery: into an empty one only.
+//! The assignment rows are not dumped; they are rebuilt from the events.
 
 use std::path::Path;
 
@@ -50,6 +51,9 @@ pub async fn restore(repo: &Path, url: &str) -> Result<Restored, String> {
     for slug in tree::projects(repo)? {
         restore_project(&tx, repo, &slug, &mut counts).await?;
     }
+    docket_migration::assignments::rebuild_all(&tx)
+        .await
+        .map_err(|e| e.to_string())?;
     tx.commit().await.map_err(|e| e.to_string())?;
     Ok(counts)
 }
@@ -246,6 +250,22 @@ async fn restore_refs(tx: &DatabaseTransaction, rid: i64, i: &ItemDump) -> Resul
         ],
     )
     .await?;
+    let since = i.wait_since.clone().unwrap_or_else(|| i.opened_at.clone());
+    let mut on = Vec::new();
+    for id in i.depends.iter().flatten() {
+        on.push(target(tx, i, id, "depends on").await?);
+    }
+    if i.depends.is_none() {
+        on.extend(wait_item);
+    }
+    for to in on {
+        exec(
+            tx,
+            "INSERT INTO dependencies (rid, on_rid, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+            vec![rid.into(), to.into(), since.clone().into()],
+        )
+        .await?;
+    }
     for (kind, ids) in [("related", &i.related), ("opened", &i.opened)] {
         for id in ids {
             let to = target(tx, i, id, &format!("lists under {kind}")).await?;

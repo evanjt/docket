@@ -6,7 +6,7 @@ use crate::item::Refused;
 use crate::text::py_repr;
 
 /// Every fact a project carries, in the order `docket skills` prints them, with its one-line meaning.
-pub const FACTS: [(&str, &str); 16] = [
+pub const FACTS: [(&str, &str); 17] = [
     ("owner", "the owner's name, as the skills address them"),
     (
         "worktree",
@@ -62,6 +62,10 @@ pub const FACTS: [(&str, &str); 16] = [
         "minutes a lead claim holds without a renewal before another session may take the lead over",
     ),
     (
+        "owner_limit",
+        "the open asks and undecided questions the owner may hold at once; past it an ask is refused",
+    ),
+    (
         "flow",
         "the work model the project is on, set by its migration",
     ),
@@ -109,7 +113,7 @@ pub const AGENT_SETTINGS: [&str; 5] =
     ["models", "job_timeout", "stale_claim", "lead_lapse", "mode"];
 
 /// The value a fact takes when neither the project nor the owner sets one.
-pub const DEFAULTS: [(&str, &str); 7] = [
+pub const DEFAULTS: [(&str, &str); 8] = [
     ("models", DEFAULT_MODELS),
     ("owner", "the owner"),
     ("checkout", "."),
@@ -117,6 +121,7 @@ pub const DEFAULTS: [(&str, &str); 7] = [
     ("job_timeout", "120"),
     ("stale_claim", "120"),
     ("lead_lapse", "10"),
+    ("owner_limit", "20"),
 ];
 
 /// Facts docket writes itself, never set by hand.
@@ -262,7 +267,7 @@ pub fn known(skills: &BTreeMap<String, String>) -> BTreeMap<String, String> {
 pub const CHOICES: [(&str, &[&str]); 1] = [("mode", &["run", "drain", "pause"])];
 
 /// Facts that hold a whole number above 0.
-pub const COUNTS: [&str; 3] = ["stale_claim", "job_timeout", "lead_lapse"];
+pub const COUNTS: [&str; 4] = ["stale_claim", "job_timeout", "lead_lapse", "owner_limit"];
 
 /// The keys a `models` entry may name: a build's complexity, then the audit, plan and lead roles.
 pub const MODEL_KEYS: [&str; 7] = ["high", "medium", "low", "unrated", "audit", "plan", "lead"];

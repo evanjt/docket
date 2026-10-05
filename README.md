@@ -183,7 +183,7 @@ it over. A take, a takeover and a give each write a `lead` event on the project;
 | `GET /status` | the flow counts and the summary |
 | `GET /show/{id}`, `/search`, `/similar/{id}` | one item, full-text search over Postgres `tsvector` |
 | `GET /context/{id}`, `/log/{id}`, `/deps/{id}` | what `show` prints beside an item, its events, its ties |
-| `GET /flow`, `/summary`, `/check`, `/audit`, `/graph`, `/files`, `/citations`, `/shares` | a project's flow, status, integrity, audits, graph, cited files, claims sharing files |
+| `GET /summary`, `/check`, `/audit`, `/graph`, `/files`, `/citations`, `/shares` | a project's status, integrity, audits, graph, cited files, claims sharing files |
 | `GET /private` | the names private to the owner's docket, for `docket private check`; owner key only |
 | `GET /counts`, `/whoami` | every project's counts; the host and role of the key presented |
 | `GET /projects`, `/items`, `/events`, `/links` | the stored rows, filtered and paged |

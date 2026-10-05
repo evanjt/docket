@@ -124,6 +124,8 @@ export interface Derived {
 export interface Facts {
   project: string;
   skills: Record<string, string>;
+  priorities: string[];
+  levels: string[];
 }
 
 export interface Machine {

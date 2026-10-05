@@ -302,9 +302,16 @@ fn test_answering_a_derived_decision_again_overturns_it() {
 fn settings_on(a: &mut App<Fixture>, key: &str) {
     a.open(Target::Project("o/p".into()));
     press(a, KeyCode::Char('S'));
-    while a.cursor().selected() != Some(&Target::Fact(key.into())) {
+    for _ in 0..view::spots(a).len() {
+        if a.cursor().selected() == Some(&Target::Fact(key.into())) {
+            return;
+        }
         press(a, KeyCode::Tab);
     }
+    assert!(
+        a.cursor().selected() == Some(&Target::Fact(key.into())),
+        "the settings page lists no fact {key}"
+    );
 }
 
 fn colour_of(a: &mut App<Fixture>, text: &str) -> Option<Color> {
@@ -320,6 +327,13 @@ fn colour_of(a: &mut App<Fixture>, text: &str) -> Option<Color> {
         }
     }
     None
+}
+
+#[test]
+#[should_panic(expected = "lists no fact nosuch")]
+fn test_settings_on_panics_naming_a_fact_the_page_does_not_list() {
+    let mut a = app();
+    settings_on(&mut a, "nosuch");
 }
 
 #[test]

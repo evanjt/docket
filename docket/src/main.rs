@@ -15,8 +15,6 @@ mod templates;
 use std::io::IsTerminal;
 use std::process::ExitCode;
 
-use clap::Parser;
-
 use crate::args::{Cli, Cmd};
 use crate::ctx::Ctx;
 use crate::fail::Fail;
@@ -75,7 +73,14 @@ fn restore_sigpipe() {}
 
 fn main() -> ExitCode {
     restore_sigpipe();
-    let cli = Cli::parse();
+    if std::env::args().skip(1).collect::<Vec<_>>() == ["help", "--all"] {
+        print!("{}", args::full_help());
+        return ExitCode::SUCCESS;
+    }
+    let cli = {
+        use clap::FromArgMatches;
+        Cli::from_arg_matches(&args::command().get_matches()).unwrap_or_else(|e| e.exit())
+    };
     if cli.cmd.is_none() && !cli.json && !cli.plain && std::io::stdout().is_terminal() {
         return screen(&cli);
     }

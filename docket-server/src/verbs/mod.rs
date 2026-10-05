@@ -83,7 +83,8 @@ impl Call {
         caller: &Caller,
         common: &Common,
     ) -> Result<Self, Failure> {
-        let tx = Tx::begin(db, &caller.host).await?;
+        let mut tx = Tx::begin(db, &caller.host).await?;
+        tx.actor = Some(if caller.owner { "owner" } else { "agent" }.to_string());
         let project = tx.project(&common.project).await?;
         let ctx = Ctx {
             host: caller.host.clone(),
@@ -153,11 +154,13 @@ pub fn router() -> Router<DatabaseConnection> {
         .route("/key", post(open::key))
         .route("/start", post(claim::start))
         .route("/release", post(claim::release))
+        .route("/job-report", post(claim::job_report))
         .route("/close", post(claim::close))
         .route("/drop", post(claim::drop))
         .route("/reopen", post(claim::reopen))
         .route("/wait", post(turn::wait))
         .route("/resume", post(turn::resume))
+        .route("/dep", post(turn::dep))
         .route("/ask", post(turn::ask))
         .route("/park", post(turn::ask))
         .route("/reply", post(turn::reply))

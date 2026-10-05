@@ -27,10 +27,10 @@ const PROJECT: Style = Style {
 };
 
 /// Written only when set, so every file dumped before them stays byte-identical.
-pub const OPTIONAL: [&str; 4] = ["claim_runner", "claim_job", "claim_on", "scope"];
+pub const OPTIONAL: [&str; 5] = ["claim_runner", "claim_job", "claim_on", "scope", "depends"];
 
 /// The frontmatter of an item file, in order.
-pub const FIELDS: [&str; 29] = [
+pub const FIELDS: [&str; 30] = [
     "id",
     "title",
     "state",
@@ -58,6 +58,7 @@ pub const FIELDS: [&str; 29] = [
     "tags",
     "related",
     "opened",
+    "depends",
     "opened_at",
     "updated_at",
 ];
@@ -94,6 +95,8 @@ pub struct ItemDump {
     pub tags: Vec<String>,
     pub related: Vec<String>,
     pub opened: Vec<String>,
+    /// What the item depends on; none when it depends on nothing.
+    pub depends: Option<Vec<String>>,
     pub opened_at: String,
     pub updated_at: String,
     pub body: String,
@@ -169,7 +172,7 @@ pub fn render_item(item: &ItemDump) -> String {
         if OPTIONAL.contains(&k) && v.is_null() {
             continue;
         }
-        if let (Value::Array(ids), "related" | "opened") = (&mut v, k) {
+        if let (Value::Array(ids), "related" | "opened" | "depends") = (&mut v, k) {
             ids.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
         }
         let _ = writeln!(text, "{k}: {}", dumps_styled(&v, LINE));
@@ -339,7 +342,7 @@ fn write_message(write: &[EventDump]) -> Option<String> {
     let verb = match first.kind.as_str() {
         "opened" => "Open",
         "claimed" => "Start",
-        "released" => "Release",
+        "released" => "Unclaim",
         "closed" => "Close",
         "dropped" => "Drop",
         "reopened" => "Reopen",

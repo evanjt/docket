@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use docket_client::{Api, Error};
-use docket_core::api::LeadState;
+use docket_core::api::{LeadState, Machines};
 use docket_core::member::Tie;
 use docket_core::rows::{Derived, EventRow, ProjectRow, Row, Shown, Status};
 use serde_json::Value;
@@ -79,6 +79,11 @@ pub trait Source: Sync {
     /// # Errors
     /// As `projects`.
     fn lead(&self, slug: &str) -> Result<LeadState>;
+    /// Every machine jobs run on, with its slots.
+    ///
+    /// # Errors
+    /// As `projects`.
+    fn machines(&self) -> Result<Machines>;
     /// A write verb, `POST /do/{verb}`, and the server's answer.
     ///
     /// # Errors
@@ -139,6 +144,10 @@ impl Source for Http {
 
     fn lead(&self, slug: &str) -> Result<LeadState> {
         self.0.lead(slug).map_err(|e| e.to_string())
+    }
+
+    fn machines(&self) -> Result<Machines> {
+        self.0.machines().map_err(|e| e.to_string())
     }
 
     fn post(&self, verb: &str, body: &Value) -> Result<Value> {

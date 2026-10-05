@@ -270,3 +270,35 @@ async fn test_web_client_leaves_every_route_behind_its_key() {
     );
     assert_eq!(fetch(app, "/ui/", None).await.0, StatusCode::OK);
 }
+
+#[tokio::test]
+async fn test_offers_leave_close_off_a_plan_whose_opened_work_is_open() {
+    let s = Scratch::new(2).await;
+    s.seed(
+        r#"
+INSERT INTO projects (slug, keys, created_at, updated_at) VALUES ('o/p',
+  '[{"key":"T","kind":"work"},{"key":"A","kind":"audit"}]', 'c', 'u');
+INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, opened_at, updated_at)
+  VALUES (1, 'o/p', 'A', 1, 'Plan', 'open', 'agent', '[]', '', 'o1', 'u1'),
+         (2, 'o/p', 'T', 1, 'Work', 'open', 'agent', '[]', '', 'o2', 'u2');
+INSERT INTO links (rid, kind, to_rid) VALUES (2, 'opened', 1);
+"#,
+    )
+    .await;
+    let app = app(&s.db, Keys::parse("devbox agent secret").unwrap());
+    let req = Request::builder()
+        .uri("/offers/A1?project=o/p")
+        .header(AUTHORIZATION, "Bearer secret")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    let verbs: Vec<&str> = body["verbs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["verb"].as_str().unwrap())
+        .collect();
+    assert!(!verbs.contains(&"close"), "{verbs:?}");
+}

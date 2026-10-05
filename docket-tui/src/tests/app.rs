@@ -89,7 +89,7 @@ fn test_project_page_shows_claims_owner_items_and_due_audits_on_one_screen() {
     for w in WIDTHS {
         let mut a = app();
         project(&mut a, "o/p");
-        let s = tall(&mut a, w, 24);
+        let s = tall(&mut a, w, 40);
         assert!(s.contains("CLAIMED NOW  1"), "{s}");
         assert!(
             s.contains("T2") && s.contains("audit/t2-1 on devbox"),
@@ -103,8 +103,6 @@ fn test_project_page_shows_claims_owner_items_and_due_audits_on_one_screen() {
         );
         for gone in [
             "PAUSE",
-            "slots",
-            "MACHINES",
             "JOBS",
             "CHORES",
             "Nothing is worked",
@@ -114,6 +112,37 @@ fn test_project_page_shows_claims_owner_items_and_due_audits_on_one_screen() {
             assert!(!s.contains(gone), "{gone}: {s}");
         }
     }
+}
+
+#[test]
+fn test_project_page_shows_the_lead_each_claims_job_and_the_machines_slots() {
+    let mut a = app();
+    *a.source.lead.lock().unwrap() = Some(docket_core::lead::Lead {
+        project: "o/p".into(),
+        host: "rack".into(),
+        session: "lead-1".into(),
+        since: "2026-10-01T08:00:00Z".into(),
+        renewed_at: "2026-10-01T08:30:00Z".into(),
+        ..docket_core::lead::Lead::default()
+    });
+    *a.source.lapsed.lock().unwrap() = true;
+    project(&mut a, "o/p");
+    let s = tall(&mut a, 80, 80);
+    assert!(
+        s.contains("LEAD") && s.contains("lapsed") && s.contains("lead-1"),
+        "{s}"
+    );
+    assert!(s.contains("claude t2-b1"), "{s}");
+    assert!(s.contains("MACHINES"), "{s}");
+    assert!(s.contains("rack 1/2") && s.contains("shed 0/1"), "{s}");
+}
+
+#[test]
+fn test_project_page_without_a_lead_says_none_holds_it() {
+    let mut a = app();
+    project(&mut a, "o/p");
+    let s = tall(&mut a, 80, 80);
+    assert!(s.contains("LEAD") && s.contains("none"), "{s}");
 }
 
 #[test]

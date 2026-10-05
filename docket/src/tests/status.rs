@@ -163,3 +163,23 @@ fn test_status_json_carries_every_section_of_the_text() {
     assert_eq!(json["next"][0]["id"], "T3");
     assert_eq!(json["plans"][0]["id"], "A1");
 }
+
+#[test]
+fn test_a_dependency_dropped_without_a_successor_names_the_repair() {
+    let problems = json!([{"kind": "abandoned", "id": "T6", "on": "T7"}]);
+    assert_eq!(
+        problem_lines(&problems),
+        [
+            "T6 depends on T7, dropped with no successor: docket dep rm T6 T7, or wait on what replaced it"
+        ]
+    );
+}
+
+#[test]
+fn test_counts_read_the_word_map_the_status_route_answers_with() {
+    let by_word = json!({"done": 4, "ready": 2});
+    assert_eq!(
+        counts(&by_word),
+        vec![("done".to_string(), 4), ("ready".to_string(), 2)]
+    );
+}

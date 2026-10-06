@@ -266,6 +266,18 @@ pub fn gaps(project: &BTreeMap<String, String>, owner: &BTreeMap<String, String>
     out
 }
 
+/// Why `docket dispatch` starts no job, when the effective `mode` is not `run`. The tool holds the
+/// rule rather than the lead, so a lead dispatching from a loop of its own still stops on a drain.
+#[must_use]
+pub fn dispatch_refused(
+    project: &BTreeMap<String, String>,
+    owner: &BTreeMap<String, String>,
+) -> Option<String> {
+    let mode = effective(&merged(project, owner), "mode").unwrap_or_default();
+    (mode != "run")
+        .then(|| format!("mode is {mode}: docket dispatch starts no job until mode is run"))
+}
+
 /// The facts docket reads out of a stored set, leaving out retired and unknown keys.
 #[must_use]
 pub fn known(skills: &BTreeMap<String, String>) -> BTreeMap<String, String> {

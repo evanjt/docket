@@ -43,6 +43,7 @@ pub fn dispatch(ctx: &mut Ctx, ask: &Ask) -> Result<i32> {
     let slug = ctx.project()?;
     let here = ctx.host()?;
     let id = crate::ctx::id(ask.id)?;
+    refuse_outside_run(ctx, &slug)?;
     let item: Value = ctx
         .api
         .get(&format!("/show/{id}"), &[("project", slug.clone())])?;
@@ -137,6 +138,15 @@ pub fn dispatch(ctx: &mut Ctx, ask: &Ask) -> Result<i32> {
         );
     }
     Ok(0)
+}
+
+/// Refuses a dispatch while the project's mode is drain or pause.
+fn refuse_outside_run(ctx: &mut Ctx, slug: &str) -> Result<()> {
+    let facts = ctx.api.facts(slug)?;
+    match fact::dispatch_refused(&facts.skills, &facts.owner) {
+        Some(why) => Err(Fail::refused(why)),
+        None => Ok(()),
+    }
 }
 
 /// The model the job runs on and the machine that takes it: the models fact's entry on a runner not

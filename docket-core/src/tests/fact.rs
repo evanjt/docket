@@ -484,3 +484,22 @@ fn test_check_refuses_a_publish_that_does_not_name_two_refs() {
         assert!(why.starts_with("publish: "), "{bad}: {why}");
     }
 }
+
+#[test]
+fn test_dispatch_refused_outside_run_at_either_level() {
+    let none = BTreeMap::new();
+    assert_eq!(dispatch_refused(&skills(&[]), &none), None);
+    assert_eq!(dispatch_refused(&skills(&[("mode", "run")]), &none), None);
+    assert_eq!(
+        dispatch_refused(&skills(&[("mode", "drain")]), &none).as_deref(),
+        Some("mode is drain: docket dispatch starts no job until mode is run")
+    );
+    assert_eq!(
+        dispatch_refused(&skills(&[]), &skills(&[("mode", "pause")])).as_deref(),
+        Some("mode is pause: docket dispatch starts no job until mode is run")
+    );
+    assert_eq!(
+        dispatch_refused(&skills(&[("mode", "run")]), &skills(&[("mode", "pause")])),
+        None
+    );
+}

@@ -25,6 +25,27 @@ pub fn check_name(name: &str) -> Result<String, Refused> {
     Ok(name.to_string())
 }
 
+/// What a group's label name begins with: `--group NAME` gives the label `group:NAME`.
+pub const GROUP: &str = "group:";
+
+/// The label `--group` gives for a group name.
+#[must_use]
+pub fn of_group(name: &str) -> String {
+    format!("{GROUP}{}", name.trim())
+}
+
+/// The group a label names, or `None` for a label that names none.
+#[must_use]
+pub fn group_named(label: &str) -> Option<&str> {
+    label.strip_prefix(GROUP).filter(|g| !g.is_empty())
+}
+
+/// The group among an item's labels: the first that names one.
+#[must_use]
+pub fn group_of<S: AsRef<str>>(labels: &[S]) -> Option<&str> {
+    labels.iter().find_map(|l| group_named(l.as_ref()))
+}
+
 /// The label a name finds among `all`, ignoring case.
 #[must_use]
 pub fn find<'a>(all: &'a [Label], name: &str) -> Option<&'a Label> {

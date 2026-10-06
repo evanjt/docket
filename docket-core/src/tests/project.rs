@@ -32,16 +32,6 @@ fn test_matches_by_slug_remote_or_last_component() {
 }
 
 #[test]
-fn test_default_keys_hold_one_key_per_item_type() {
-    let keys = default_keys();
-    let keys = keys.as_array().unwrap();
-    let letters: Vec<&str> = keys.iter().map(|k| k["key"].as_str().unwrap()).collect();
-    assert_eq!(letters, ["T", "B", "Q", "I", "A"]);
-    assert_eq!(keys[2]["turn"], "user");
-    assert_eq!(keys[4]["kind"], "audit");
-}
-
-#[test]
 fn test_filing_under_any_key_but_the_five_is_refused_and_each_type_key_files() {
     assert_eq!(require_fileable("B"), Ok(ItemType::Bug));
     assert_eq!(require_fileable("A"), Ok(ItemType::Plan));

@@ -10,8 +10,8 @@ use sea_orm::ConnectionTrait;
 use sea_orm_migration::prelude::*;
 
 use docket_core::area::Area;
-use docket_core::dump::{EventDump, ItemDump, ProjectDump};
-use docket_core::migrate::{Change, Rows, Rules, plan};
+use docket_core::dump::EventDump;
+use docket_core::migrate::{Change, OldItem, OldProject, Rows, Rules, plan};
 
 use crate::statement;
 
@@ -39,8 +39,8 @@ const LINKED: &str = "SELECT e.uid, e.at, e.note, i.id FROM events e JOIN items 
 /// date them, with each item's row id.
 pub(crate) async fn project_rows<C: ConnectionTrait>(
     c: &C,
-    project: &mut ProjectDump,
-) -> Result<(Vec<ItemDump>, Vec<EventDump>, BTreeMap<String, i64>), DbErr> {
+    project: &mut OldProject,
+) -> Result<(Vec<OldItem>, Vec<EventDump>, BTreeMap<String, i64>), DbErr> {
     let slug = project.slug.clone();
     for r in c
         .query_all_raw(statement(AREAS, vec![slug.clone().into()]))
@@ -54,7 +54,7 @@ pub(crate) async fn project_rows<C: ConnectionTrait>(
             history: false,
         });
     }
-    let mut items: BTreeMap<i64, ItemDump> = BTreeMap::new();
+    let mut items: BTreeMap<i64, OldItem> = BTreeMap::new();
     let mut rids = BTreeMap::new();
     for r in c
         .query_all_raw(statement(ITEMS, vec![slug.clone().into()]))
@@ -62,7 +62,7 @@ pub(crate) async fn project_rows<C: ConnectionTrait>(
     {
         let rid: i64 = r.try_get_by_index(0)?;
         let tags: serde_json::Value = r.try_get_by_index(6)?;
-        let item = ItemDump {
+        let item = OldItem {
             project: slug.clone(),
             id: r.try_get_by_index(1)?,
             title: r.try_get_by_index(2)?,
@@ -74,7 +74,7 @@ pub(crate) async fn project_rows<C: ConnectionTrait>(
             opened_at: r.try_get_by_index(8)?,
             updated_at: r.try_get_by_index(9)?,
             parent: r.try_get_by_index(10)?,
-            ..ItemDump::default()
+            ..OldItem::default()
         };
         rids.insert(item.id.clone(), rid);
         items.insert(rid, item);
@@ -162,12 +162,12 @@ impl MigrationTrait for Migration {
         let c = manager.get_connection();
         let now = docket_core::clock::now();
         for p in c.query_all_raw(statement(PROJECTS, vec![])).await? {
-            let mut project = ProjectDump {
+            let mut project = OldProject {
                 slug: p.try_get_by_index(0)?,
                 keys: p.try_get_by_index(1)?,
                 themes: p.try_get_by_index(2)?,
                 skills: p.try_get_by_index(3)?,
-                ..ProjectDump::default()
+                ..OldProject::default()
             };
             let (items, events, rids) = project_rows(c, &mut project).await?;
             let slug = project.slug.clone();

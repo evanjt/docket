@@ -98,17 +98,17 @@ impl Repo {
         .collect();
         let seed = format!(
             r#"
-INSERT INTO projects (slug, keys, skills, integration_ref, created_at, updated_at) VALUES
-  ('acme/kiln', '[{{"key":"T","kind":"work"}},{{"key":"A","kind":"audit"}}]',
+INSERT INTO projects (slug, skills, integration_ref, created_at, updated_at) VALUES
+  ('acme/kiln',
    '{{"owner":"Ada Lovelace","publish":"published origin/main"}}', 'main', 'c', 'u');
 INSERT INTO areas (id, project, name, description, position, priority) VALUES (1, 'acme/kiln', 'firing', '', 1, NULL);
-INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, type, opened_at, updated_at, resolution, parent_rid, area_id) VALUES
-  (1, 'acme/kiln', 'A', 1, 'Fire the first bowls', 'done', NULL, '[]', '', 'plan', 'o', 'u', 'fired', NULL, 1),
-  (2, 'acme/kiln', 'A', 2, 'Glaze the platters', 'done', NULL, '[]', '', 'plan', 'o', 'u', 'glazed', NULL, 1),
-  (3, 'acme/kiln', 'T', 1, 'Stack the firewood', 'done', NULL, '[]', '', 'task', 'o', 'u', 'stacked at {}', 1, 1),
-  (4, 'acme/kiln', 'T', 2, 'Mix the slip', 'done', NULL, '[]', '', 'task', 'o', 'u', 'mixed at {}', 2, 1),
-  (5, 'acme/kiln', 'T', 3, 'Light the burner', 'done', NULL, '[]', '', 'task', 'o', 'u', 'lit at {}', 1, 1),
-  (6, 'acme/kiln', 'T', 4, 'Dip the platters', 'done', NULL, '[]', '', 'task', 'o', 'u', 'dipped at {}', 2, 1);
+INSERT INTO items (rid, project, key, num, title, state, body, type, opened_at, updated_at, resolution, parent_rid, area_id) VALUES
+  (1, 'acme/kiln', 'A', 1, 'Fire the first bowls', 'done', '', 'plan', 'o', 'u', 'fired', NULL, 1),
+  (2, 'acme/kiln', 'A', 2, 'Glaze the platters', 'done', '', 'plan', 'o', 'u', 'glazed', NULL, 1),
+  (3, 'acme/kiln', 'T', 1, 'Stack the firewood', 'done', '', 'task', 'o', 'u', 'stacked at {}', 1, 1),
+  (4, 'acme/kiln', 'T', 2, 'Mix the slip', 'done', '', 'task', 'o', 'u', 'mixed at {}', 2, 1),
+  (5, 'acme/kiln', 'T', 3, 'Light the burner', 'done', '', 'task', 'o', 'u', 'lit at {}', 1, 1),
+  (6, 'acme/kiln', 'T', 4, 'Dip the platters', 'done', '', 'task', 'o', 'u', 'dipped at {}', 2, 1);
 "#,
             closes[0], closes[1], closes[2], closes[3]
         );
@@ -403,22 +403,22 @@ impl Nested {
         }
         let cooled = closes.get(2).map_or(String::new(), |close| {
             format!(
-                "INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, type, opened_at, updated_at, resolution, parent_rid, area_id) VALUES
-  (5, 'acme/kiln', 'A', 3, 'Cool the oven', 'done', NULL, '[]', '', 'plan', 'o', 'u', 'cooled', NULL, 1),
-  (6, 'acme/kiln', 'T', 3, 'Open the vents', 'done', NULL, '[]', '', 'task', 'o', 'u', 'opened at {close}', 5, 1);"
+                "INSERT INTO items (rid, project, key, num, title, state, body, type, opened_at, updated_at, resolution, parent_rid, area_id) VALUES
+  (5, 'acme/kiln', 'A', 3, 'Cool the oven', 'done', '', 'plan', 'o', 'u', 'cooled', NULL, 1),
+  (6, 'acme/kiln', 'T', 3, 'Open the vents', 'done', '', 'task', 'o', 'u', 'opened at {close}', 5, 1);"
             )
         });
         let seed = format!(
             r#"
-INSERT INTO projects (slug, keys, skills, integration_ref, repos, created_at, updated_at) VALUES
-  ('acme/kiln', '[{{"key":"T","kind":"work"}},{{"key":"A","kind":"audit"}}]',
+INSERT INTO projects (slug, skills, integration_ref, repos, created_at, updated_at) VALUES
+  ('acme/kiln',
    '{{"owner":"Ada Lovelace","publish":"published origin/main"}}', 'main', '[".", "{GLAZE}"]', 'c', 'u');
 INSERT INTO areas (id, project, name, description, position, priority) VALUES (1, 'acme/kiln', 'firing', '', 1, NULL);
-INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, type, opened_at, updated_at, resolution, parent_rid, area_id) VALUES
-  (1, 'acme/kiln', 'A', 1, 'Fire the first bowls', 'done', NULL, '[]', '', 'plan', 'o', 'u', 'fired', NULL, 1),
-  (2, 'acme/kiln', 'A', 2, 'Glaze the platters', 'done', NULL, '[]', '', 'plan', 'o', 'u', 'glazed', NULL, 1),
-  (3, 'acme/kiln', 'T', 1, 'Stack the firewood', 'done', NULL, '[]', '', 'task', 'o', 'u', 'stacked at {}', 1, 1),
-  (4, 'acme/kiln', 'T', 2, 'Mix the slip', 'done', NULL, '[]', '', 'task', 'o', 'u', 'mixed at {}', 2, 1);
+INSERT INTO items (rid, project, key, num, title, state, body, type, opened_at, updated_at, resolution, parent_rid, area_id) VALUES
+  (1, 'acme/kiln', 'A', 1, 'Fire the first bowls', 'done', '', 'plan', 'o', 'u', 'fired', NULL, 1),
+  (2, 'acme/kiln', 'A', 2, 'Glaze the platters', 'done', '', 'plan', 'o', 'u', 'glazed', NULL, 1),
+  (3, 'acme/kiln', 'T', 1, 'Stack the firewood', 'done', '', 'task', 'o', 'u', 'stacked at {}', 1, 1),
+  (4, 'acme/kiln', 'T', 2, 'Mix the slip', 'done', '', 'task', 'o', 'u', 'mixed at {}', 2, 1);
 {cooled}
 "#,
             closes[0], closes[1]

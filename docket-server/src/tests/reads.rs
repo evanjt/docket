@@ -10,69 +10,74 @@ use crate::auth::Keys;
 use docket_migration::scratch::Scratch;
 
 const SEED: &str = r#"
-INSERT INTO projects (slug, keys, themes, skills, created_at, updated_at) VALUES ('o/p',
-  '[{"key":"T","kind":"work"},{"key":"Q","kind":"decision"},{"key":"A","kind":"audit"},
-    {"key":"PK","kind":"package"},{"key":"CON","kind":"concept"}]',
-  '[{"name":"sync"}]', '{}', 'c', 'u'),
-  ('o/r', '[{"key":"T","kind":"work"},{"key":"Q","kind":"decision"}]', '[]', '{}', 'c', 'u'),
-  ('o/s', '[{"key":"T","kind":"work"},{"key":"A","kind":"audit"},{"key":"CON","kind":"concept"}]', '[]', '{}', 'c', 'u');
-INSERT INTO items (rid, project, key, num, title, state, resolution, tags, body, opened_at, updated_at) VALUES
-  (302, 'o/s', 'T', 1, 'Opened and done', 'done', 'ok', '[]', '', 'o02', 'u02'),
-  (303, 'o/s', 'T', 2, 'Opened and dropped', 'dropped', 'dup', '[]', '', 'o03', 'u03'),
-  (304, 'o/s', 'T', 3, 'Related and done', 'done', 'ok', '[]', '', 'o04', 'u04'),
-  (305, 'o/s', 'T', 4, 'Related and dropped', 'dropped', 'dup', '[]', '', 'o05', 'u05');
-INSERT INTO items (rid, project, key, num, title, state, turn, wait_on, wait_ref, wait_since, tags, body, opened_at, updated_at) VALUES
-  (300, 'o/s', 'A', 1, 'Plan', 'open', 'agent', NULL, NULL, NULL, '[]', '', 'o00', 'u00'),
-  (301, 'o/s', 'CON', 1, 'Concept', 'open', 'agent', NULL, NULL, NULL, '[]', '', 'o01', 'u01'),
-  (306, 'o/s', 'T', 5, 'Opened and waiting', 'open', 'agent', 'condition', 'later', 'w06', '[]', '', 'o06', 'u06'),
-  (307, 'o/s', 'T', 6, 'Related and waiting', 'open', 'agent', 'condition', 'later', 'w07', '[]', '', 'o07', 'u07');
+INSERT INTO projects (slug, skills, created_at, updated_at) VALUES ('o/p', '{}', 'c', 'u'),
+  ('o/r', '{}', 'c', 'u'),
+  ('o/s', '{}', 'c', 'u');
+INSERT INTO items (rid, project, key, num, title, state, resolution, body, opened_at, updated_at) VALUES
+  (302, 'o/s', 'T', 1, 'Opened and done', 'done', 'ok', '', 'o02', 'u02'),
+  (303, 'o/s', 'T', 2, 'Opened and dropped', 'dropped', 'dup', '', 'o03', 'u03'),
+  (304, 'o/s', 'T', 3, 'Related and done', 'done', 'ok', '', 'o04', 'u04'),
+  (305, 'o/s', 'T', 4, 'Related and dropped', 'dropped', 'dup', '', 'o05', 'u05');
+INSERT INTO items (rid, project, key, num, title, state, body, opened_at, updated_at) VALUES
+  (300, 'o/s', 'A', 1, 'Plan', 'open', '', 'o00', 'u00'),
+  (301, 'o/s', 'CON', 1, 'Concept', 'open', '', 'o01', 'u01'),
+  (306, 'o/s', 'T', 5, 'Opened and waiting', 'open', '', 'o06', 'u06'),
+  (307, 'o/s', 'T', 6, 'Related and waiting', 'open', '', 'o07', 'u07'),
+  (308, 'o/s', 'T', 7, 'later', 'open', '', 'o08', 'u08');
+INSERT INTO dependencies (rid, on_rid, created_at) VALUES (306, 308, 'w06'), (307, 308, 'w07');
 UPDATE items SET parent_rid=300 WHERE rid IN (302, 303, 306);
 INSERT INTO links (rid, kind, to_rid) VALUES
   (300, 'related', 301), (304, 'related', 301), (305, 'related', 301), (307, 'related', 301);
-INSERT INTO items (rid, project, key, num, title, state, turn, tags, theme, body, opened_at, updated_at) VALUES
-  (130, 'o/r', 'T', 1, 'Two releases out', 'open', 'agent', '["high"]', '1.2', '', 'o30', 'u30'),
-  (131, 'o/r', 'T', 2, 'Next release', 'open', 'agent', '[]', '1.1', '', 'o31', 'u31'),
-  (132, 'o/r', 'T', 3, 'This release, low', 'open', 'agent', '["low"]', NULL, '', 'o32', 'u32'),
-  (133, 'o/r', 'T', 4, 'Docs', 'open', 'agent', '[]', 'docs', '', 'o33', 'u33');
-INSERT INTO items (rid, project, key, num, title, state, resolution, tags, theme, body, opened_at, updated_at)
-  SELECT 200 + n, 'o/r', 'T', 100 + n, 'Closed ' || n, 'done', 'ok', '[]',
-         CASE WHEN n <= 5 THEN '1.2' WHEN n = 6 THEN NULL WHEN n = 7 THEN 'docs' ELSE '1.1' END,
+INSERT INTO items (rid, project, key, num, title, state, body, opened_at, updated_at) VALUES
+  (130, 'o/r', 'T', 1, 'Two releases out', 'open', '', 'o30', 'u30'),
+  (131, 'o/r', 'T', 2, 'Next release', 'open', '', 'o31', 'u31'),
+  (132, 'o/r', 'T', 3, 'This release, low', 'open', '', 'o32', 'u32'),
+  (133, 'o/r', 'T', 4, 'Docs', 'open', '', 'o33', 'u33');
+INSERT INTO items (rid, project, key, num, title, state, resolution, body, opened_at, updated_at)
+  SELECT 200 + n, 'o/r', 'T', 100 + n, 'Closed ' || n, 'done', 'ok',
          '', 'o' || lpad(n::text, 3, '0'), 'u' || lpad((100 - n)::text, 3, '0')
   FROM generate_series(1, 30) AS n;
-INSERT INTO items (rid, project, key, num, title, state, resolution, tags, theme, body, opened_at, updated_at) VALUES
-  (240, 'o/r', 'T', 140, 'Dropped in next', 'dropped', 'dup', '[]', '1.1', '', 'o40', 'u40'),
-  (241, 'o/r', 'T', 141, 'Dropped in current', 'dropped', 'dup', '[]', NULL, '', 'o41', 'u41');
-INSERT INTO items (rid, project, key, num, title, state, resolution, decision, decided_at, tags, theme, opened_at, updated_at) VALUES
-  (242, 'o/r', 'Q', 1, 'Decided in next', 'done', 'ok', 'Derived from X: yes', 'd42', '[]', '1.1', 'o42', 'u42'),
-  (243, 'o/r', 'Q', 2, 'Decided in current', 'done', 'ok', 'Derived from X: no', 'd43', '[]', NULL, 'o43', 'u43');
+INSERT INTO items (rid, project, key, num, title, state, resolution, body, opened_at, updated_at) VALUES
+  (240, 'o/r', 'T', 140, 'Dropped in next', 'dropped', 'dup', '', 'o40', 'u40'),
+  (241, 'o/r', 'T', 141, 'Dropped in current', 'dropped', 'dup', '', 'o41', 'u41');
+INSERT INTO items (rid, project, key, num, title, state, resolution, decision, decided_at, opened_at, updated_at) VALUES
+  (242, 'o/r', 'Q', 1, 'Decided in next', 'done', 'ok', 'Derived from X: yes', 'd42', 'o42', 'u42'),
+  (243, 'o/r', 'Q', 2, 'Decided in current', 'done', 'ok', 'Derived from X: no', 'd43', 'o43', 'u43');
 INSERT INTO releases (id, project, name, position) VALUES
   (1, 'o/r', '1.0', 0), (2, 'o/r', '1.1', 1), (3, 'o/r', '1.2', 2);
 UPDATE items SET release_id = r.id FROM releases r
-  WHERE items.project = 'o/r' AND r.project = 'o/r' AND r.name = COALESCE(items.theme, '1.0');
-INSERT INTO items (rid, project, key, num, title, state, turn, tags, rank, complexity, scope, theme,
-                   group_name, body, opened_at, updated_at) VALUES
-  (1, 'o/p', 'T', 1, 'Plain fix', 'open', 'agent', '[]', NULL, NULL, NULL, NULL, NULL, '', 'o01', 'u01'),
-  (2, 'o/p', 'T', 2, 'Urgent fix', 'open', 'agent', '["high"]', NULL, NULL, NULL, NULL, NULL, '', 'o02', 'u02'),
-  (3, 'o/p', 'T', 3, 'Ranked fix', 'open', 'agent', '[]', 1, 'low', NULL, NULL, NULL, '', 'o03', 'u03'),
-  (4, 'o/p', 'PK', 1, 'Package done', 'open', 'agent', '[]', NULL, NULL, NULL, NULL, NULL, '', 'o04', 'u04'),
-  (6, 'o/p', 'PK', 2, 'Package live', 'open', 'agent', '["critical"]', NULL, NULL, NULL, NULL, NULL, '', 'o06', 'u06'),
-  (7, 'o/p', 'T', 5, 'Member open', 'open', 'agent', '[]', NULL, NULL, NULL, NULL, NULL, '', 'o07', 'u07'),
-  (8, 'o/p', 'Q', 1, 'Open lantern choice', 'open', 'user', '[]', NULL, NULL, NULL, 'sync', NULL, '', 'o08', 'u08'),
-  (12, 'o/p', 'T', 8, 'Inbox item', 'open', 'agent', '[]', NULL, NULL, 'inbox', NULL, NULL, '', 'o12', 'u12'),
-  (13, 'o/p', 'T', 9, 'Held theme', 'open', 'agent', '[]', NULL, NULL, NULL, 'roadmap', NULL, 'sync', 'o13', 'u13'),
-  (15, 'o/p', 'CON', 1, 'Concept', 'open', 'agent', '[]', NULL, NULL, NULL, NULL, NULL, '', 'o15', 'u15');
-INSERT INTO items (rid, project, key, num, title, state, resolution, tags, rank, group_name, body, opened_at, updated_at) VALUES
-  (5, 'o/p', 'T', 4, 'Member closed', 'done', 'abc', '[]', NULL, NULL, '', 'o05', 'u05'),
-  (14, 'o/p', 'T', 10, 'Dropped one', 'dropped', 'dup', '[]', NULL, 'g', '', 'o14', 'u14'),
-  (17, 'o/p', 'T', 11, 'Synced thing', 'done', 'ok', '[]', 2, 'g', 'the sync queue body', 'o17', 'u17');
-INSERT INTO items (rid, project, key, num, title, state, turn, decision, decided_at, tags, opened_at, updated_at) VALUES
-  (9, 'o/p', 'Q', 2, 'Decided lantern choice', 'open', 'agent', 'Derived from CID1: keep it', 'd09', '[]', 'o09', 'u09');
-INSERT INTO items (rid, project, key, num, title, state, turn, wait_on, wait_item, wait_ref, wait_since, tags, opened_at, updated_at) VALUES
-  (10, 'o/p', 'T', 6, 'Waiting', 'open', 'agent', 'item', 1, 'T1', 'w10', '[]', 'o10', 'u10');
-INSERT INTO items (rid, project, key, num, title, state, turn, tags, opened_at, updated_at) VALUES
-  (16, 'o/p', 'A', 1, 'Plan', 'open', 'agent', '[]', 'o16', 'u16');
-INSERT INTO items (rid, project, key, num, title, state, turn, claim_branch, claim_host, claim_since, tags, opened_at, updated_at) VALUES
-  (11, 'o/p', 'T', 7, 'Claimed', 'open', 'agent', 'b', 'h', 'c11', '[]', 'o11', 'u11');
+  WHERE items.project = 'o/r' AND r.project = 'o/r' AND r.name = CASE
+    WHEN items.rid = 130 OR items.rid BETWEEN 201 AND 205 THEN '1.2'
+    WHEN items.rid IN (131, 240, 242) OR items.rid BETWEEN 208 AND 230 THEN '1.1'
+    WHEN items.rid IN (133, 207) THEN 'docs' ELSE '1.0' END;
+INSERT INTO items (rid, project, key, num, title, state, complexity, body, opened_at, updated_at) VALUES
+  (1, 'o/p', 'T', 1, 'Plain fix', 'open', NULL, '', 'o01', 'u01'),
+  (2, 'o/p', 'T', 2, 'Urgent fix', 'open', NULL, '', 'o02', 'u02'),
+  (3, 'o/p', 'T', 3, 'Ranked fix', 'open', 'low', '', 'o03', 'u03'),
+  (4, 'o/p', 'PK', 1, 'Package done', 'open', NULL, '', 'o04', 'u04'),
+  (6, 'o/p', 'PK', 2, 'Package live', 'open', NULL, '', 'o06', 'u06'),
+  (7, 'o/p', 'T', 5, 'Member open', 'open', NULL, '', 'o07', 'u07'),
+  (8, 'o/p', 'Q', 1, 'Open lantern choice', 'open', NULL, '', 'o08', 'u08'),
+  (12, 'o/p', 'T', 8, 'Inbox item', 'open', NULL, '', 'o12', 'u12'),
+  (13, 'o/p', 'T', 9, 'Held theme', 'open', NULL, 'sync', 'o13', 'u13'),
+  (15, 'o/p', 'CON', 1, 'Concept', 'open', NULL, '', 'o15', 'u15');
+INSERT INTO items (rid, project, key, num, title, state, resolution, body, opened_at, updated_at) VALUES
+  (5, 'o/p', 'T', 4, 'Member closed', 'done', 'abc', '', 'o05', 'u05'),
+  (14, 'o/p', 'T', 10, 'Dropped one', 'dropped', 'dup', '', 'o14', 'u14'),
+  (17, 'o/p', 'T', 11, 'Synced thing', 'done', 'ok', 'the sync queue body', 'o17', 'u17');
+INSERT INTO labels (id, project, name) VALUES (1, 'o/p', 'sync'), (2, 'o/p', 'roadmap'), (3, 'o/p', 'group:g');
+INSERT INTO item_labels (rid, label_id) VALUES (8, 1), (13, 2), (14, 3), (17, 3);
+INSERT INTO items (rid, project, key, num, title, state, decision, decided_at, opened_at, updated_at) VALUES
+  (9, 'o/p', 'Q', 2, 'Decided lantern choice', 'open', 'Derived from CID1: keep it', 'd09', 'o09', 'u09');
+INSERT INTO items (rid, project, key, num, title, state, opened_at, updated_at) VALUES
+  (10, 'o/p', 'T', 6, 'Waiting', 'open', 'o10', 'u10');
+INSERT INTO dependencies (rid, on_rid, created_at) VALUES (10, 1, 'w10');
+INSERT INTO items (rid, project, key, num, title, state, opened_at, updated_at) VALUES
+  (16, 'o/p', 'A', 1, 'Plan', 'open', 'o16', 'u16');
+INSERT INTO items (rid, project, key, num, title, state, opened_at, updated_at) VALUES
+  (11, 'o/p', 'T', 7, 'Claimed', 'open', 'o11', 'u11');
+INSERT INTO assignments (rid, assignee, kind, started_at, branch, host) VALUES
+  (8, 'owner', 'ask', 'o08', NULL, ''), (11, 'agent', 'claim', 'c11', 'b', 'h');
 UPDATE items SET parent_rid=4 WHERE rid=5;
 UPDATE items SET parent_rid=6 WHERE rid=7;
 UPDATE items SET parent_rid=16 WHERE rid IN (2, 3);
@@ -89,14 +94,13 @@ INSERT INTO search (rid, id, title, body, files) VALUES
   (302, 'T1', 'Opened and done', 'lamp', ''),
   (303, 'T2', 'Opened and dropped', 'lamp', ''),
   (304, 'T3', 'Related and done', 'lamp', '');
-INSERT INTO projects (slug, keys, themes, skills, created_at, updated_at) VALUES ('o/a',
-  '[{"key":"T","kind":"work"},{"key":"A","kind":"audit"}]', '[]', '{}', 'c', 'u');
+INSERT INTO projects (slug, skills, created_at, updated_at) VALUES ('o/a', '{}', 'c', 'u');
 INSERT INTO areas (id, project, name, description, position, priority) VALUES
   (1, 'o/a', 'lanterns', 'Paper lights', 1, NULL), (2, 'o/a', 'kites', 'Things that fly', 2, 'high');
-INSERT INTO items (rid, project, key, num, title, state, resolution, turn, tags, body, opened_at, updated_at, area_id) VALUES
-  (500, 'o/a', 'T', 1, 'Fold the tail', 'open', NULL, 'agent', '[]', '', 'o50', 'u50', 2),
-  (501, 'o/a', 'T', 2, 'Tie the string', 'done', 'ok', NULL, '[]', '', 'o51', 'u51', 2),
-  (502, 'o/a', 'T', 3, 'Trim the wick', 'open', NULL, 'agent', '[]', '', 'o52', 'u52', 1);
+INSERT INTO items (rid, project, key, num, title, state, resolution, body, opened_at, updated_at, area_id) VALUES
+  (500, 'o/a', 'T', 1, 'Fold the tail', 'open', NULL, '', 'o50', 'u50', 2),
+  (501, 'o/a', 'T', 2, 'Tie the string', 'done', 'ok', '', 'o51', 'u51', 2),
+  (502, 'o/a', 'T', 3, 'Trim the wick', 'open', NULL, '', 'o52', 'u52', 1);
 UPDATE items SET priority='high' WHERE rid IN (2, 130);
 UPDATE items SET priority='critical' WHERE rid=6;
 UPDATE items SET priority='low' WHERE rid=132;
@@ -150,7 +154,6 @@ async fn test_next_orders_by_priority_then_age_alone() {
     let (_, rows) = get("/next?n=1").await;
     assert_eq!(rows[0]["priority"], "high");
     assert_eq!(rows[0]["word"], "ready");
-    assert_eq!(rows[0]["tags"], json!(["high"]));
     assert!(rows[0].get("eff_tier").is_none());
     assert_eq!(get("/show/T8").await.1["word"], "ready");
 }
@@ -191,8 +194,10 @@ async fn test_next_rows_carry_their_role_and_what_they_unblock() {
 }
 
 #[tokio::test]
-async fn test_next_narrows_by_key_priority_under_theme_and_complexity() {
-    assert_eq!(ids("/next?theme=roadmap").await, ["T9"]);
+async fn test_next_narrows_by_key_priority_under_label_and_complexity() {
+    assert_eq!(ids("/next?label=roadmap").await, ["T9"]);
+    assert_eq!(ids("/next?theme=Roadmap").await, ["T9"]);
+    assert!(ids("/next?label=road").await.is_empty());
     assert_eq!(
         ids("/next?key=t").await,
         ["T2", "T1", "T3", "T5", "T8", "T9"]
@@ -220,7 +225,8 @@ async fn test_next_refuses_bad_choices_and_unknown_targets() {
 async fn test_owner_lists_todo_questions_research() {
     assert_eq!(ids("/todo").await, ["Q2", "Q1"]);
     assert_eq!(ids("/questions").await, ["Q1"]);
-    assert_eq!(ids("/questions?theme=SYN").await, ["Q1"]);
+    assert_eq!(ids("/questions?label=SYNC").await, ["Q1"]);
+    assert_eq!(ids("/questions?theme=sync").await, ["Q1"]);
     assert!(ids("/questions?theme=road").await.is_empty());
     assert_eq!(ids("/research").await, ["Q2"]);
     let (_, todo) = get("/todo").await;
@@ -276,7 +282,8 @@ async fn test_state_lists_waiting_wip_done_dropped_groups() {
     assert_eq!(ids("/done").await, ["T11", "T4"]);
     assert_eq!(ids("/done?n=1&key=t").await, ["T11"]);
     assert_eq!(ids("/dropped").await, ["T10"]);
-    assert_eq!(ids("/groups").await, ["T11", "T10"]);
+    assert_eq!(ids("/groups").await, ["T10", "T11"]);
+    assert_eq!(ids("/groups?name=g").await, ["T10", "T11"]);
     assert_eq!(ids("/groups?name=none").await, Vec::<String>::new());
     let (_, wip) = get("/wip").await;
     assert_eq!(wip[0]["word"], "in progress");
@@ -413,8 +420,8 @@ async fn test_similar_matches_title_words_and_cited_files_and_skips_itself() {
 async fn test_search_finds_each_part_of_a_path_a_hyphenated_word_and_text_in_brackets() {
     let (app, db) = seeded().await;
     db.seed(
-        "INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, opened_at, updated_at) \
-         VALUES (30, 'o/p', 'T', 30, 'Parts', 'open', 'agent', '[]', 'x', 'o30', 'u30'); \
+        "INSERT INTO items (rid, project, key, num, title, state, body, opened_at, updated_at) \
+         VALUES (30, 'o/p', 'T', 30, 'Parts', 'open', 'x', 'o30', 'u30'); \
          INSERT INTO search (rid, id, title, body, files) VALUES (30, 'T30', 'Parts', \
          'Reads `web/src/a.rs:4`, the Content-Range header and <b>bold words</b> at user@host.', 'web/src/a.rs')",
     )
@@ -447,15 +454,14 @@ async fn test_search_finds_each_part_of_a_path_a_hyphenated_word_and_text_in_bra
 }
 
 const METRICS_SEED: &str = r#"
-INSERT INTO projects (slug, keys, themes, skills, created_at, updated_at) VALUES ('o/m',
-  '[{"key":"T","kind":"work"},{"key":"A","kind":"audit"}]', '[]', '{"prices":"opus=10:20"}', 'c', 'u');
+INSERT INTO projects (slug, skills, created_at, updated_at) VALUES ('o/m', '{"prices":"opus=10:20"}', 'c', 'u');
 INSERT INTO releases (id, project, name, position, target_date) VALUES
   (10, 'o/m', '1.0', 0, '2026-12-01'), (11, 'o/m', '1.1', 1, NULL);
-INSERT INTO items (rid, project, key, num, title, state, turn, release_id, resolution, tags, body, opened_at, updated_at) VALUES
-  (400, 'o/m', 'A', 1, 'Plan', 'open', 'agent', 10, NULL, '[]', '', '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z'),
-  (401, 'o/m', 'T', 1, 'Shipped', 'done', NULL, 10, 'ok', '[]', '', '2020-01-01T00:00:00Z', '2020-01-03T00:00:00Z'),
-  (402, 'o/m', 'T', 2, 'Waiting for work', 'open', 'agent', 10, NULL, '[]', '', '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z'),
-  (403, 'o/m', 'T', 3, 'Later', 'open', 'agent', 11, NULL, '[]', '', '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z');
+INSERT INTO items (rid, project, key, num, title, state, release_id, resolution, body, opened_at, updated_at) VALUES
+  (400, 'o/m', 'A', 1, 'Plan', 'open', 10, NULL, '', '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z'),
+  (401, 'o/m', 'T', 1, 'Shipped', 'done', 10, 'ok', '', '2020-01-01T00:00:00Z', '2020-01-03T00:00:00Z'),
+  (402, 'o/m', 'T', 2, 'Waiting for work', 'open', 10, NULL, '', '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z'),
+  (403, 'o/m', 'T', 3, 'Later', 'open', 11, NULL, '', '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z');
 UPDATE items SET parent_rid=400 WHERE rid IN (401, 402);
 INSERT INTO events (uid, project, rid, at, host, kind) VALUES
   ('m1', 'o/m', 401, '2020-01-03T00:00:00Z', 'devbox', 'closed');

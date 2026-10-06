@@ -2,7 +2,6 @@ export type Kind = 'work' | 'decision' | 'research' | 'audit' | 'story' | 'idea'
 
 export interface ProjectRow {
   slug: string;
-  themes: { name: string; note?: string | null }[];
   skills: Record<string, string>;
   updated_at: string;
 }
@@ -43,15 +42,13 @@ export interface Row {
   decision?: string | null;
   decided_at?: string | null;
   resolution?: string | null;
-  scope?: string | null;
   complexity?: string | null;
-  theme?: string | null;
   /** The release it is in; none is the backlog. */
   release?: string | null;
   /** The area it is in, by name. */
   area?: string | null;
-  rank?: number | null;
-  tags: string[];
+  /** The labels it carries: its own, then those of each plan above it. */
+  labels?: string[];
   body: string;
   opened_at: string;
   updated_at: string;
@@ -192,7 +189,6 @@ export interface GraphNode {
   key: string;
   kind: Kind;
   state: string;
-  theme: string | null;
   release?: string | null;
   /** The area it is in, by name. */
   area?: string | null;

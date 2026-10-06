@@ -3,7 +3,7 @@ import { board, byId, daily, moves, planWord, plans, tally, wordVar } from './fl
 import type { EventRow, Graph, GraphNode } from './types';
 
 const node = (id: string, kind: GraphNode['kind'], word: string, rid = 0): GraphNode => ({
-  id, rid, key: id.replace(/\d+/, ''), kind, state: word === 'done' ? 'done' : 'open', theme: null, title: id, word,
+  id, rid, key: id.replace(/\d+/, ''), kind, state: word === 'done' ? 'done' : 'open', title: id, word,
 });
 
 const GRAPH: Graph = {

@@ -8,8 +8,7 @@ use std::collections::BTreeMap;
 use sea_orm::ConnectionTrait;
 use sea_orm_migration::prelude::*;
 
-use docket_core::dump::{ItemDump, ProjectDump};
-use docket_core::migrate::{Change, Rows, Rules, Themes, plan};
+use docket_core::migrate::{Change, OldItem, OldProject, Rows, Rules, Themes, plan};
 
 use crate::statement;
 
@@ -50,17 +49,15 @@ const ITEMS: &str = "SELECT i.id, i.title, i.state, i.theme, i.group_name, i.tag
     i.opened_at, i.updated_at \
     FROM items i WHERE i.project=? ORDER BY i.key, i.num";
 
-async fn project_rows<C: ConnectionTrait>(
-    c: &C,
-) -> Result<Vec<(ProjectDump, Vec<ItemDump>)>, DbErr> {
+async fn project_rows<C: ConnectionTrait>(c: &C) -> Result<Vec<(OldProject, Vec<OldItem>)>, DbErr> {
     let mut out = Vec::new();
     for p in c.query_all_raw(statement(PROJECTS, vec![])).await? {
-        let project = ProjectDump {
+        let project = OldProject {
             slug: p.try_get_by_index(0)?,
             keys: p.try_get_by_index(1)?,
             themes: p.try_get_by_index(2)?,
             skills: p.try_get_by_index(3)?,
-            ..ProjectDump::default()
+            ..OldProject::default()
         };
         let mut items = Vec::new();
         for r in c
@@ -68,7 +65,7 @@ async fn project_rows<C: ConnectionTrait>(
             .await?
         {
             let tags: serde_json::Value = r.try_get_by_index(5)?;
-            items.push(ItemDump {
+            items.push(OldItem {
                 project: project.slug.clone(),
                 id: r.try_get_by_index(0)?,
                 title: r.try_get_by_index(1)?,
@@ -80,7 +77,7 @@ async fn project_rows<C: ConnectionTrait>(
                 related: r.try_get_by_index(7)?,
                 opened_at: r.try_get_by_index(8)?,
                 updated_at: r.try_get_by_index(9)?,
-                ..ItemDump::default()
+                ..OldItem::default()
             });
         }
         out.push((project, items));

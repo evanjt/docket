@@ -1,6 +1,6 @@
 //! Where the screen reads from: the server through its routes, or fixed rows in a test.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use docket_client::{Api, Error};
 use docket_core::api::{LeadState, Machines};
@@ -200,7 +200,18 @@ fn board(api: &Api, slug: &str) -> docket_client::api::Result<Board> {
     project.areas = docket_core::area::Listed {
         rows: areas.into_iter().map(|r| (r.id, r.area)).collect(),
     };
-    let items = api.items(slug)?;
+    let mut items = api.items(slug)?;
+    let waiting: HashMap<String, Row> = api
+        .list("waiting", slug)?
+        .into_iter()
+        .map(|w| (w.id.clone(), w))
+        .collect();
+    for i in &mut items {
+        if let Some(w) = waiting.get(&i.id) {
+            i.wait_on.clone_from(&w.wait_on);
+            i.wait_ref.clone_from(&w.wait_ref);
+        }
+    }
     let rids: Vec<i64> = items.iter().map(|i| i.rid).collect();
     let links = api.links_from(&rids, "origin")?;
     let mut seen = HashSet::new();

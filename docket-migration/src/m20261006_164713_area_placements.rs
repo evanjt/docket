@@ -10,8 +10,8 @@ use std::collections::BTreeMap;
 
 use sea_orm_migration::prelude::*;
 
-use docket_core::dump::{EventDump, ProjectDump};
-use docket_core::migrate::{Change, Rows, Rules, plan};
+use docket_core::dump::EventDump;
+use docket_core::migrate::{Change, OldProject, Rows, Rules, plan};
 
 use crate::m20261006_000011_area_places::{AREAS, pending, project_rows};
 use crate::statement;
@@ -35,12 +35,12 @@ impl MigrationTrait for Migration {
         let c = manager.get_connection();
         c.execute_unprepared(UP).await?;
         for p in c.query_all_raw(statement(PROJECTS, vec![])).await? {
-            let mut project = ProjectDump {
+            let mut project = OldProject {
                 slug: p.try_get_by_index(0)?,
                 keys: p.try_get_by_index(1)?,
                 themes: p.try_get_by_index(2)?,
                 skills: p.try_get_by_index(3)?,
-                ..ProjectDump::default()
+                ..OldProject::default()
             };
             let (items, mut events, rids) = project_rows(c, &mut project).await?;
             let slug = project.slug.clone();

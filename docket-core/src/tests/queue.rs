@@ -9,10 +9,8 @@ fn item(rid: i64, key: &'static str, kind: Kind) -> Candidate<'static> {
         turn: Some("agent"),
         claimed: false,
         waiting: false,
-        conflict: false,
         decided: true,
         complexity: None,
-        theme: None,
         release: None,
         tier: 2,
         area_tier: 2,
@@ -51,10 +49,6 @@ fn test_next_skips_what_nobody_can_take() {
     items.push(Candidate {
         waiting: true,
         ..item(5, "B", Kind::Work)
-    });
-    items.push(Candidate {
-        conflict: true,
-        ..item(6, "B", Kind::Work)
     });
     assert_eq!(ids(next(&items, &[], &Filter::default(), 10)), vec![1]);
 }
@@ -165,28 +159,24 @@ fn test_next_by_role() {
 }
 
 #[test]
-fn test_next_filters_by_theme_and_under() {
+fn test_next_filters_by_label_and_under() {
     let items = vec![
-        Candidate {
-            theme: Some("Roadmap-2"),
-            ..item(1, "B", Kind::Work)
-        },
+        item(1, "B", Kind::Work),
         item(2, "B", Kind::Work),
-        Candidate {
-            theme: Some("sync"),
-            ..item(3, "B", Kind::Work)
-        },
+        item(3, "B", Kind::Work),
     ];
-    let themed = Filter {
-        theme: Some("roadmap-2"),
+    let carrying: HashSet<i64> = [1].into_iter().collect();
+    let labelled = Filter {
+        labelled: Some(&carrying),
         ..Filter::default()
     };
-    assert_eq!(ids(next(&items, &[], &themed, 10)), vec![1]);
-    let prefix = Filter {
-        theme: Some("roadmap"),
+    assert_eq!(ids(next(&items, &[], &labelled, 10)), vec![1]);
+    let none = HashSet::new();
+    let unlabelled = Filter {
+        labelled: Some(&none),
         ..Filter::default()
     };
-    assert!(next(&items, &[], &prefix, 10).is_empty());
+    assert!(next(&items, &[], &unlabelled, 10).is_empty());
     let under: HashSet<i64> = [3].into_iter().collect();
     let below = Filter {
         under: Some(&under),
@@ -257,7 +247,6 @@ fn test_next_orders_by_release_before_priority() {
             ..item(2, "B", Kind::Work)
         },
         Candidate {
-            theme: Some("docs"),
             release: None,
             tier: 2,
             ..item(3, "B", Kind::Work)
@@ -330,7 +319,6 @@ fn test_next_current_release_only_drops_later_releases() {
             ..item(1, "A", Kind::Audit)
         },
         Candidate {
-            theme: Some("docs"),
             release: None,
             ..item(2, "B", Kind::Work)
         },
@@ -368,7 +356,6 @@ fn owed<'a>(rid: i64, key: &'static str, kind: Kind) -> OwnerRow<'a> {
         waiting: false,
         derived: false,
         need: None,
-        theme: None,
         release: None,
         tier: 2,
         area: None,
@@ -465,7 +452,6 @@ fn test_owner_queue_puts_the_question_then_the_critical_current_item_first_and_d
             ..owed(3, "PL", Kind::Audit)
         },
         OwnerRow {
-            theme: Some("ci"),
             ..owed(4, "B", Kind::Work)
         },
         owed(5, "Q", Kind::Decision),
@@ -641,16 +627,14 @@ fn test_next_orders_equal_priority_by_area_then_ignores_area_for_priority() {
 }
 
 #[test]
-fn test_next_filters_by_the_items_release_not_its_theme() {
+fn test_next_filters_by_the_items_release() {
     let items = vec![
         Candidate {
             release: Some("3.4.0"),
-            theme: None,
             ..item(1, "B", Kind::Work)
         },
         Candidate {
             release: Some("5.6.0"),
-            theme: Some("3.4.0"),
             ..item(2, "B", Kind::Work)
         },
     ];

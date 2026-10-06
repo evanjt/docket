@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use axum::extract::{Extension, Query, State};
 use axum::{Json, http::StatusCode};
@@ -6,8 +6,9 @@ use sea_orm::{DatabaseConnection, FromQueryResult};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use docket_core::assignment::Outcome;
+use docket_core::assignment::{Held, Outcome};
 use docket_core::flow::tally;
+use docket_core::item::turn_of;
 use docket_core::member::{Edge, Tie, descendants};
 use docket_core::queue::{Candidate, Filter, Ranked, Role, next as queue};
 use docket_core::word::{Kind, PRIORITIES};
@@ -17,7 +18,8 @@ use crate::reads::public::{
     Failure, failure, internal, item_of, items_where, marks, member_counts, one_of, project_of,
     public, sql, word_of,
 };
-use crate::verbs::graph::open_dependencies;
+use crate::store::held_in;
+use crate::verbs::graph::{open_dependencies, waits};
 use docket_core::word::kind_of_type;
 
 /// The columns the queue and the flow read, for every item of a project, in rid order.
@@ -27,13 +29,8 @@ struct Slim {
     key: String,
     item_type: String,
     state: String,
-    turn: Option<String>,
-    claim_branch: Option<String>,
-    wait_on: Option<String>,
-    conflict: i64,
     decided: bool,
     complexity: Option<String>,
-    theme: Option<String>,
     release: Option<String>,
     priority: String,
     opened_at: String,
@@ -44,6 +41,10 @@ struct Slim {
 struct Board {
     items: Vec<Slim>,
     ties: Vec<Tie>,
+    /// The open items their dependencies hold.
+    waiting: BTreeSet<i64>,
+    /// Each item's open assignment: its claim, or the owner's ask.
+    held: HashMap<i64, Held>,
 }
 
 #[derive(FromQueryResult)]
@@ -56,7 +57,7 @@ struct TieRow {
 /// Every item of a project and every item-to-item link leaving one.
 async fn board(db: &DatabaseConnection, slug: &str) -> Result<Board, Failure> {
     let items = Slim::find_by_statement(sql(
-        "SELECT rid, key, type AS item_type, state, turn, claim_branch, wait_on, conflict, decision IS NOT NULL AS decided, complexity, theme, \
+        "SELECT rid, key, type AS item_type, state, decision IS NOT NULL AS decided, complexity, \
          (SELECT r.name FROM releases r WHERE r.id=items.release_id) AS release, priority, opened_at, \
          (SELECT a.priority FROM areas a WHERE a.id=items.area_id) AS area_priority, \
          (SELECT a.name FROM areas a WHERE a.id=items.area_id) AS area \
@@ -85,22 +86,33 @@ async fn board(db: &DatabaseConnection, slug: &str) -> Result<Board, Failure> {
         })
     })
     .collect();
-    Ok(Board { items, ties })
+    let waiting = waits(db, slug)
+        .await
+        .map_err(|e| internal(&e))?
+        .into_keys()
+        .collect();
+    let held = held_in(db, slug).await.map_err(|e| internal(&e))?;
+    Ok(Board {
+        items,
+        ties,
+        waiting,
+        held,
+    })
 }
 
-fn candidate(row: &Slim) -> Candidate<'_> {
+fn candidate<'a>(row: &'a Slim, board: &Board) -> Candidate<'a> {
+    let held = board.held.get(&row.rid);
+    let asked = matches!(held, Some(Held::Ask(_)));
     Candidate {
         rid: row.rid,
         key: &row.key,
         kind: kind_of_type(&row.item_type),
         open: row.state == "open",
-        turn: row.turn.as_deref(),
-        claimed: row.claim_branch.is_some(),
-        waiting: row.wait_on.is_some(),
-        conflict: row.conflict != 0,
+        turn: turn_of(&row.state, asked),
+        claimed: matches!(held, Some(Held::Claim(_))),
+        waiting: board.waiting.contains(&row.rid),
         decided: row.decided,
         complexity: row.complexity.as_deref(),
-        theme: row.theme.as_deref(),
         release: row.release.as_deref(),
         tier: PRIORITIES
             .iter()
@@ -124,7 +136,9 @@ pub struct NextQuery {
     key: Option<String>,
     /// One item's id, to read its row and role when it is ready.
     id: Option<String>,
-    theme: Option<String>,
+    /// Only the items carrying this label; `theme` is the name it had.
+    #[serde(alias = "theme")]
+    label: Option<String>,
     area: Option<String>,
     /// A release name or `current`.
     release: Option<String>,
@@ -222,6 +236,9 @@ pub async fn next(
         None => None,
     };
     let releases = listed.open;
+    let labelled = crate::verbs::labels::narrowed(&db, &q.project, q.label.as_deref())
+        .await
+        .map_err(|e| internal(&e))?;
     let filter = Filter {
         roles: &roles,
         priority: q
@@ -232,14 +249,14 @@ pub async fn next(
         rid,
         under: under.as_ref(),
         complexity: q.complexity.as_deref(),
-        theme: q.theme.as_deref(),
+        labelled: labelled.as_ref(),
         area: q.area.as_deref(),
         release: release.as_deref(),
         releases: &releases,
         current_release_only: q.current_release,
         dependencies: &dependencies,
     };
-    let candidates: Vec<Candidate> = board.items.iter().map(|r| candidate(r)).collect();
+    let candidates: Vec<Candidate> = board.items.iter().map(|r| candidate(r, &board)).collect();
     let picked = queue(&candidates, &board.ties, &filter, q.n);
     Ok(Json(Value::Array(
         shaped(&db, &q.project, &board, picked).await?,
@@ -380,9 +397,8 @@ pub async fn status(
             let kind = kind_of_type(&r.item_type);
             let word = word_of(
                 &r.state,
-                r.claim_branch.as_deref(),
-                r.wait_on.as_deref(),
-                r.turn.as_deref(),
+                board.held.get(&r.rid),
+                board.waiting.contains(&r.rid),
                 kind,
                 open.get(&r.rid).copied().unwrap_or_default(),
             );

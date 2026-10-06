@@ -24,6 +24,9 @@ mod m20261006_162014_item_types;
 mod m20261006_163830_labels;
 mod m20261006_164713_area_placements;
 mod m20261006_174229_publications;
+mod m20261006_202103_column_labels;
+mod m20261006_210713_open_assignments;
+mod m20261006_213453_drop_old_columns;
 pub mod parents;
 #[cfg(any(test, feature = "scratch"))]
 pub mod scratch;
@@ -73,6 +76,9 @@ impl MigratorTrait for Migrator {
             Box::new(m20261006_163830_labels::Migration),
             Box::new(m20261006_164713_area_placements::Migration),
             Box::new(m20261006_174229_publications::Migration),
+            Box::new(m20261006_202103_column_labels::Migration),
+            Box::new(m20261006_210713_open_assignments::Migration),
+            Box::new(m20261006_213453_drop_old_columns::Migration),
         ]
     }
 }

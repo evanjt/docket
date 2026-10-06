@@ -13,34 +13,35 @@ use crate::auth::Keys;
 use docket_migration::scratch::Scratch;
 
 const SEED: &str = r#"
-INSERT INTO projects (slug, keys, themes, skills, remotes, created_at, updated_at) VALUES ('o/p',
-  '[{"key":"T","kind":"work"},{"key":"Q","kind":"decision"},{"key":"A","kind":"audit"},
-    {"key":"PK","kind":"package"},{"key":"CON","kind":"concept"},{"key":"CID","kind":"idea"}]',
-  '[{"name":"sync"}]', '{"stale_claim":"1","pool":"a=2"}', '["git@h:o/p.git"]', 'c', 'u'),
-  ('o/q', '[{"key":"T","kind":"work"}]', '[]', '{}', '[]', 'c', 'u');
-INSERT INTO items (rid, project, key, num, title, state, turn, tags, theme, group_name, body, opened_at, updated_at) VALUES
-  (1, 'o/p', 'T', 1, 'Fix the sync', 'open', 'agent', '["high"]', NULL, 'g',
+INSERT INTO projects (slug, skills, remotes, created_at, updated_at) VALUES ('o/p', '{"stale_claim":"1","pool":"a=2"}', '["git@h:o/p.git"]', 'c', 'u'),
+  ('o/q', '{}', '[]', 'c', 'u');
+INSERT INTO items (rid, project, key, num, title, state, body, opened_at, updated_at) VALUES
+  (1, 'o/p', 'T', 1, 'Fix the sync', 'open',
      '- **Touches.** src/a.rs, src/b.rs' || chr(10) || '`src/a.rs:3` serves A1#1', '2026-01-01T00:00:00Z', 'u1'),
-  (2, 'o/p', 'PK', 1, 'Package', 'open', 'agent', '["critical"]', NULL, NULL, '', '2026-01-01T00:00:00Z', 'u2'),
-  (3, 'o/p', 'CON', 1, 'Concept', 'open', 'agent', '[]', NULL, NULL, '', '2026-01-01T00:00:00Z', 'u3'),
-  (4, 'o/p', 'A', 1, 'Plan', 'open', 'agent', '[]', NULL, NULL,
+  (2, 'o/p', 'PK', 1, 'Package', 'open', '', '2026-01-01T00:00:00Z', 'u2'),
+  (3, 'o/p', 'CON', 1, 'Concept', 'open', '', '2026-01-01T00:00:00Z', 'u3'),
+  (4, 'o/p', 'A', 1, 'Plan', 'open',
      '- **Principles.**' || chr(10) || '  1. One owner.' || chr(10) || '  2. No gaps.', '2026-01-01T00:00:00Z', 'u4'),
-  (6, 'o/p', 'T', 3, 'Held theme', 'open', 'agent', '[]', 'roadmap', 'g', 'x', '2026-01-01T00:00:00Z', 'u6'),
-  (7, 'o/p', 'Q', 1, 'Two of them', 'open', 'user', '[]', NULL, NULL, '', '2026-01-01T00:00:00Z', 'u7');
-INSERT INTO items (rid, project, key, num, title, state, resolution, tags, body, opened_at, updated_at) VALUES
-  (5, 'o/p', 'T', 2, 'Done one', 'done', 'abc1234', '[]', '`src/a.rs`', '2026-01-01T00:00:00Z', 'u5');
-INSERT INTO items (rid, project, key, num, title, state, turn, claim_branch, claim_host, claim_since, claim_job, tags, body, opened_at, updated_at) VALUES
-  (8, 'o/p', 'T', 4, 'Claimed', 'open', 'agent', 'audit/t4', 'devbox', '2026-01-01T00:00:00Z', 'j1', '[]',
-     '- **Touches.** src/a.rs', '2026-01-01T00:00:00Z', 'u8'),
-  (9, 'o/p', 'T', 5, 'Also claimed', 'open', 'agent', 'audit/t5', 'h', '2026-01-02T00:00:00Z', NULL, '[]',
-     '- **Touches.** src/a.rs', '2026-01-01T00:00:00Z', 'u9');
-INSERT INTO items (rid, project, key, num, title, state, turn, wait_on, wait_item, wait_ref, wait_since, tags, opened_at, updated_at) VALUES
-  (10, 'o/p', 'T', 6, 'Waits', 'open', 'agent', 'item', 1, 'T1', '2026-01-01T00:00:00Z', '[]', '2026-01-01T00:00:00Z', 'u10');
+  (6, 'o/p', 'T', 3, 'Held theme', 'open', 'x', '2026-01-01T00:00:00Z', 'u6'),
+  (7, 'o/p', 'Q', 1, 'Two of them', 'open', '', '2026-01-01T00:00:00Z', 'u7');
+INSERT INTO items (rid, project, key, num, title, state, resolution, body, opened_at, updated_at) VALUES
+  (5, 'o/p', 'T', 2, 'Done one', 'done', 'abc1234', '`src/a.rs`', '2026-01-01T00:00:00Z', 'u5');
+INSERT INTO items (rid, project, key, num, title, state, body, opened_at, updated_at) VALUES
+  (8, 'o/p', 'T', 4, 'Claimed', 'open', '- **Touches.** src/a.rs', '2026-01-01T00:00:00Z', 'u8'),
+  (9, 'o/p', 'T', 5, 'Also claimed', 'open', '- **Touches.** src/a.rs', '2026-01-01T00:00:00Z', 'u9');
+INSERT INTO assignments (rid, assignee, kind, started_at, branch, host, job) VALUES
+  (7, 'owner', 'ask', '2026-01-01T00:00:00Z', NULL, '', NULL),
+  (8, 'agent', 'claim', '2026-01-01T00:00:00Z', 'audit/t4', 'devbox', 'j1'),
+  (9, 'agent', 'claim', '2026-01-02T00:00:00Z', 'audit/t5', 'h', NULL);
+INSERT INTO items (rid, project, key, num, title, state, opened_at, updated_at) VALUES
+  (10, 'o/p', 'T', 6, 'Waits', 'open', '2026-01-01T00:00:00Z', 'u10');
 INSERT INTO dependencies (rid, on_rid, created_at) VALUES (10, 1, '2026-01-01T00:00:00Z');
-INSERT INTO items (rid, project, key, num, title, state, turn, resolution, tags, body, opened_at, updated_at) VALUES
-  (11, 'o/p', 'A', 2, 'Due plan', 'open', 'agent', NULL, '[]', 'x', '2026-01-01T00:00:00Z', 'u11'),
-  (12, 'o/p', 'T', 7, 'Due work', 'done', NULL, 'def5678', '[]', 'x', '2026-01-01T00:00:00Z', 'u12');
+INSERT INTO items (rid, project, key, num, title, state, resolution, body, opened_at, updated_at) VALUES
+  (11, 'o/p', 'A', 2, 'Due plan', 'open', NULL, 'x', '2026-01-01T00:00:00Z', 'u11'),
+  (12, 'o/p', 'T', 7, 'Due work', 'done', 'def5678', 'x', '2026-01-01T00:00:00Z', 'u12');
 UPDATE items SET parent_rid=2 WHERE rid IN (1, 5, 8);
+INSERT INTO labels (id, project, name) VALUES (90, 'o/p', 'group:g'), (91, 'o/p', 'roadmap');
+INSERT INTO item_labels (rid, label_id) VALUES (1, 90), (6, 90), (6, 91);
 UPDATE items SET parent_rid=4 WHERE rid=2;
 UPDATE items SET parent_rid=11 WHERE rid=12;
 INSERT INTO links (rid, kind, to_rid) VALUES (1, 'related', 3), (3, 'related', 1), (8, 'origin', 7);
@@ -188,11 +189,10 @@ async fn test_deps_lists_each_tie_and_the_mentions() {
 #[tokio::test]
 async fn test_deps_words_another_projects_row_by_its_type() {
     let s = Seeded::new().await;
-    let seed = "INSERT INTO projects (slug, keys, created_at, updated_at) VALUES ('o/r', \
-                '[{\"key\":\"P\",\"kind\":\"package\"},{\"key\":\"T\",\"kind\":\"work\"}]', 'c', 'u'); \
-                INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, opened_at, updated_at) VALUES \
-                (20, 'o/r', 'P', 1, 'Other package', 'open', 'agent', '[]', '', 'o', 'u'), \
-                (21, 'o/r', 'T', 1, 'Other member', 'open', 'agent', '[]', '', 'o', 'u'); \
+    let seed = "INSERT INTO projects (slug, created_at, updated_at) VALUES ('o/r', 'c', 'u'); \
+                INSERT INTO items (rid, project, key, num, title, state, body, opened_at, updated_at) VALUES \
+                (20, 'o/r', 'P', 1, 'Other package', 'open', '', 'o', 'u'), \
+                (21, 'o/r', 'T', 1, 'Other member', 'open', '', 'o', 'u'); \
                 UPDATE items SET parent_rid=20, type='task' WHERE rid=21; UPDATE items SET type='plan' WHERE rid=20; \
                 INSERT INTO links (rid, kind, to_path) VALUES (20, 'cites_file', 'src/a.rs');";
     s.db.seed(seed).await;
@@ -311,9 +311,9 @@ async fn test_graph_nodes_carry_progress_and_due_as_the_core_counts_them() {
 async fn test_graph_counts_what_sits_under_a_plans_sub_plan() {
     let s = Seeded::new().await;
     s.db.seed(
-        "INSERT INTO items (rid, project, key, num, title, state, turn, tags, opened_at, updated_at) VALUES \
-         (14, 'o/p', 'A', 3, 'Sub plan', 'open', 'agent', '[]', '2026-01-01T00:00:00Z', 'u14'), \
-         (13, 'o/p', 'T', 8, 'Under the sub plan', 'open', 'agent', '[]', '2026-01-01T00:00:00Z', 'u13'); \
+        "INSERT INTO items (rid, project, key, num, title, state, opened_at, updated_at) VALUES \
+         (14, 'o/p', 'A', 3, 'Sub plan', 'open', '2026-01-01T00:00:00Z', 'u14'), \
+         (13, 'o/p', 'T', 8, 'Under the sub plan', 'open', '2026-01-01T00:00:00Z', 'u13'); \
          UPDATE items SET parent_rid=11 WHERE rid=14; \
          UPDATE items SET parent_rid=14 WHERE rid=13; \
          INSERT INTO links (rid, kind, to_rid) VALUES (13, 'origin', 12);",
@@ -344,28 +344,27 @@ async fn test_check_finds_bare_bodies_and_no_audit_problem_for_an_open_plan() {
     assert_eq!(s.ok("/check?project=o/q").await, json!([]));
 }
 
-const STALLED: &str = r#"
-INSERT INTO projects (slug, keys, themes, skills, remotes, created_at, updated_at) VALUES ('o/s',
-  '[{"key":"T","kind":"work"},{"key":"PK","kind":"audit"}]', '[]', '{}', '[]', 'c', 'u');
+const STALLED: &str = r"
+INSERT INTO projects (slug, skills, remotes, created_at, updated_at) VALUES ('o/s', '{}', '[]', 'c', 'u');
 INSERT INTO releases (id, project, name, position) VALUES (11, 'o/s', '1.0', 0), (12, 'o/s', '1.1', 1);
-INSERT INTO items (rid, project, key, num, title, state, turn, wait_on, wait_item, wait_ref, wait_since, release_id, tags, body, opened_at, updated_at) VALUES
-  (101, 'o/s', 'PK', 1, 'First package', 'open', 'agent', NULL, NULL, NULL, NULL, NULL, '[]', 'x', 'o', 'u'),
-  (102, 'o/s', 'PK', 2, 'Second package', 'open', 'agent', NULL, NULL, NULL, NULL, NULL, '[]', 'x', 'o', 'u'),
-  (103, 'o/s', 'T', 1, 'Member of the first', 'open', 'agent', 'item', 102, 'PK2', 'w', NULL, '[]', 'x', 'o', 'u'),
-  (104, 'o/s', 'T', 2, 'Member of the second', 'open', 'agent', 'item', 101, 'PK1', 'w', NULL, '[]', 'x', 'o', 'u'),
-  (105, 'o/s', 'PK', 3, 'Current package', 'open', 'agent', NULL, NULL, NULL, NULL, 11, '[]', 'x', 'o', 'u'),
-  (106, 'o/s', 'T', 3, 'Later member', 'open', 'agent', NULL, NULL, NULL, NULL, 12, '[]', 'x', 'o', 'u'),
-  (107, 'o/s', 'T', 4, 'Current waiter', 'open', 'agent', 'item', 108, 'T5', 'w', 11, '[]', 'x', 'o', 'u'),
-  (108, 'o/s', 'T', 5, 'Later item', 'open', 'agent', NULL, NULL, NULL, NULL, 12, '[]', 'x', 'o', 'u'),
-  (109, 'o/s', 'T', 6, 'Waiter on a drop', 'open', 'agent', NULL, NULL, NULL, NULL, NULL, '[]', 'x', 'o', 'u');
-INSERT INTO items (rid, project, key, num, title, state, resolution, tags, body, opened_at, updated_at) VALUES
-  (110, 'o/s', 'T', 7, 'Dropped', 'dropped', 'not needed', '[]', 'x', 'o', 'u');
+INSERT INTO items (rid, project, key, num, title, state, release_id, body, opened_at, updated_at) VALUES
+  (101, 'o/s', 'PK', 1, 'First package', 'open', NULL, 'x', 'o', 'u'),
+  (102, 'o/s', 'PK', 2, 'Second package', 'open', NULL, 'x', 'o', 'u'),
+  (103, 'o/s', 'T', 1, 'Member of the first', 'open', NULL, 'x', 'o', 'u'),
+  (104, 'o/s', 'T', 2, 'Member of the second', 'open', NULL, 'x', 'o', 'u'),
+  (105, 'o/s', 'PK', 3, 'Current package', 'open', 11, 'x', 'o', 'u'),
+  (106, 'o/s', 'T', 3, 'Later member', 'open', 12, 'x', 'o', 'u'),
+  (107, 'o/s', 'T', 4, 'Current waiter', 'open', 11, 'x', 'o', 'u'),
+  (108, 'o/s', 'T', 5, 'Later item', 'open', 12, 'x', 'o', 'u'),
+  (109, 'o/s', 'T', 6, 'Waiter on a drop', 'open', NULL, 'x', 'o', 'u');
+INSERT INTO items (rid, project, key, num, title, state, resolution, body, opened_at, updated_at) VALUES
+  (110, 'o/s', 'T', 7, 'Dropped', 'dropped', 'not needed', 'x', 'o', 'u');
 UPDATE items SET parent_rid=101 WHERE rid=103;
 UPDATE items SET parent_rid=102 WHERE rid=104;
 UPDATE items SET parent_rid=105 WHERE rid=106;
 INSERT INTO dependencies (rid, on_rid, created_at) VALUES (103, 102, 'w'), (104, 101, 'w'), (107, 108, 'w'),
   (109, 110, 'w');
-"#;
+";
 
 #[tokio::test]
 async fn test_check_finds_a_cycle_through_containers_and_a_hold_by_a_later_release() {
@@ -504,29 +503,32 @@ async fn test_the_audit_read_of_a_labelled_item_prints_each_label_with_its_descr
 }
 
 #[tokio::test]
-async fn test_audit_by_theme_lists_every_row_of_that_theme_alone() {
+async fn test_audit_by_label_lists_every_row_carrying_it_alone() {
     let s = Seeded::new().await;
-    let seed = "INSERT INTO projects (slug, keys, created_at, updated_at) VALUES ('o/t', \
-                '[{\"key\":\"T\",\"kind\":\"work\"}]', 'c', 'u'); \
-                INSERT INTO items (rid, project, key, num, title, state, turn, theme, tags, body, opened_at, updated_at) VALUES \
-                (40, 'o/t', 'T', 1, 'Ready', 'open', 'agent', '0.4.1', '[]', '', 'o', 'u'), \
-                (41, 'o/t', 'T', 2, 'Owner turn', 'open', 'user', '0.4.1', '[]', '', 'o', 'u'), \
-                (42, 'o/t', 'T', 3, 'Later release', 'open', 'agent', '0.4.10', '[]', '', 'o', 'u'), \
-                (43, 'o/t', 'T', 4, 'Mixed case', 'open', 'agent', 'Beta', '[]', '', 'o', 'u'); \
-                INSERT INTO items (rid, project, key, num, title, state, turn, wait_on, wait_ref, wait_since, theme, tags, body, opened_at, updated_at) VALUES \
-                (44, 'o/t', 'T', 5, 'Waiting', 'open', 'agent', 'condition', 'later', 'w', '0.4.1', '[]', '', 'o', 'u'); \
-                INSERT INTO items (rid, project, key, num, title, state, turn, claim_branch, claim_host, claim_since, theme, tags, body, opened_at, updated_at) VALUES \
-                (45, 'o/t', 'T', 6, 'Held', 'open', 'agent', 'b', 'h', 'c', '0.4.1', '[]', '', 'o', 'u');";
+    let seed = "INSERT INTO projects (slug, created_at, updated_at) VALUES ('o/t', 'c', 'u'); \
+                INSERT INTO items (rid, project, key, num, title, state, body, opened_at, updated_at) VALUES \
+                (40, 'o/t', 'T', 1, 'Ready', 'open', '', 'o', 'u'), \
+                (41, 'o/t', 'T', 2, 'Owner turn', 'open', '', 'o', 'u'), \
+                (42, 'o/t', 'T', 3, 'Other label', 'open', '', 'o', 'u'), \
+                (43, 'o/t', 'T', 4, 'Mixed case', 'open', '', 'o', 'u'), \
+                (44, 'o/t', 'A', 1, 'Plan', 'open', '', 'o', 'u'), \
+                (45, 'o/t', 'T', 5, 'Under the plan', 'open', '', 'o', 'u'); \
+                UPDATE items SET parent_rid=44 WHERE rid=45; \
+                INSERT INTO labels (id, project, name) VALUES \
+                (80, 'o/t', 'kites'), (81, 'o/t', 'kites_2'), (82, 'o/t', 'Beta'); \
+                INSERT INTO item_labels (rid, label_id) VALUES (40, 80), (41, 80), (44, 80), (42, 81), (43, 82); \
+                INSERT INTO assignments (rid, assignee, kind, started_at, branch, host) VALUES \
+                (41, 'owner', 'ask', 'o', NULL, '');";
     s.db.seed(seed).await;
-    let all = s.ok("/audit?project=o/t&theme=0.4.1").await;
+    let all = s.ok("/audit?project=o/t&label=kites").await;
     let mut found = ids(&all["rows"]);
     found.sort_unstable();
-    assert_eq!(found, ["T1", "T2", "T5", "T6"]);
+    assert_eq!(found, ["A1", "T1", "T2", "T5"]);
     assert_eq!(
         ids(&s.ok("/audit?project=o/t&theme=beta").await["rows"]),
         ["T4"]
     );
-    assert!(ids(&s.ok("/audit?project=o/t&theme=0.4").await["rows"]).is_empty());
+    assert!(ids(&s.ok("/audit?project=o/t&label=kite_").await["rows"]).is_empty());
 }
 
 #[tokio::test]
@@ -648,11 +650,12 @@ async fn test_state_reads_never_select_an_items_body() {
 async fn test_a_project_with_an_empty_key_list_reads_every_item_by_its_type() {
     let s = Seeded::new().await;
     s.db.seed(
-        "INSERT INTO projects (slug, keys, created_at, updated_at) VALUES ('o/e', '[]', 'c', 'u'); \
-         INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, type, opened_at, updated_at) VALUES \
-           (200, 'o/e', 'A', 1, 'Plan', 'open', 'agent', '[]', 'x', 'plan', 'o', 'u'), \
-           (201, 'o/e', 'T', 1, 'Member', 'open', 'agent', '[]', 'x', 'task', 'o', 'u'), \
-           (202, 'o/e', 'Q', 1, 'Which', 'open', 'user', '[]', 'x', 'question', 'o', 'u'); \
+        "INSERT INTO projects (slug, created_at, updated_at) VALUES ('o/e', 'c', 'u'); \
+         INSERT INTO items (rid, project, key, num, title, state, body, type, opened_at, updated_at) VALUES \
+           (200, 'o/e', 'A', 1, 'Plan', 'open', 'x', 'plan', 'o', 'u'), \
+           (201, 'o/e', 'T', 1, 'Member', 'open', 'x', 'task', 'o', 'u'), \
+           (202, 'o/e', 'Q', 1, 'Which', 'open', 'x', 'question', 'o', 'u'); \
+         INSERT INTO assignments (rid, assignee, kind, started_at, host) VALUES (202, 'owner', 'ask', 'o', ''); \
          UPDATE items SET parent_rid=200 WHERE rid=201;",
     )
     .await;

@@ -4,6 +4,7 @@
 use serde::Serialize;
 
 use crate::item::Item;
+use crate::stall::Wait;
 use crate::word::Kind;
 
 /// One verb an item takes now.
@@ -18,9 +19,10 @@ pub struct Offer {
 
 /// The verbs the rules accept on the item as it stands, in the order a panel lists them. A verb on a
 /// claimed item carries the holder's branch, since `rules::require_hold` refuses any other. A plan's
-/// `open_under` ids are what `rules::close` takes: `close` is left out where it refuses.
+/// `open_under` ids are what `rules::close` takes: `close` is left out where it refuses. `wait` is what
+/// its dependencies hold it on.
 #[must_use]
-pub fn offers(row: &Item, kind: Kind, open_under: &[String]) -> Vec<Offer> {
+pub fn offers(row: &Item, kind: Kind, open_under: &[String], wait: Option<&Wait>) -> Vec<Offer> {
     let offer = |verb, needs: &[&'static str], branch: Option<&String>| Offer {
         verb,
         needs: needs.to_vec(),
@@ -29,18 +31,18 @@ pub fn offers(row: &Item, kind: Kind, open_under: &[String]) -> Vec<Offer> {
     if row.state != "open" {
         return vec![offer("reopen", &["why"], None)];
     }
-    let held = row.claim_branch.as_ref();
-    let parked = row.turn.as_deref() == Some("user");
+    let held = row.claim().map(|c| &c.branch);
+    let parked = row.ask().is_some();
     let mut out = Vec::new();
     if kind == Kind::Decision {
         out.push(offer("answer", &["decision"], None));
     } else if parked {
         out.push(offer("reply", &["note"], None));
     }
-    if held.is_none() && row.wait_on.is_none() && !parked && row.conflict == 0 {
+    if held.is_none() && wait.is_none() && !parked {
         out.push(offer("start", &[], None));
     }
-    if row.wait_on.is_some() {
+    if wait.is_some() {
         out.push(offer("resume", &[], None));
     }
     let closable = match kind {
@@ -57,7 +59,7 @@ pub fn offers(row: &Item, kind: Kind, open_under: &[String]) -> Vec<Offer> {
     if !parked {
         out.push(offer("ask", &["note"], held));
     }
-    if row.wait_on.is_none() {
+    if wait.is_none() {
         out.push(offer("wait", &["until|on"], held));
     }
     out.push(offer("drop", &["why"], held));

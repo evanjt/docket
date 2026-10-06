@@ -48,7 +48,7 @@ describe('wordList', () => {
 
 describe('queueNodes', () => {
   const node = (id: string, kind: GraphNode['kind'], word: string): GraphNode => ({
-    id, rid: 0, key: id.replace(/\d+/, ''), kind, state: 'open', theme: null, title: id, word,
+    id, rid: 0, key: id.replace(/\d+/, ''), kind, state: 'open', title: id, word,
   });
 
   it('counts a claimed ticket and leaves out a package whose tickets are open', () => {

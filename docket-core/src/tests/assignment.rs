@@ -222,7 +222,10 @@ fn test_settle_ends_what_the_item_no_longer_holds_and_opens_what_it_does() {
         &mut rows,
         &Now {
             claim: None,
-            asked: Some(("q".into(), Some("pick one".into()))),
+            asked: Some(Ask {
+                since: "q".into(),
+                note: Some("pick one".into()),
+            }),
             updated_at: "z".into(),
         },
     );
@@ -311,5 +314,94 @@ fn test_rebuild_keeps_a_job_reports_start_end_and_exit_on_the_open_claim() {
             Some("2026-01-02T00:50:00Z"),
             Some(2)
         )
+    );
+}
+
+#[test]
+fn test_an_answer_ends_a_claim_on_the_question_landed() {
+    let rows = rebuild(&[
+        event("claimed", "a", "build/q1-1", None),
+        event("decided", "b", "build/q1-1", Some("north")),
+    ]);
+    assert_eq!(
+        ends(&rows),
+        [(Kind::Claim, Some("b"), Some(Outcome::Landed))]
+    );
+}
+
+#[test]
+fn test_a_resume_that_keeps_the_ask_made_during_the_wait_leaves_it_open() {
+    let mut resume = event("resumed", "c", "main", Some("T2 closed"));
+    resume.data = Some(json!({ "ask": KEPT }));
+    let rows = rebuild(&[event("asked", "b", "main", Some("still wanted?")), resume]);
+    assert_eq!(ends(&rows), [(Kind::Ask, None, None)]);
+}
+
+fn claim_on(branch: &str) -> Claim {
+    Claim {
+        branch: branch.into(),
+        host: "bench".into(),
+        since: "s".into(),
+        ..Claim::default()
+    }
+}
+
+#[test]
+fn test_an_open_row_that_agrees_with_the_item_is_kept() {
+    let now = Now {
+        claim: Some(claim_on("build/t1-1")),
+        ..Now::default()
+    };
+    let open = Held::Claim(claim_on("build/t1-1"));
+    assert_eq!(agree(Some(&open), &now), Agreement::default());
+    assert_eq!(agree(None, &Now::default()), Agreement::default());
+}
+
+#[test]
+fn test_an_open_row_the_item_no_longer_holds_ends_and_what_it_holds_opens() {
+    let asked = Now {
+        asked: Some(Ask {
+            since: "q".into(),
+            note: Some("pick one".into()),
+        }),
+        ..Now::default()
+    };
+    let got = agree(Some(&Held::Claim(claim_on("build/t1-1"))), &asked);
+    assert!(got.end);
+    let opened = got.open.unwrap();
+    assert_eq!(
+        (
+            opened.kind,
+            opened.started_at.as_str(),
+            opened.note.as_deref()
+        ),
+        (Kind::Ask, "q", Some("pick one"))
+    );
+    let got = agree(
+        Some(&Held::Claim(claim_on("build/t1-1"))),
+        &Now {
+            claim: Some(claim_on("build/t1-2")),
+            ..Now::default()
+        },
+    );
+    assert!(got.end);
+    assert_eq!(got.open.unwrap().branch.as_deref(), Some("build/t1-2"));
+    let got = agree(Some(&Held::Ask(Ask::default())), &Now::default());
+    assert_eq!((got.end, got.open), (true, None));
+}
+
+#[test]
+fn test_an_open_ask_takes_the_note_the_item_holds() {
+    let asked = Now {
+        asked: Some(Ask {
+            since: "q".into(),
+            note: Some("the kiln is hot".into()),
+        }),
+        ..Now::default()
+    };
+    let got = agree(Some(&Held::Ask(Ask::default())), &asked);
+    assert_eq!(
+        (got.end, got.open, got.note.as_deref()),
+        (false, None, Some("the kiln is hot"))
     );
 }

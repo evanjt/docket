@@ -9,7 +9,7 @@ use docket_core::rows::Row;
 use crate::py::{Py, cut, or_none};
 
 /// The stored columns in the order the database holds them, the order `--json` prints them in.
-pub const COLUMNS: [&str; 32] = [
+pub const COLUMNS: [&str; 28] = [
     "project",
     "key",
     "num",
@@ -29,19 +29,15 @@ pub const COLUMNS: [&str; 32] = [
     "decided_at",
     "resolution",
     "complexity",
-    "theme",
     "release",
     "area",
-    "rank",
-    "tags",
+    "labels",
     "body",
-    "conflict",
     "opened_at",
     "updated_at",
     "claim_runner",
     "claim_job",
     "claim_on",
-    "scope",
 ];
 
 /// What `--json` adds after the stored columns and any a query selected.
@@ -136,7 +132,9 @@ fn tail_lines(r: &Row, flag: Option<&str>) -> Vec<String> {
     );
     match r.wait_on.as_deref() {
         Some("item") => tail.push(format!("waits on {wref} since {wsince}")),
-        Some("condition") => tail.push(format!("waits until: {wref} (since {wsince})")),
+        Some("condition") => tail.push(format!(
+            "waits on {wref}, a task for the owner (since {wsince})"
+        )),
         _ => {}
     }
     if r.turn.as_deref() == Some("user")

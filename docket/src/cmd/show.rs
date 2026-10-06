@@ -115,9 +115,6 @@ fn facts(r: &Row, about: &Value) -> Vec<String> {
     if let Some(area) = r.area.as_deref() {
         facts.push(format!("area: {area}"));
     }
-    if let Some(t) = r.theme.as_deref().filter(|t| !t.is_empty()) {
-        facts.push(format!("theme: {t}"));
-    }
     let tier = about["priority"].as_str().unwrap_or("normal");
     if tier != "normal" {
         facts.push(format!("priority: {tier}"));
@@ -446,7 +443,7 @@ pub fn graph(ctx: &mut Ctx, dot: bool, no_files: bool) -> Result<i32> {
         return Ok(0);
     }
     let node_keys = [
-        "id", "key", "kind", "state", "word", "theme", "release", "title",
+        "id", "key", "kind", "state", "word", "release", "area", "title",
     ];
     let out = Py::Dict(vec![
         ("project".into(), Py::from_value(&g["project"])),

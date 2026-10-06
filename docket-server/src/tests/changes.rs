@@ -12,8 +12,8 @@ use crate::app;
 use crate::auth::Keys;
 use crate::store::Tx;
 
-const SEED: &str = "INSERT INTO projects (slug, keys, created_at, updated_at) \
-                    VALUES ('o/p', '[{\"key\":\"T\",\"kind\":\"work\"}]', 'c', 'u');";
+const SEED: &str = "INSERT INTO projects (slug, created_at, updated_at) \
+                    VALUES ('o/p', 'c', 'u');";
 
 async fn seeded() -> Scratch {
     let s = Scratch::new(2).await;

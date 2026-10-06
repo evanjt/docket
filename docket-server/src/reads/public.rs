@@ -8,9 +8,14 @@ use sea_orm::{
 };
 use serde_json::{Map, Value, json};
 
+use docket_core::assignment::{Held, HeldFields};
+use docket_core::item::turn_of;
+use docket_core::stall::Wait;
 use docket_core::word::{ItemType, Kind, PRIORITIES, Standing, kind_of_type};
 
 use crate::entities::{item, project};
+use crate::store::held_of;
+use crate::verbs::graph::wait_of;
 
 pub type Failure = (StatusCode, Json<Value>);
 
@@ -128,22 +133,24 @@ async fn totals<C: ConnectionTrait>(
     Ok(docket_core::member::member_totals(&rows))
 }
 
-/// The status word of a row, the same on every surface.
+/// The status word of a row, the same on every surface: an open claim is its open assignment, an
+/// open ask the owner's turn, and `waiting` whether its dependencies hold it.
 pub fn word_of(
     state: &str,
-    claim_branch: Option<&str>,
-    wait_on: Option<&str>,
-    turn: Option<&str>,
+    held: Option<&Held>,
+    waiting: bool,
     kind: Kind,
     members: Members,
 ) -> &'static str {
-    Standing::of(state, claim_branch.is_some(), wait_on.is_some(), turn)
+    let claimed = matches!(held, Some(Held::Claim(_)));
+    let asked = matches!(held, Some(Held::Ask(_)));
+    Standing::of(state, claimed, waiting, turn_of(state, asked))
         .holding(kind, members.open, members.closed)
         .word()
 }
 
-/// A row as `--json` prints it: ids instead of rids, `group` not `group_name`, with its word and
-/// priority. A plan's word reads its `members`; `tier` overrides the priority its own tags name.
+/// A row as `--json` prints it: ids instead of rids, with its word, priority, labels and the group
+/// they name. A plan's word reads its `members`; `tier` overrides the item's own priority.
 pub async fn public<C: ConnectionTrait>(
     db: &C,
     kind: Kind,
@@ -163,14 +170,15 @@ pub async fn public<C: ConnectionTrait>(
         None => None,
     };
     let area = crate::verbs::areas::name_of(db, row.area_id).await?;
+    let wait = wait_of(db, row.rid).await?;
+    let held = held_of(db, row.rid).await?;
     let mut out = Map::new();
     out.insert(
         "word".into(),
         json!(word_of(
             &row.state,
-            row.claim_branch.as_deref(),
-            row.wait_on.as_deref(),
-            row.turn.as_deref(),
+            held.as_ref(),
+            wait.is_some(),
             kind,
             members
         )),
@@ -182,14 +190,16 @@ pub async fn public<C: ConnectionTrait>(
         .into_iter()
         .map(|l| l.name)
         .collect();
+    out.insert("group".into(), json!(docket_core::label::group_of(&labels)));
     out.insert("labels".into(), json!(labels));
     out.insert(
         "priority".into(),
         json!(tier.map_or(row.priority.as_str(), |t| PRIORITIES[t])),
     );
-    out.insert("group".into(), json!(row.group_name));
     out.insert("superseded_by".into(), json!(superseded_by));
-    if let Value::Object(stored) = serde_json::to_value(StoredFields::from(row)).unwrap_or_default()
+    let fields = HeldFields::of(&row.state, held.as_ref());
+    if let Value::Object(stored) =
+        serde_json::to_value(StoredFields::of(row, fields, wait.as_ref())).unwrap_or_default()
     {
         out.extend(stored);
     }
@@ -257,8 +267,8 @@ pub fn one_of(name: &str, value: Option<&str>, choices: &[&str]) -> Result<(), F
     }
 }
 
-/// The stored columns a list row carries under their own names. The body is left out: only `/show`
-/// returns it.
+/// The stored columns a list row carries under their own names, and what it waits on as its
+/// dependencies hold it. The body is left out: only `/show` returns it.
 #[derive(serde::Serialize)]
 struct StoredFields {
     project: String,
@@ -267,35 +277,23 @@ struct StoredFields {
     id: String,
     title: String,
     state: String,
-    turn: Option<String>,
-    turn_note: Option<String>,
-    asked_at: Option<String>,
-    claim_branch: Option<String>,
-    claim_host: Option<String>,
-    claim_since: Option<String>,
-    claim_runner: Option<String>,
-    claim_job: Option<String>,
-    claim_on: Option<String>,
+    #[serde(flatten)]
+    held: HeldFields,
     wait_on: Option<String>,
     wait_ref: Option<String>,
     wait_since: Option<String>,
     decision: Option<String>,
     decided_at: Option<String>,
     resolution: Option<String>,
-    scope: Option<String>,
     complexity: Option<String>,
-    theme: Option<String>,
-    rank: Option<i64>,
     #[serde(rename = "type")]
     item_type: String,
-    tags: Value,
-    conflict: i64,
     opened_at: String,
     updated_at: String,
 }
 
-impl From<item::Model> for StoredFields {
-    fn from(r: item::Model) -> Self {
+impl StoredFields {
+    fn of(r: item::Model, held: HeldFields, wait: Option<&Wait>) -> Self {
         Self {
             project: r.project,
             key: r.key,
@@ -303,28 +301,15 @@ impl From<item::Model> for StoredFields {
             id: r.id,
             title: r.title,
             state: r.state,
-            turn: r.turn,
-            turn_note: r.turn_note,
-            asked_at: r.asked_at,
-            claim_branch: r.claim_branch,
-            claim_host: r.claim_host,
-            claim_since: r.claim_since,
-            claim_runner: r.claim_runner,
-            claim_job: r.claim_job,
-            claim_on: r.claim_on,
-            wait_on: r.wait_on,
-            wait_ref: r.wait_ref,
-            wait_since: r.wait_since,
+            held,
+            wait_on: wait.map(|w| w.on.to_string()),
+            wait_ref: wait.map(|w| w.id.clone()),
+            wait_since: wait.map(|w| w.since.clone()),
             decision: r.decision,
             decided_at: r.decided_at,
             resolution: r.resolution,
-            scope: r.scope,
             complexity: r.complexity,
-            theme: r.theme,
-            rank: r.rank,
             item_type: r.item_type,
-            tags: r.tags,
-            conflict: r.conflict,
             opened_at: r.opened_at,
             updated_at: r.updated_at,
         }

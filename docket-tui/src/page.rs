@@ -195,8 +195,11 @@ fn standing(branch: Option<&String>, host: Option<&String>) -> Option<String> {
 
 fn waits(on: Option<&str>, reference: Option<&str>) -> Option<String> {
     match on? {
-        "item" => Some(format!("on {}", reference.unwrap_or_default())),
-        _ => Some(format!("until {}", reference.unwrap_or_default())),
+        "condition" => Some(format!(
+            "on {}, for the owner",
+            reference.unwrap_or_default()
+        )),
+        _ => Some(format!("on {}", reference.unwrap_or_default())),
     }
 }
 

@@ -8,7 +8,6 @@ use crate::app;
 use crate::auth::Keys;
 
 use docket_migration::scratch::Scratch as Database;
-const KEYS: &str = r#"[{"key": "T", "kind": "work", "meaning": "tasks", "turn": "agent"}, {"key": "B", "kind": "work", "meaning": "bugs", "turn": "agent"}, {"key": "Q", "kind": "decision", "meaning": "questions", "turn": "user"}, {"key": "I", "kind": "research", "meaning": "investigations", "turn": "agent"}, {"key": "A", "kind": "audit", "meaning": "audits", "turn": "agent"}, {"key": "STY", "kind": "story", "meaning": "stories", "turn": "agent"}, {"key": "CON", "kind": "concept", "meaning": "concepts", "turn": "agent"}, {"key": "CID", "kind": "idea", "meaning": "central ideas", "turn": "agent"}, {"key": "PK", "kind": "package", "meaning": "packages", "turn": "agent"}]"#;
 const SLUG: &str = "test/proj";
 
 /// A scratch database and project, every call made as the owner on one branch unless told otherwise.
@@ -33,7 +32,7 @@ impl Scratch {
     async fn bare() -> Self {
         let db = Database::new(2).await;
         db.seed(&format!(
-            "INSERT INTO projects (slug, keys, created_at, updated_at) VALUES ('{SLUG}', '{KEYS}', 'c', 'u')"
+            "INSERT INTO projects (slug, created_at, updated_at) VALUES ('{SLUG}', 'c', 'u')"
         ))
         .await;
         let keys = Keys::parse("testbox owner ownerkey\ndevbox agent agentkey").unwrap();
@@ -190,12 +189,12 @@ impl Scratch {
         self.filing_area = None;
     }
 
-    /// An item of a kind kept to read, written as the import leaves it.
+    /// An item of a kind kept to read, written as the move onto plans left it.
     async fn kept(&self, key: &str, num: i64, title: &str) {
         self.db
             .seed(&format!(
-                "INSERT INTO items (project, key, num, title, state, turn, tags, body, opened_at, updated_at) \
-                 VALUES ('{SLUG}', '{key}', {num}, '{title}', 'open', 'agent', '[]', '', 'o', 'u')"
+                "INSERT INTO items (project, key, num, title, state, body, opened_at, updated_at) \
+                 VALUES ('{SLUG}', '{key}', {num}, '{title}', 'open', '', 'o', 'u')"
             ))
             .await;
     }
@@ -366,7 +365,7 @@ async fn test_a_release_files_an_item_in_a_release_that_exists_and_none_files_it
     s.ok("add", json!({ "title": "Hook runs twice" })).await;
     assert_eq!(s.item("B1").await["release"], "1.0.0");
     assert_eq!(s.item("T1").await["release"], "1.1.0");
-    assert_eq!(s.item("T1").await["theme"], "upkeep");
+    assert_eq!(s.item("T1").await["labels"], json!(["upkeep"]));
     assert_eq!(s.item("B2").await["release"], Value::Null);
     assert_eq!(
         s.refused(
@@ -501,7 +500,7 @@ async fn test_a_new_item_takes_its_type_from_its_key_and_its_priority_into_the_c
         .await;
     assert_eq!(out["item"]["type"], "bug");
     assert_eq!(out["item"]["priority"], "critical");
-    assert_eq!(out["item"]["tags"], json!([]));
+    assert_eq!(out["item"]["labels"], json!([]));
     assert_eq!(s.open("A", "Open the till").await["item"]["type"], "plan");
 }
 
@@ -518,7 +517,7 @@ async fn test_setting_tags_leaves_the_priority_column_alone() {
     .await;
     let b1 = s.item("B1").await;
     assert_eq!(b1["priority"], "high");
-    assert_eq!(b1["tags"], json!(["single"]));
+    assert_eq!(b1["labels"], json!(["single"]));
 }
 
 #[tokio::test]
@@ -646,7 +645,7 @@ async fn test_a_wait_until_a_condition_depends_on_a_task_for_the_owner() {
     assert_eq!(
         s.refused("start", json!({ "id": "B1" })).await,
         format!(
-            "B1 is waiting on item T1 since {}. resume it first.",
+            "B1 is waiting on T1, a task on the owner's turn, since {}. resume it first.",
             s.item("B1").await["wait_since"].as_str().unwrap()
         )
     );
@@ -1294,10 +1293,6 @@ async fn test_parent_takes_several_items_at_once() {
 #[tokio::test]
 async fn test_new_refuses_any_key_but_the_five_and_a_stored_key_still_shows_and_closes() {
     let s = Scratch::new().await;
-    s.db.seed(&format!(
-        "UPDATE projects SET keys = keys || '[{{\"key\": \"ZQ\", \"kind\": \"work\", \"meaning\": \"own\", \"turn\": \"agent\"}}]'::jsonb WHERE slug = '{SLUG}'"
-    ))
-    .await;
     assert_eq!(
         s.refused("new", json!({ "key": "ZQ", "title": "One more" }))
             .await,
@@ -1961,6 +1956,80 @@ async fn test_an_ask_assigns_the_owner_until_the_reply() {
     assert_eq!(rows[1]["outcome"], Value::Null);
 }
 
+#[tokio::test]
+async fn test_the_claim_and_the_owners_turn_are_read_from_the_open_assignment() {
+    let s = Scratch::new().await;
+    s.open("T", "Wind the clock").await;
+    s.open("B", "Kettle trips the fuse").await;
+    s.ok(
+        "start",
+        json!({ "id": "T1", "runner": "codex", "job": "wind-1" }),
+    )
+    .await;
+    s.ok("start", json!({ "id": "B1" })).await;
+    s.ok(
+        "ask",
+        json!({ "id": "B1", "note": "plug it in at the bench" }),
+    )
+    .await;
+    s.open("T", "Oil the hinge").await;
+    s.ok("wait", json!({ "id": "T2", "until": "the oil arrives" }))
+        .await;
+    let read = async |path: &str| {
+        let (status, out) = s
+            .send(
+                Method::GET,
+                &format!("/{path}?project={SLUG}"),
+                "ownerkey",
+                None,
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{path}: {out}");
+        out
+    };
+    assert_eq!(ids(&read("wip").await), ["T1"]);
+    assert_eq!(ids(&read("todo").await), ["B1", "T3"]);
+    let held = read("held").await;
+    assert_eq!(held[0]["held"]["Claim"]["branch"], "audit/t-1");
+    assert_eq!(held[1]["held"]["Ask"]["note"], "plug it in at the bench");
+    assert!(next(&s, "work").await.is_empty());
+    assert_eq!(s.word("T1").await, "in progress");
+    assert_eq!(s.word("B1").await, "waiting on owner");
+    assert_eq!(s.item("T2").await["wait_on"], "condition");
+    let t1 = s.item("T1").await;
+    assert_eq!(
+        (
+            &t1["claim_branch"],
+            &t1["claim_runner"],
+            &t1["claim_job"],
+            &t1["turn"]
+        ),
+        (
+            &json!("audit/t-1"),
+            &json!("codex"),
+            &json!("wind-1"),
+            &json!("agent")
+        )
+    );
+    let b1 = s.item("B1").await;
+    assert_eq!(
+        (&b1["turn"], &b1["turn_note"], &b1["claim_branch"]),
+        (
+            &json!("user"),
+            &json!("plug it in at the bench"),
+            &Value::Null
+        )
+    );
+    assert_ne!(b1["asked_at"], Value::Null);
+    let why = s.refused("start", json!({ "id": "B1" })).await;
+    assert!(why.contains("owner's turn"), "{why}");
+    s.ok("reply", json!({ "id": "B1", "note": "it trips at once" }))
+        .await;
+    assert_eq!(s.word("B1").await, "ready");
+    s.ok("release", json!({ "id": "T1" })).await;
+    assert!(ids(&read("wip").await).is_empty());
+}
+
 async fn asked(s: &Scratch, key: &str, title: &str, extra: Value) -> String {
     let id = s.open(key, title).await["item"]["id"]
         .as_str()
@@ -2530,4 +2599,157 @@ async fn test_parent_under_a_closed_plan_in_a_history_area_names_the_plan_area()
         .refused("parent", json!({ "a": ["T2"], "plan": "A1" }))
         .await;
     assert!(why.contains("unsorted"), "{why}");
+}
+
+#[tokio::test]
+async fn test_a_theme_and_a_group_are_labels_that_next_groups_and_audit_read() {
+    let s = Scratch::new().await;
+    s.ok(
+        "new",
+        json!({ "key": "T", "title": "Oil the hinges", "theme": "ci", "group": "sweep" }),
+    )
+    .await;
+    s.open("T", "Paint the fence").await;
+    assert_eq!(s.item("T1").await["labels"], json!(["ci", "group:sweep"]));
+    assert_eq!(s.item("T1").await["group"], "sweep");
+    let read = |path: String| {
+        let s = &s;
+        async move {
+            let (status, out) = s.send(Method::GET, &path, "ownerkey", None).await;
+            assert_eq!(status, StatusCode::OK, "{path}: {out}");
+            out
+        }
+    };
+    assert_eq!(ids(&read(format!("/groups?project={SLUG}")).await), ["T1"]);
+    assert_eq!(
+        ids(&read(format!("/groups?project={SLUG}&name=sweep")).await),
+        ["T1"]
+    );
+    let audit = read(format!("/audit?project={SLUG}&group=sweep")).await;
+    assert_eq!(ids(&audit["rows"]), ["T1"]);
+    let audit = read(format!("/audit?project={SLUG}&theme=ci")).await;
+    assert_eq!(ids(&audit["rows"]), ["T1"]);
+    assert_eq!(
+        ids(&read(format!("/next?project={SLUG}&theme=ci")).await),
+        ["T1"]
+    );
+    assert_eq!(
+        ids(&read(format!("/next?project={SLUG}&label=ci")).await),
+        ["T1"]
+    );
+    s.ok(
+        "edit",
+        json!({ "id": "T2", "set": [
+            { "field": "tags", "value": "slow,wet" },
+            { "field": "group", "value": "sweep" }
+        ] }),
+    )
+    .await;
+    assert_eq!(
+        s.item("T2").await["labels"],
+        json!(["group:sweep", "slow", "wet"])
+    );
+    s.ok(
+        "edit",
+        json!({ "id": "T2", "set": [
+            { "field": "tags", "value": "slow" },
+            { "field": "group", "value": "" }
+        ] }),
+    )
+    .await;
+    assert_eq!(s.item("T2").await["labels"], json!(["slow"]));
+}
+
+async fn waiting_ids(s: &Scratch, on: &str) -> Vec<String> {
+    let (status, out) = s
+        .send(
+            Method::GET,
+            &format!("/waiting?project={SLUG}{on}"),
+            "ownerkey",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "waiting: {out}");
+    ids(&out)
+}
+
+#[tokio::test]
+async fn test_a_wait_is_read_from_its_dependency_and_never_from_the_wait_columns() {
+    let s = Scratch::new().await;
+    s.open("T", "Glaze the vases").await;
+    s.open("T", "Sand the stands").await;
+    s.open("Q", "Which glaze").await;
+    s.ok("wait", json!({ "id": "T1", "on": "Q1" })).await;
+    let rows: Option<i64> = crate::store::scalar(
+        &s.db.db,
+        "SELECT count(*) FROM dependencies d JOIN items w ON w.rid=d.rid JOIN items q ON q.rid=d.on_rid \
+         WHERE w.id='T1' AND q.id='Q1'",
+        vec![],
+    )
+    .await
+    .unwrap();
+    assert_eq!(rows, Some(1));
+    assert_eq!(waiting_ids(&s, "").await, vec!["T1"]);
+    assert_eq!(waiting_ids(&s, "&on=item").await, vec!["T1"]);
+    assert_eq!(s.word("T1").await, "blocked");
+    assert_eq!(s.item("T1").await["wait_ref"], "Q1");
+    assert_eq!(s.word("T2").await, "ready");
+    assert_eq!(s.item("T2").await["wait_on"], Value::Null);
+    let queue = next(&s, "work").await;
+    assert!(queue.contains(&"T2".to_string()), "{queue:?}");
+    assert!(!queue.contains(&"T1".to_string()), "{queue:?}");
+    let out = s
+        .ok("answer", json!({ "id": "Q1", "decision": "celadon" }))
+        .await;
+    assert_eq!(ids(&out["released"]), vec!["T1"]);
+    assert_eq!(s.word("T1").await, "ready");
+    assert!(waiting_ids(&s, "").await.is_empty());
+}
+
+#[tokio::test]
+async fn test_a_wait_until_a_condition_lists_as_a_condition_and_goes_stale_from_its_dependency() {
+    let s = Scratch::new().await;
+    s.open("T", "Repaint the kiln room").await;
+    s.open("T", "Sweep the shelves").await;
+    s.ok(
+        "wait",
+        json!({ "id": "T1", "until": "the kiln has cooled" }),
+    )
+    .await;
+    s.ok("wait", json!({ "id": "T2", "on": "T1" })).await;
+    assert_eq!(waiting_ids(&s, "&on=condition").await, vec!["T1"]);
+    assert_eq!(waiting_ids(&s, "&on=item").await, vec!["T2"]);
+    assert_eq!(s.item("T1").await["wait_on"], "condition");
+    s.db.seed(&format!(
+        "UPDATE dependencies SET created_at='2026-01-01T00:00:00Z' \
+         WHERE rid=(SELECT rid FROM items WHERE project='{SLUG}' AND id='T1'); \
+         UPDATE events SET at='2026-01-01T00:00:00Z' \
+         WHERE rid=(SELECT rid FROM items WHERE project='{SLUG}' AND id='T1')"
+    ))
+    .await;
+    let (status, out) = s
+        .send(
+            Method::GET,
+            &format!("/check?project={SLUG}"),
+            "ownerkey",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "check: {out}");
+    let stale: Vec<&Value> = out
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["kind"] == "stale_wait")
+        .collect();
+    assert_eq!(stale.len(), 1, "{out}");
+    assert_eq!(stale[0]["id"], "T1");
+    assert_eq!(stale[0]["until"], "the kiln has cooled");
+    s.ok(
+        "close",
+        json!({ "id": "T3", "resolution": "it has cooled" }),
+    )
+    .await;
+    assert_eq!(s.word("T1").await, "ready");
+    assert_eq!(waiting_ids(&s, "").await, vec!["T2"]);
 }

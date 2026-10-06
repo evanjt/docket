@@ -3,9 +3,7 @@
 use std::fmt;
 use std::path::Path;
 
-use docket_core::dump::{
-    DumpPage, commit_subject, events_path, files, page_messages, project_path,
-};
+use docket_core::dump::{DumpPage, commit_subject, events_path, files, messages, project_path};
 
 use crate::client::Source;
 use crate::git;
@@ -49,7 +47,7 @@ pub fn pass(source: &impl Source, repo: &Path, full: bool, host: &str) -> Result
     let subject = if page.full {
         format!("Sync dump ({host})")
     } else {
-        commit_subject(&page_messages(&page, |p| tree::read(repo, p)))
+        commit_subject(&messages(&page.events))
     };
     let mut written = 0;
     for (path, text) in files(&page, |p| tree::read(repo, p)) {

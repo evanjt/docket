@@ -1,6 +1,7 @@
 use serde_json::json;
 
 use super::*;
+use crate::assignment::{Kind, Outcome};
 
 const ITEM_FULL: &str = include_str!("fixtures/dump/item_full.md");
 const ITEM_BARE: &str = include_str!("fixtures/dump/item_bare.md");
@@ -11,34 +12,77 @@ fn strings(items: &[&str]) -> Vec<String> {
     items.iter().map(|s| (*s).to_string()).collect()
 }
 
+fn attempt(kind: Kind, started_at: &str) -> Assignment {
+    Assignment {
+        assignee: if kind == Kind::Ask { "owner" } else { "agent" }.into(),
+        kind,
+        started_at: started_at.into(),
+        ended_at: None,
+        outcome: None,
+        note: None,
+        actor: None,
+        branch: None,
+        host: "devbox".into(),
+        machine: None,
+        runner: None,
+        model: None,
+        effort: None,
+        role: None,
+        job: None,
+        tokens_in: None,
+        tokens_out: None,
+        cost_reported: None,
+        job_started_at: None,
+        job_ended_at: None,
+        job_exit: None,
+        need: None,
+    }
+}
+
 fn full_item() -> ItemDump {
+    let landed = Assignment {
+        ended_at: Some("2026-01-02T01:00:00Z".into()),
+        outcome: Some(Outcome::Conflict),
+        actor: Some("agent".into()),
+        branch: Some("audit/t7-1".into()),
+        runner: Some("codex".into()),
+        job: Some("job1".into()),
+        machine: Some("buildbox".into()),
+        tokens_in: Some(1200),
+        cost_reported: Some(0.5),
+        job_exit: Some(1),
+        ..attempt(Kind::Claim, "2026-01-02T00:00:00Z")
+    };
+    let asked = Assignment {
+        note: Some("line one\nline two\ttab".into()),
+        need: Some("judgement".into()),
+        ..attempt(Kind::Ask, "2026-01-02T03:04:05Z")
+    };
     ItemDump {
         project: "org/proj".into(),
         id: "T7".into(),
         title: "Caf\u{e9} \"quoted\" \\ back \u{2014} and \u{1f600}".into(),
         state: "open".into(),
-        turn: Some("agent".into()),
-        turn_note: Some("line one\nline two\ttab".into()),
-        claim_branch: Some("audit/t7-1".into()),
-        claim_host: Some("devbox".into()),
-        claim_since: Some("2026-01-02T03:04:05Z".into()),
-        claim_runner: Some("codex".into()),
-        claim_job: Some("job1".into()),
-        claim_on: Some("buildbox".into()),
-        wait_on: Some("item".into()),
-        wait_ref: Some("Q2".into()),
-        wait_since: Some("2026-01-02T00:00:00Z".into()),
-        scope: Some("later".into()),
         complexity: Some("medium".into()),
-        group: Some("g\u{fc}rtel".into()),
-        rank: Some(3),
+        release: Some("1.2.0".into()),
+        area: Some("g\u{fc}rtel".into()),
         item_type: "task".into(),
         priority: "high".into(),
-        tags: strings(&["single"]),
-        related: strings(&["T10", "CON1", "T9"]),
+        related: strings(&["T10", "T9"]),
         parent: Some("A1".into()),
         origin: Some(strings(&["Q4", "I2"])),
-        depends: Some(strings(&["Q2", "B3"])),
+        depends: Some(vec![
+            Dependency {
+                on: "Q2".into(),
+                created_at: "2026-01-02T00:00:00Z".into(),
+            },
+            Dependency {
+                on: "B3".into(),
+                created_at: "2026-01-01T00:00:00Z".into(),
+            },
+        ]),
+        labels: Some(strings(&["single", "group:g\u{fc}rtel"])),
+        assignments: Some(vec![landed, asked]),
         opened_at: "2026-01-01T00:00:00Z".into(),
         updated_at: "2026-01-03T00:00:00Z".into(),
         body: "**Evidence.** `src/a.rs:3` \u{e9}t\u{e9}\n\n- a\n\n\n".into(),
@@ -56,7 +100,6 @@ fn bare_item() -> ItemDump {
         decided_at: Some("2026-02-02T00:00:00Z".into()),
         resolution: Some("abc1234".into()),
         superseded_by: Some("B2".into()),
-        theme: Some("ui".into()),
         item_type: "bug".into(),
         priority: "normal".into(),
         opened_at: "2026-02-01T00:00:00Z".into(),
@@ -111,9 +154,7 @@ fn fixture_events() -> Vec<EventDump> {
 fn fixture_project() -> ProjectDump {
     ProjectDump {
         slug: "org/proj".into(),
-        keys: json!([{"key": "T", "kind": "work", "meaning": "t\u{e2}ches", "turn": "agent"}]),
         remotes: json!(["git@example.com:org/proj.git"]),
-        themes: json!([]),
         cite_roots: json!([]),
         repos: json!([]),
         integration_ref: Some("main".into()),
@@ -136,12 +177,12 @@ fn writes(spec: &[Spec]) -> Vec<EventDump> {
 }
 
 #[test]
-fn test_render_item_matches_python_with_every_field_set() {
+fn test_render_item_writes_every_field_in_order_with_every_field_set() {
     assert_eq!(render_item(&full_item()), ITEM_FULL);
 }
 
 #[test]
-fn test_render_item_matches_python_with_optional_fields_unset_and_empty_body() {
+fn test_render_item_leaves_out_optional_fields_unset_and_an_empty_body() {
     assert_eq!(render_item(&bare_item()), ITEM_BARE);
 }
 
@@ -213,7 +254,7 @@ fn test_files_incremental_page_adds_to_the_log_on_disk() {
 }
 
 #[test]
-fn test_parse_item_round_trips_python_files() {
+fn test_parse_item_round_trips_item_files() {
     for text in [ITEM_FULL, ITEM_BARE] {
         let (fields, body) = parse_item(text).unwrap();
         let item = item_from("org/proj", fields, body).unwrap();
@@ -329,21 +370,6 @@ fn test_messages_answer_or_decide_by_derived_data() {
 }
 
 #[test]
-fn test_key_messages_name_keys_added_or_changed() {
-    let mut after = fixture_project();
-    assert!(key_messages(Some(PROJECT), &after).is_empty());
-    assert!(key_messages(None, &after).is_empty());
-    after.keys = json!([
-        {"key": "T", "kind": "work", "meaning": "tasks", "turn": "agent"},
-        {"key": "B", "kind": "work", "meaning": "bugs", "turn": "agent"}
-    ]);
-    assert_eq!(
-        key_messages(Some(PROJECT), &after),
-        strings(&["Key T", "Key B"])
-    );
-}
-
-#[test]
 fn test_messages_split_a_burst_in_one_second_into_its_writes() {
     let led = |kind: &str, item: &str, note: Option<&str>| {
         let mut e = event(&format!("{kind}{item}"), "s", kind, Some(item), note);
@@ -384,13 +410,20 @@ fn test_messages_split_a_burst_in_one_second_into_its_writes() {
 }
 
 #[test]
-fn test_an_older_item_file_reads_its_opened_links_and_never_writes_them() {
-    let text = "---\nid: \"T3\"\ntitle: \"Sift\"\nstate: \"open\"\nopened: [\"A1\", \"Q2\"]\n\
+fn test_an_item_file_written_before_the_drop_is_refused_with_the_way_on() {
+    let text = "---\nid: \"T3\"\ntitle: \"Sift\"\nstate: \"open\"\nturn: \"agent\"\n\
                 opened_at: \"o\"\nupdated_at: \"u\"\n---\n";
-    let (fields, body) = parse_item(text).unwrap();
-    let item = item_from("o/p", fields, body).unwrap();
-    assert_eq!(item.opened, ["A1", "Q2"]);
-    assert_eq!(item.parent, None);
-    assert!(!render_item(&item).contains("opened: "));
-    assert!(parse_item("---\nfolded: 1\n---\n").is_err());
+    let refused = parse_item(text).unwrap_err();
+    assert_eq!(
+        refused,
+        "unknown field \"turn\" in item file: rewrite the checkout with a full dump pass"
+    );
+}
+
+#[test]
+fn test_an_item_with_no_attempts_writes_no_assignments_line() {
+    assert!(!render_item(&bare_item()).contains("assignments"));
+    let (fields, body) = parse_item(ITEM_FULL).unwrap();
+    let item = item_from("org/proj", fields, body).unwrap();
+    assert_eq!(item.assignments, full_item().assignments);
 }

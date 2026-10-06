@@ -1,5 +1,5 @@
 //! The text the dump repository carries: one file per item, and an event log and a project file per
-//! project, each byte for byte what the Python dump writes for the same rows.
+//! project, each written in the JSON style the Python dump wrote.
 
 use std::collections::BTreeMap;
 use std::fmt::Write;
@@ -7,6 +7,7 @@ use std::fmt::Write;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::assignment::Assignment;
 use crate::pyjson::{Style, data_of, dumps_styled};
 
 /// A frontmatter value: one line, non-ASCII kept.
@@ -26,120 +27,83 @@ const PROJECT: Style = Style {
     indent: Some(2),
 };
 
-/// Written only when set, so every file dumped before them stays byte-identical.
-pub const OPTIONAL: [&str; 10] = [
-    "claim_runner",
-    "claim_job",
-    "claim_on",
-    "scope",
+/// Written only when set.
+pub const OPTIONAL: [&str; 7] = [
     "release",
     "area",
     "parent",
     "origin",
     "depends",
     "labels",
+    "assignments",
 ];
 
-/// Fields an older item file carries that are read and never written: `opened`, which a restore
-/// splits into a parent and origins.
-pub const LEGACY: [&str; 1] = ["opened"];
-
 /// The frontmatter of an item file, in order.
-pub const FIELDS: [&str; 36] = [
+pub const FIELDS: [&str; 20] = [
     "id",
     "title",
     "state",
-    "turn",
-    "turn_note",
-    "asked_at",
-    "claim_branch",
-    "claim_host",
-    "claim_since",
-    "claim_runner",
-    "claim_job",
-    "claim_on",
-    "wait_on",
-    "wait_ref",
-    "wait_since",
     "decision",
     "decided_at",
     "resolution",
     "superseded_by",
-    "scope",
     "complexity",
-    "group",
-    "theme",
     "release",
     "area",
-    "rank",
     "type",
     "priority",
-    "tags",
     "related",
     "parent",
     "origin",
     "depends",
     "labels",
+    "assignments",
     "opened_at",
     "updated_at",
 ];
 
 /// One item as its dump file holds it: ids for every reference, the project and body beside.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ItemDump {
     pub project: String,
     pub id: String,
     pub title: String,
     pub state: String,
-    pub turn: Option<String>,
-    pub turn_note: Option<String>,
-    pub asked_at: Option<String>,
-    pub claim_branch: Option<String>,
-    pub claim_host: Option<String>,
-    pub claim_since: Option<String>,
-    pub claim_runner: Option<String>,
-    pub claim_job: Option<String>,
-    pub claim_on: Option<String>,
-    pub wait_on: Option<String>,
-    pub wait_ref: Option<String>,
-    pub wait_since: Option<String>,
     pub decision: Option<String>,
     pub decided_at: Option<String>,
     pub resolution: Option<String>,
     pub superseded_by: Option<String>,
-    pub scope: Option<String>,
     pub complexity: Option<String>,
-    pub group: Option<String>,
-    pub theme: Option<String>,
     /// The release it is in by name; none is the backlog.
     pub release: Option<String>,
     /// The area it is in by name.
     pub area: Option<String>,
-    pub rank: Option<i64>,
-    /// What the item is; a file written before the column carries none, and a restore reads it from
-    /// the key.
+    /// What the item is.
     #[serde(rename = "type")]
     pub item_type: String,
-    /// A file written before the column carries none, and a restore reads it from the tags.
     pub priority: String,
-    pub tags: Vec<String>,
     pub related: Vec<String>,
     /// The plan the item belongs to.
     pub parent: Option<String>,
     /// What spawned the item; none when nothing is recorded.
     pub origin: Option<Vec<String>>,
-    /// The `opened` links an item file carried before parents and origins, read so an older dump
-    /// restores; never written.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub opened: Vec<String>,
     /// What the item depends on; none when it depends on nothing.
-    pub depends: Option<Vec<String>>,
+    pub depends: Option<Vec<Dependency>>,
     /// The labels it was given, never those it inherits; none when it was given none.
     pub labels: Option<Vec<String>>,
+    /// Every attempt at the item, oldest first; none when it has had none.
+    pub assignments: Option<Vec<Assignment>>,
     pub opened_at: String,
     pub updated_at: String,
     pub body: String,
+}
+
+/// One dependency as an item file holds it: the id of the item depended on, and when it was added.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Dependency {
+    pub on: String,
+    pub created_at: String,
 }
 
 /// One event as its log line holds it, with the id of its item and its data as stored.
@@ -160,9 +124,7 @@ pub struct EventDump {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectDump {
     pub slug: String,
-    pub keys: Value,
     pub remotes: Value,
-    pub themes: Value,
     pub cite_roots: Value,
     pub repos: Value,
     pub fleet_repo: Option<String>,
@@ -188,7 +150,7 @@ pub struct ProjectDump {
 
 /// What changed after a cursor: every project, the items to rewrite and the events to add. A full
 /// page carries every item and every event, and its event logs replace the ones on disk.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct DumpPage {
     pub cursor: i64,
     pub full: bool,
@@ -225,7 +187,8 @@ pub fn render_item(item: &ItemDump) -> String {
             continue;
         }
         if let (Value::Array(ids), "related" | "origin" | "depends" | "labels") = (&mut v, k) {
-            ids.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
+            let id = |v: &Value| v.as_str().or_else(|| v["on"].as_str()).map(str::to_string);
+            ids.sort_by_key(id);
         }
         let _ = writeln!(text, "{k}: {}", dumps_styled(&v, LINE));
     }
@@ -464,38 +427,12 @@ fn edit_message(write: &[EventDump], id: &str) -> String {
     format!("Edit {id}")
 }
 
-/// `Key K` for each key spec a project file gains or changes; a write that sets a key logs no event.
-#[must_use]
-pub fn key_messages(before: Option<&str>, after: &ProjectDump) -> Vec<String> {
-    let Some(before) = before else {
-        return Vec::new();
-    };
-    let parsed: Value = serde_json::from_str(before).unwrap_or_default();
-    let old = parsed["keys"].as_array().cloned().unwrap_or_default();
-    after
-        .keys
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|spec| !old.contains(spec))
-        .filter_map(|spec| spec["key"].as_str())
-        .map(|k| format!("Key {k}"))
-        .collect()
-}
-
-/// The messages of a page's commit: one per write, then a key change, which logs no event.
-pub fn page_messages(page: &DumpPage, read: impl Fn(&str) -> Option<String>) -> Vec<String> {
-    let mut out = messages(&page.events);
-    for p in &page.projects {
-        out.extend(key_messages(read(&project_path(&p.slug)).as_deref(), p));
-    }
-    out
-}
-
 /// The frontmatter fields and the body of an item file.
 ///
 /// # Errors
-/// A file without both fences, a field the format does not have, or a value that is not JSON.
+/// A file without both fences, a field the format does not have, or a value that is not JSON. A file
+/// written before the format dropped the columns the core replaced carries such a field, so a
+/// checkout is rewritten by a full pass before it is restored.
 pub fn parse_item(text: &str) -> Result<(Map<String, Value>, String), String> {
     let rest = text
         .strip_prefix("---\n")
@@ -506,8 +443,10 @@ pub fn parse_item(text: &str) -> Result<(Map<String, Value>, String), String> {
     let mut fields = Map::new();
     for line in rest[..end].split('\n').filter(|l| !l.trim().is_empty()) {
         let (k, v) = line.split_once(": ").unwrap_or((line, ""));
-        if !FIELDS.contains(&k) && !LEGACY.contains(&k) {
-            return Err(format!("unknown field {k:?} in item file"));
+        if !FIELDS.contains(&k) {
+            return Err(format!(
+                "unknown field {k:?} in item file: rewrite the checkout with a full dump pass"
+            ));
         }
         let value = serde_json::from_str(v).map_err(|e| format!("{k}: {e}"))?;
         fields.insert(k.to_string(), value);
@@ -525,7 +464,7 @@ pub fn item_from(
     mut fields: Map<String, Value>,
     body: String,
 ) -> Result<ItemDump, String> {
-    for k in ["tags", "related", "opened"] {
+    for k in ["related"] {
         if fields.get(k).is_some_and(Value::is_null) {
             fields.remove(k);
         }

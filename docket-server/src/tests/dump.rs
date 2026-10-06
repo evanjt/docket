@@ -6,14 +6,13 @@ use axum::http::{Method, Request, StatusCode, header::AUTHORIZATION};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-use docket_core::dump::{DumpPage, commit_subject, files, messages, page_messages};
+use docket_core::dump::{DumpPage, commit_subject, files, messages};
 
 use docket_migration::scratch::Scratch;
 
 use crate::app;
 use crate::auth::Keys;
 
-const KEYS: &str = r#"[{"key": "B", "kind": "work", "meaning": "bugs", "turn": "agent"}, {"key": "Q", "kind": "decision", "meaning": "questions", "turn": "user"}, {"key": "A", "kind": "audit", "meaning": "audits", "turn": "agent"}, {"key": "CON", "kind": "concept", "meaning": "concepts", "turn": "agent"}, {"key": "PK", "kind": "package", "meaning": "packages", "turn": "agent"}]"#;
 const SLUG: &str = "test/proj";
 
 /// A database, and the dump files as a checkout would hold them after each incremental page.
@@ -29,7 +28,7 @@ impl Dumped {
     async fn new() -> Self {
         let db = Scratch::new(2).await;
         db.seed(&format!(
-            "INSERT INTO projects (slug, keys, created_at, updated_at) VALUES ('{SLUG}', '{KEYS}', 'c', 'u')"
+            "INSERT INTO projects (slug, created_at, updated_at) VALUES ('{SLUG}', 'c', 'u')"
         ))
         .await;
         db.seed(&format!(
@@ -93,7 +92,7 @@ impl Dumped {
     /// The page after `since` applied to the files; returns the commit subject it would carry.
     async fn take(&mut self, since: i64) -> String {
         let page = self.page(since).await;
-        let subject = commit_subject(&page_messages(&page, |p| self.files.get(p).cloned()));
+        let subject = commit_subject(&messages(&page.events));
         for (path, text) in files(&page, |p| self.files.get(p).cloned()) {
             self.files.insert(path, text);
         }
@@ -307,7 +306,7 @@ async fn questions(d: &mut Dumped) {
     run(d, steps).await;
 }
 
-/// Drops, moves, waits, links removed, a key set, an item added.
+/// Drops, moves, waits, links removed, an item added.
 async fn moves(d: &mut Dumped) {
     let steps: Vec<(&str, Value, &str)> = vec![
         (

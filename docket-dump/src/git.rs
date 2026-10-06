@@ -3,8 +3,10 @@
 use std::path::Path;
 use std::process::Command;
 
-/// Where the cursor lives: the checkout's own config, never committed.
-const CURSOR: &str = "docket.dumpcursor";
+/// Where the cursor lives: the checkout's own config, never committed. A checkout whose cursor sits
+/// under the earlier key, `docket.dumpcursor`, holds item files written before the columns the core
+/// replaced were dropped, so it has no cursor here and its next pass rewrites every file.
+const CURSOR: &str = "docket.dumpedseq";
 
 /// What a push did.
 #[derive(Clone, Debug, PartialEq, Eq)]

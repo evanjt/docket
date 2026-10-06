@@ -1,6 +1,7 @@
 //! A Postgres database rebuilt from a dump checkout, for disaster recovery: into an empty one only.
-//! The assignment rows are not dumped; they are rebuilt from the events. An older checkout's `opened`
-//! links are split into parents and origins as the migration splits them.
+//! Each item's release, area, priority, labels, parent, origins, dependencies and assignment rows are
+//! read from its file. A checkout written before the dump took this shape is refused, and is rewritten
+//! by a full dump pass first.
 
 use std::path::Path;
 
@@ -15,12 +16,12 @@ use docket_core::label::Label;
 use docket_core::publication::Publication;
 use docket_core::release::Release;
 use docket_core::text::{citations, split_id};
-use docket_core::word::{ItemType, Kind, PRIORITIES, priority, without_priority};
+use docket_core::word::ItemType;
 use docket_migration::statement;
 
 use crate::tree;
 
-const LIST_COLUMNS: [&str; 5] = ["keys", "remotes", "themes", "cite_roots", "repos"];
+const LIST_COLUMNS: [&str; 3] = ["remotes", "cite_roots", "repos"];
 const TEXT_COLUMNS: [&str; 6] = [
     "fleet_repo",
     "integration_ref",
@@ -38,8 +39,8 @@ pub struct Restored {
     pub events: usize,
 }
 
-/// Every project, item, link and event of the checkout written into the Postgres database at `url`,
-/// in one transaction, as the Python restore writes them. The schema is migrated first.
+/// Every project, item, link, assignment and event of the checkout written into the Postgres
+/// database at `url`, in one transaction. The schema is migrated first.
 ///
 /// # Errors
 /// The database already holds items, a dump file does not parse, or a reference names an item
@@ -53,19 +54,10 @@ pub async fn restore(repo: &Path, url: &str) -> Result<Restored, String> {
         ));
     }
     let tx = conn.begin().await.map_err(|e| e.to_string())?;
-    docket_migration::parents::admit_opened(&tx)
-        .await
-        .map_err(|e| e.to_string())?;
     let mut counts = Restored::default();
     for slug in tree::projects(repo)? {
         restore_project(&tx, repo, &slug, &mut counts).await?;
     }
-    docket_migration::parents::split(&tx)
-        .await
-        .map_err(|e| e.to_string())?;
-    docket_migration::assignments::rebuild_all(&tx)
-        .await
-        .map_err(|e| e.to_string())?;
     tx.commit().await.map_err(|e| e.to_string())?;
     Ok(counts)
 }
@@ -196,9 +188,9 @@ async fn insert_project(tx: &DatabaseTransaction, slug: &str, doc: &Json) -> Res
     values.push(json_value(skills));
     exec(
         tx,
-        "INSERT INTO projects (slug, keys, remotes, themes, cite_roots, repos, fleet_repo, \
-         integration_ref, worktree_hint, test_hint, created_at, updated_at, skills) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO projects (slug, remotes, cite_roots, repos, fleet_repo, integration_ref, \
+         worktree_hint, test_hint, created_at, updated_at, skills) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         values,
     )
     .await?;
@@ -263,81 +255,44 @@ fn read_item(repo: &Path, slug: &str, id: &str) -> Result<ItemDump, String> {
     item_from(slug, fields, body).map_err(|e| format!("{path}: {e}"))
 }
 
-/// The type, priority and labels an item file gives. A file written before the columns carries
-/// neither, and a restore reads them from the key and the priority word among its tags.
-fn column_values(i: &ItemDump, key: &str) -> (ItemType, String, Vec<String>) {
-    let item_type =
-        ItemType::parse(&i.item_type).unwrap_or_else(|| ItemType::of_stored(key, Kind::Work));
-    if PRIORITIES.contains(&i.priority.as_str()) {
-        return (item_type, i.priority.clone(), i.tags.clone());
-    }
-    (
-        item_type,
-        priority(&i.tags).to_string(),
-        without_priority(&i.tags),
-    )
-}
-
 /// The first pass: every plain column, the references left for when every row is in.
 async fn insert_item(tx: &DatabaseTransaction, i: &ItemDump) -> Result<i64, String> {
     let (key, num) = split_id(&i.id).map_err(|e| e.0)?;
-    let conflict = i
-        .body
-        .lines()
-        .any(|l| l.starts_with("<<<<<<< ") || l.starts_with(">>>>>>> "));
-    let (item_type, priority, tags) = column_values(i, &key);
-    let mut values: Vec<Value> = vec![
-        i.project.clone().into(),
-        key.into(),
-        num.into(),
-        i.title.clone().into(),
-        i.state.clone().into(),
-    ];
-    for v in [
-        &i.turn,
-        &i.turn_note,
-        &i.asked_at,
-        &i.claim_branch,
-        &i.claim_host,
-        &i.claim_since,
-        &i.claim_runner,
-        &i.claim_job,
-        &i.claim_on,
-        &i.decision,
-        &i.decided_at,
-        &i.resolution,
-        &i.scope,
-        &i.complexity,
-        &i.theme,
-    ] {
-        values.push(v.clone().into());
-    }
-    values.extend([
-        i.rank.into(),
-        item_type.as_str().into(),
-        priority.into(),
-        i.opened_at.clone().into(),
-        i.updated_at.clone().into(),
-        i.group.clone().into(),
-        i.body.clone().into(),
-        json_value(json!(tags)),
-        i64::from(conflict).into(),
-        i.project.clone().into(),
-        i.release.clone().into(),
-        i.project.clone().into(),
-        i.area.clone().into(),
-    ]);
+    let item_type = ItemType::parse(&i.item_type).ok_or_else(|| {
+        format!(
+            "{}: type {:?} is none of docket's types",
+            item_path(&i.project, &i.id),
+            i.item_type
+        )
+    })?;
     scalar(
         tx,
-        "INSERT INTO items (project, key, num, title, state, turn, turn_note, asked_at, claim_branch, \
-         claim_host, claim_since, claim_runner, claim_job, claim_on, decision, decided_at, resolution, \
-         scope, complexity, theme, rank, type, priority, opened_at, updated_at, group_name, body, tags, \
-         conflict, release_id, area_id) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
+        "INSERT INTO items (project, key, num, title, state, decision, decided_at, resolution, \
+         complexity, type, priority, opened_at, updated_at, body, release_id, area_id) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
          (SELECT id FROM releases WHERE project=? AND name=?), \
          (SELECT id FROM areas WHERE project=? AND name=?)) \
          RETURNING rid",
-        values,
+        vec![
+            i.project.clone().into(),
+            key.into(),
+            num.into(),
+            i.title.clone().into(),
+            i.state.clone().into(),
+            i.decision.clone().into(),
+            i.decided_at.clone().into(),
+            i.resolution.clone().into(),
+            i.complexity.clone().into(),
+            item_type.as_str().into(),
+            i.priority.clone().into(),
+            i.opened_at.clone().into(),
+            i.updated_at.clone().into(),
+            i.body.clone().into(),
+            i.project.clone().into(),
+            i.release.clone().into(),
+            i.project.clone().into(),
+            i.area.clone().into(),
+        ],
     )
     .await
 }
@@ -365,14 +320,9 @@ async fn target(
     .map_err(|_| missing())
 }
 
-/// The second pass: the wait, the replacement, the parent, the item links and the search row. The
-/// `opened` links an older dump carries are split into parents and origins once every project is in.
+/// The second pass: the dependencies, the replacement, the parent, the labels, the item links, the
+/// assignment rows and the search row.
 async fn restore_refs(tx: &DatabaseTransaction, rid: i64, i: &ItemDump) -> Result<(), String> {
-    let wait_item = match (i.wait_on.as_deref(), i.wait_ref.as_deref()) {
-        (Some("item"), Some(r)) => Some(target(tx, i, r, "waits on").await?),
-        (Some("item"), None) => return Err(format!("{} waits on no item", i.id)),
-        _ => None,
-    };
     let superseded = match i.superseded_by.as_deref() {
         Some(r) => Some(target(tx, i, r, "is superseded by").await?),
         None => None,
@@ -383,32 +333,16 @@ async fn restore_refs(tx: &DatabaseTransaction, rid: i64, i: &ItemDump) -> Resul
     };
     exec(
         tx,
-        "UPDATE items SET wait_on=?, wait_item=?, wait_ref=?, wait_since=?, superseded_by=?, parent_rid=? \
-         WHERE rid=?",
-        vec![
-            i.wait_on.clone().into(),
-            wait_item.into(),
-            i.wait_ref.clone().into(),
-            i.wait_since.clone().into(),
-            superseded.into(),
-            parent.into(),
-            rid.into(),
-        ],
+        "UPDATE items SET superseded_by=?, parent_rid=? WHERE rid=?",
+        vec![superseded.into(), parent.into(), rid.into()],
     )
     .await?;
-    let since = i.wait_since.clone().unwrap_or_else(|| i.opened_at.clone());
-    let mut on = Vec::new();
-    for id in i.depends.iter().flatten() {
-        on.push(target(tx, i, id, "depends on").await?);
-    }
-    if i.depends.is_none() {
-        on.extend(wait_item);
-    }
-    for to in on {
+    for d in i.depends.iter().flatten() {
+        let to = target(tx, i, &d.on, "depends on").await?;
         exec(
             tx,
             "INSERT INTO dependencies (rid, on_rid, created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
-            vec![rid.into(), to.into(), since.clone().into()],
+            vec![rid.into(), to.into(), d.created_at.clone().into()],
         )
         .await?;
     }
@@ -428,11 +362,7 @@ async fn restore_refs(tx: &DatabaseTransaction, rid: i64, i: &ItemDump) -> Resul
         .await?;
     }
     let origin = i.origin.clone().unwrap_or_default();
-    for (kind, ids) in [
-        ("related", &i.related),
-        ("origin", &origin),
-        ("opened", &i.opened),
-    ] {
+    for (kind, ids) in [("related", &i.related), ("origin", &origin)] {
         for id in ids {
             let to = target(tx, i, id, &format!("lists under {kind}")).await?;
             exec(
@@ -442,6 +372,11 @@ async fn restore_refs(tx: &DatabaseTransaction, rid: i64, i: &ItemDump) -> Resul
             )
             .await?;
         }
+    }
+    for a in i.assignments.iter().flatten() {
+        docket_migration::assignments::insert(tx, rid, a)
+            .await
+            .map_err(|e| format!("{}: {e}", item_path(&i.project, &i.id)))?;
     }
     index(tx, rid, i).await
 }

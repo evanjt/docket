@@ -1,33 +1,13 @@
 //! The verbs that move an item. Each takes the row as stored and the caller's context, and returns
-//! the columns to set or the refusal the caller reads.
+//! the columns to set or the refusal the caller reads. The claim and the owner's turn are the item's
+//! open assignment, which the verb's event moves, so no rule sets them.
 
 use crate::item::{Ctx, Field, Item, Refused};
+use crate::stall::Wait;
 use crate::word::{ItemType, Kind, PRIORITIES};
 
 pub const COMPLEXITIES: [&str; 3] = ["high", "medium", "low"];
 pub const DERIVED: &str = "Derived from ";
-
-/// Every column a claim sets, cleared together.
-#[must_use]
-pub fn unclaimed() -> Vec<Field> {
-    vec![
-        Field::ClaimBranch(None),
-        Field::ClaimHost(None),
-        Field::ClaimSince(None),
-        Field::ClaimRunner(None),
-        Field::ClaimJob(None),
-        Field::ClaimOn(None),
-    ]
-}
-
-fn unwaiting() -> Vec<Field> {
-    vec![
-        Field::WaitOn(None),
-        Field::WaitItem(None),
-        Field::WaitRef(None),
-        Field::WaitSince(None),
-    ]
-}
 
 fn chars(text: &str, n: usize) -> String {
     text.chars().take(n).collect()
@@ -46,25 +26,22 @@ pub fn default_turn(item_type: ItemType) -> &'static str {
 /// Whether the caller may act on a claimed item: same branch, or force.
 #[must_use]
 pub fn holds(row: &Item, ctx: &Ctx) -> bool {
-    match &row.claim_branch {
+    match row.claim() {
         None => true,
-        Some(branch) => ctx.force || *branch == ctx.branch,
+        Some(c) => ctx.force || c.branch == ctx.branch,
     }
 }
 
 /// # Errors
 /// Refused when another branch holds the item and force is not given.
 pub fn require_hold(row: &Item, ctx: &Ctx, verb: &str) -> Result<(), Refused> {
-    if holds(row, ctx) {
-        return Ok(());
+    match row.claim() {
+        Some(c) if !holds(row, ctx) => Err(Refused(format!(
+            "{} is held by {} on {} since {}. {verb} would take it out from under that agent. Merge or unclaim the branch first, or pass --force.",
+            row.id, c.branch, c.host, c.since
+        ))),
+        _ => Ok(()),
     }
-    Err(Refused(format!(
-        "{} is held by {} on {} since {}. {verb} would take it out from under that agent. Merge or unclaim the branch first, or pass --force.",
-        row.id,
-        opt(row.claim_branch.as_ref()),
-        opt(row.claim_host.as_ref()),
-        opt(row.claim_since.as_ref())
-    )))
 }
 
 /// # Errors
@@ -87,71 +64,57 @@ fn opt(v: Option<&String>) -> &str {
 }
 
 /// # Errors
-/// Refused when the item is not open, held elsewhere, waiting, parked or in conflict.
-pub fn start(row: &Item, ctx: &Ctx) -> Result<Vec<Field>, Refused> {
+/// Refused when the item is not open, held elsewhere, waiting or parked. `wait` is what
+/// its dependencies hold it on.
+pub fn start(row: &Item, ctx: &Ctx, wait: Option<&Wait>) -> Result<(), Refused> {
     require_open(row, "start")?;
-    if let Some(branch) = &row.claim_branch {
-        if *branch == ctx.branch && row.claim_host.as_deref() == Some(ctx.host.as_str()) {
+    if let Some(c) = row.claim() {
+        if c.branch == ctx.branch && c.host == ctx.host {
             return Err(Refused(format!(
                 "{} is already yours, claimed {}.",
-                row.id,
-                opt(row.claim_since.as_ref())
+                row.id, c.since
             )));
         }
         if !ctx.force {
             return Err(Refused(format!(
-                "{} is held by {branch} on {} since {}. Pick another, or --force if that claim is abandoned.",
-                row.id,
-                opt(row.claim_host.as_ref()),
-                opt(row.claim_since.as_ref())
+                "{} is held by {} on {} since {}. Pick another, or --force if that claim is abandoned.",
+                row.id, c.branch, c.host, c.since
             )));
         }
     }
-    if let Some(on) = &row.wait_on {
-        let what = if on == "condition" {
-            opt(row.wait_ref.as_ref()).to_string()
+    if let Some(w) = wait {
+        let what = if w.is_condition() {
+            format!("{}, a task on the owner's turn,", w.id)
         } else {
-            format!("item {}", opt(row.wait_ref.as_ref()))
+            format!("item {}", w.id)
         };
         return Err(Refused(format!(
             "{} is waiting on {what} since {}. resume it first.",
-            row.id,
-            opt(row.wait_since.as_ref())
+            row.id, w.since
         )));
     }
-    if row.turn.as_deref() == Some("user") {
-        let note = row
-            .turn_note
+    if let Some(ask) = row.ask() {
+        let note = ask
+            .note
             .clone()
             .filter(|n| !n.is_empty())
-            .unwrap_or_else(|| format!("asked {}", opt(row.asked_at.as_ref())));
+            .unwrap_or_else(|| format!("asked {}", ask.since));
         return Err(Refused(format!(
             "{} is the owner's turn: {note}. reply to it first if you are taking it back.",
             row.id
         )));
     }
-    if row.conflict != 0 {
-        return Err(Refused(format!(
-            "{} carries a sync conflict in its body. resolve it first.",
-            row.id
-        )));
-    }
-    Ok(vec![
-        Field::ClaimBranch(Some(ctx.branch.clone())),
-        Field::ClaimHost(Some(ctx.host.clone())),
-        Field::ClaimSince(Some(ctx.now.clone())),
-    ])
+    Ok(())
 }
 
 /// # Errors
 /// Refused when the item is not open, not claimed, or held elsewhere.
-pub fn release(row: &Item, ctx: &Ctx) -> Result<Vec<Field>, Refused> {
+pub fn release(row: &Item, ctx: &Ctx) -> Result<(), Refused> {
     require_open(row, "unclaim")?;
-    if row.claim_branch.is_none() {
+    if row.claim().is_none() {
         return Err(Refused(format!("{} is not claimed.", row.id)));
     }
-    require_hold(row, ctx, "unclaim")?;
-    Ok(unclaimed())
+    require_hold(row, ctx, "unclaim")
 }
 
 /// The refusal for a plan with work still open under it, naming up to ten of it, then what follows.
@@ -182,7 +145,7 @@ pub fn close(
 ) -> Result<Vec<Field>, Refused> {
     require_open(row, "close")?;
     require_hold(row, ctx, "close")?;
-    if row.claim_branch.is_none() && !open_members.is_empty() {
+    if row.claim().is_none() && !open_members.is_empty() {
         return Err(open_under_plan(
             row,
             open_members,
@@ -200,15 +163,10 @@ pub fn close(
             "close needs a resolution: the sha, or what the work opened.".to_string(),
         ));
     };
-    let mut out = vec![
+    Ok(vec![
         Field::State("done".to_string()),
-        Field::Turn(None),
-        Field::TurnNote(None),
         Field::Resolution(Some(resolution.to_string())),
-    ];
-    out.extend(unclaimed());
-    out.extend(unwaiting());
-    Ok(out)
+    ])
 }
 
 /// The priority column set to one tier; the labels stay as they are.
@@ -239,21 +197,16 @@ pub fn drop(
     let Some(why) = why.filter(|w| !w.is_empty()) else {
         return Err(Refused("drop needs a reason.".to_string()));
     };
-    let mut out = vec![
+    Ok(vec![
         Field::State("dropped".to_string()),
-        Field::Turn(None),
-        Field::TurnNote(None),
         Field::Resolution(Some(why.to_string())),
         Field::SupersededBy(superseded_rid),
-    ];
-    out.extend(unclaimed());
-    out.extend(unwaiting());
-    Ok(out)
+    ])
 }
 
 /// # Errors
 /// Refused when the item is open already, or given no reason.
-pub fn reopen(row: &Item, why: Option<&str>, turn: &str) -> Result<Vec<Field>, Refused> {
+pub fn reopen(row: &Item, why: Option<&str>) -> Result<Vec<Field>, Refused> {
     if row.state == "open" {
         return Err(Refused(format!("{} is already open.", row.id)));
     }
@@ -264,7 +217,6 @@ pub fn reopen(row: &Item, why: Option<&str>, turn: &str) -> Result<Vec<Field>, R
     }
     Ok(vec![
         Field::State("open".to_string()),
-        Field::Turn(Some(turn.to_string())),
         Field::Resolution(None),
         Field::SupersededBy(None),
     ])
@@ -284,52 +236,41 @@ pub fn depend(row: &Item, ctx: &Ctx, on_rid: i64) -> Result<(), Refused> {
 }
 
 /// # Errors
-/// Refused when the item is not open or not waiting.
-pub fn resume(row: &Item) -> Result<Vec<Field>, Refused> {
+/// Refused when the item is not open or not waiting. `wait` is what its dependencies hold it on.
+pub fn resume(row: &Item, wait: Option<&Wait>) -> Result<(), Refused> {
     require_open(row, "resume")?;
-    if row.wait_on.is_none() {
+    if wait.is_none() {
         return Err(Refused(format!("{} is not waiting.", row.id)));
     }
-    let mut out = unwaiting();
-    out.push(Field::Turn(Some("agent".to_string())));
-    Ok(out)
+    Ok(())
 }
 
 /// # Errors
 /// Refused when the item is not open, held elsewhere, or given no note.
-pub fn ask(row: &Item, ctx: &Ctx, note: Option<&str>) -> Result<Vec<Field>, Refused> {
+pub fn ask(row: &Item, ctx: &Ctx, note: Option<&str>) -> Result<(), Refused> {
     require_open(row, "ask")?;
     require_hold(row, ctx, "ask")?;
-    let Some(note) = note.filter(|n| !n.is_empty()) else {
+    if note.is_none_or(str::is_empty) {
         return Err(Refused(
             "ask needs a note saying what is needed.".to_string(),
         ));
-    };
-    let mut out = vec![
-        Field::Turn(Some("user".to_string())),
-        Field::TurnNote(Some(note.to_string())),
-        Field::AskedAt(Some(ctx.now.clone())),
-    ];
-    out.extend(unclaimed());
-    Ok(out)
+    }
+    Ok(())
 }
 
 /// # Errors
 /// Refused when the item is not open, already the agent's turn, or given no note.
-pub fn reply(row: &Item, note: Option<&str>) -> Result<Vec<Field>, Refused> {
+pub fn reply(row: &Item, note: Option<&str>) -> Result<(), Refused> {
     require_open(row, "reply")?;
-    if row.turn.as_deref() != Some("user") {
+    if row.ask().is_none() {
         return Err(Refused(format!("{} is already the agent's turn.", row.id)));
     }
-    let Some(note) = note.filter(|n| !n.is_empty()) else {
+    if note.is_none_or(str::is_empty) {
         return Err(Refused(
             "reply needs a note saying what happened.".to_string(),
         ));
-    };
-    Ok(vec![
-        Field::Turn(Some("agent".to_string())),
-        Field::TurnNote(Some(note.to_string())),
-    ])
+    }
+    Ok(())
 }
 
 /// An earlier decision paragraph stops standing once a new one is written, so a reader going
@@ -399,14 +340,10 @@ pub fn answer(
         }
         decision = format!("{DERIVED}{}: {decision}", basis.trim());
     }
-    let mut out = vec![
-        Field::Turn(Some("agent".to_string())),
-        Field::TurnNote(Some(decision.clone())),
+    Ok(vec![
         Field::Decision(Some(decision)),
         Field::DecidedAt(Some(ctx.now.clone())),
-    ];
-    out.extend(unclaimed());
-    Ok(out)
+    ])
 }
 
 /// # Errors
@@ -422,7 +359,7 @@ pub fn rate(level: &str) -> Result<Vec<Field>, Refused> {
     Ok(vec![Field::Complexity(Some(level.to_string()))])
 }
 
-/// The tags `--set tags=` gives: the list as written.
+/// The labels `--set tags=` gives: the list as written, sorted and each once.
 #[must_use]
 pub fn set_tags(value: &str) -> Vec<String> {
     let mut new: Vec<String> = value

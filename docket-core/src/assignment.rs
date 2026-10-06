@@ -3,10 +3,11 @@
 //! event into a row opened or ended; the server applies it as each event is written, and `rebuild`
 //! folds it over an item's events, so the rows can always be rebuilt from the history.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::dump::{EventDump, ItemDump};
+use crate::dump::EventDump;
+use crate::migrate::OldItem;
 
 /// The assignee of a claim.
 pub const AGENT: &str = "agent";
@@ -22,12 +23,14 @@ pub const ASSIGNEES: [&str; 2] = [AGENT, OWNER];
 pub const TURNS: [&str; 2] = ["agent", "user"];
 /// The runners a claim may name: the agents a machine runs, and a job started elsewhere.
 pub const CLAIM_RUNNERS: [&str; 3] = ["codex", "claude", "remote"];
+/// The value of a resume's `ask` field when the owner was asked during the wait, which still stands.
+pub const KEPT: &str = "kept";
 /// The roles an attempt is made in.
 pub const ROLES: [&str; 5] = ["build", "rebase", "review", "plan", "audit"];
 pub const OUTCOMES: [&str; 5] = ["landed", "conflict", "gate", "blocked", "failed"];
 
 /// What an attempt is: an agent's claim, or the item handed to the owner.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
     Claim,
@@ -55,7 +58,7 @@ impl Kind {
 
 /// How a claim ended: its work landed, its branch did not merge, its gates failed, it waits on
 /// something, or it failed otherwise.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
     Landed,
@@ -92,7 +95,7 @@ impl Outcome {
 
 /// One attempt at an item. No end is the attempt under way now. The actor, tokens and cost are
 /// known only for rows written as the attempt happened.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Assignment {
     pub assignee: String,
     pub kind: Kind,
@@ -196,8 +199,9 @@ pub struct Step {
 /// A claim opens a claim row and ends one left open. A release ends it with the outcome it names, or
 /// the one its note reads as; a close ends it landed, a drop or a lost claim failed, and a wait or an
 /// ask by the holder blocked. An ask opens a row on the owner with its note, and a reply, an answer,
-/// a resume, a close or a drop hands the item back. An item opened on the owner's turn is asked
-/// from the start.
+/// a resume, a close or a drop hands the item back; a resume that keeps an ask made during the wait
+/// leaves it open. An answer ends a claim on the question landed. An item opened on the owner's turn
+/// is asked from the start.
 #[must_use]
 pub fn step(e: &Event, open: Option<Kind>) -> Step {
     if e.kind == "job_reported" {
@@ -274,13 +278,17 @@ pub fn step(e: &Event, open: Option<Kind>) -> Step {
             }),
             ..Step::default()
         },
+        "resumed" if field(e, "ask").as_deref() == Some(KEPT) => Step::default(),
         "replied" | "resumed" => Step {
             end: only_ask(),
             open: None,
             ..Step::default()
         },
         "decided" if field(e, "derived").is_none() => Step {
-            end: only_ask(),
+            end: match open {
+                Some(Kind::Claim) => ended(Some(Outcome::Landed), None),
+                _ => only_ask(),
+            },
             open: None,
             ..Step::default()
         },
@@ -409,8 +417,8 @@ pub fn rebuild(events: &[Event]) -> Vec<Assignment> {
     rows
 }
 
-/// An item's claim as its columns hold it.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// An item's open claim: the branch and host that hold it, since when, and the job that runs it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Claim {
     pub branch: String,
     pub host: String,
@@ -420,18 +428,105 @@ pub struct Claim {
     pub on: Option<String>,
 }
 
-/// What an item holds now: its claim, when the owner was asked and with what, and its last update.
+/// The owner's open ask: since when, and what it needs of them.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Ask {
+    pub since: String,
+    pub note: Option<String>,
+}
+
+/// Who holds an item now, as its open assignment row says: an agent's claim or the owner's ask.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Held {
+    Claim(Claim),
+    Ask(Ask),
+}
+
+impl Held {
+    /// The held row of an open assignment, from its stored columns.
+    #[must_use]
+    pub fn of(kind: Kind, a: &Assignment) -> Self {
+        match kind {
+            Kind::Claim => Held::Claim(Claim {
+                branch: a.branch.clone().unwrap_or_default(),
+                host: a.host.clone(),
+                since: a.started_at.clone(),
+                runner: a.runner.clone(),
+                job: a.job.clone(),
+                on: a.machine.clone(),
+            }),
+            Kind::Ask => Held::Ask(Ask {
+                since: a.started_at.clone(),
+                note: a.note.clone(),
+            }),
+        }
+    }
+
+    #[must_use]
+    pub fn kind(&self) -> Kind {
+        match self {
+            Held::Claim(_) => Kind::Claim,
+            Held::Ask(_) => Kind::Ask,
+        }
+    }
+}
+
+/// The claim and turn an item's rows carry under the names of the columns that once held them,
+/// filled from its open assignment.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeldFields {
+    pub turn: Option<String>,
+    pub turn_note: Option<String>,
+    pub asked_at: Option<String>,
+    pub claim_branch: Option<String>,
+    pub claim_host: Option<String>,
+    pub claim_since: Option<String>,
+    pub claim_runner: Option<String>,
+    pub claim_job: Option<String>,
+    pub claim_on: Option<String>,
+}
+
+impl HeldFields {
+    /// The fields of an item in `state` held as `held` says.
+    #[must_use]
+    pub fn of(state: &str, held: Option<&Held>) -> Self {
+        let turn = crate::item::turn_of(state, matches!(held, Some(Held::Ask(_))));
+        let mut out = HeldFields {
+            turn: turn.map(str::to_string),
+            ..HeldFields::default()
+        };
+        match held {
+            Some(Held::Claim(c)) => {
+                out.claim_branch = Some(c.branch.clone());
+                out.claim_host = Some(c.host.clone());
+                out.claim_since = Some(c.since.clone());
+                out.claim_runner.clone_from(&c.runner);
+                out.claim_job.clone_from(&c.job);
+                out.claim_on.clone_from(&c.on);
+            }
+            Some(Held::Ask(a)) => {
+                out.turn_note.clone_from(&a.note);
+                out.asked_at = Some(a.since.clone());
+            }
+            None => {}
+        }
+        out
+    }
+}
+
+/// What an item's row before the drop holds now: its claim, when the owner was asked and with what,
+/// and its last update.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Now {
     pub claim: Option<Claim>,
-    pub asked: Option<(String, Option<String>)>,
+    pub asked: Option<Ask>,
     pub updated_at: String,
 }
 
 impl Now {
-    /// What a dumped item holds now.
+    /// What an item's row before the drop holds now.
     #[must_use]
-    pub fn of(i: &ItemDump) -> Self {
+    pub fn of(i: &OldItem) -> Self {
         let claim = match (&i.claim_branch, &i.claim_host) {
             (Some(branch), Some(host)) => Some(Claim {
                 branch: branch.clone(),
@@ -446,17 +541,83 @@ impl Now {
             }),
             _ => None,
         };
-        let asked = (i.state == "open" && i.turn.as_deref() == Some("user")).then(|| {
-            (
-                i.asked_at.clone().unwrap_or_else(|| i.opened_at.clone()),
-                i.turn_note.clone(),
-            )
+        let asked = (i.state == "open" && i.turn.as_deref() == Some("user")).then(|| Ask {
+            since: i.asked_at.clone().unwrap_or_else(|| i.opened_at.clone()),
+            note: i.turn_note.clone(),
         });
         Now {
             claim,
             asked,
             updated_at: i.updated_at.clone(),
         }
+    }
+
+    /// What the item holds, a claim before an ask.
+    #[must_use]
+    pub fn held(&self) -> Option<Held> {
+        match (&self.claim, &self.asked) {
+            (Some(c), _) => Some(Held::Claim(c.clone())),
+            (None, Some(a)) => Some(Held::Ask(a.clone())),
+            (None, None) => None,
+        }
+    }
+}
+
+/// The open row for what an item holds, as nothing but its holding knows it.
+fn opened(held: &Held) -> Assignment {
+    let base = |at: &str, host: &str| {
+        row(&Event {
+            at: at.to_string(),
+            host: host.to_string(),
+            ..Event::default()
+        })
+    };
+    match held {
+        Held::Claim(c) => Assignment {
+            branch: Some(c.branch.clone()),
+            machine: c.on.clone(),
+            runner: c.runner.clone(),
+            job: c.job.clone(),
+            ..base(&c.since, &c.host)
+        },
+        Held::Ask(a) => Assignment {
+            assignee: OWNER.to_string(),
+            kind: Kind::Ask,
+            note: a.note.clone(),
+            ..base(&a.since, "")
+        },
+    }
+}
+
+/// How an item's open row is brought to agree with what the item holds: the open row ended, a row
+/// opened, or the open ask given the note it holds.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Agreement {
+    pub end: bool,
+    pub open: Option<Assignment>,
+    pub note: Option<String>,
+}
+
+/// What brings the open row to agree with the item: a claim agrees with an open claim on its
+/// branch, an ask with an open ask, whose note it sets when it holds one; anything else ends the
+/// open row and opens what the item holds.
+#[must_use]
+pub fn agree(open: Option<&Held>, now: &Now) -> Agreement {
+    let want = now.held();
+    match (open, &want) {
+        (None, None) => Agreement::default(),
+        (Some(Held::Claim(o)), Some(Held::Claim(w))) if o.branch == w.branch => {
+            Agreement::default()
+        }
+        (Some(Held::Ask(o)), Some(Held::Ask(w))) => Agreement {
+            note: w.note.clone().filter(|n| o.note.as_ref() != Some(n)),
+            ..Agreement::default()
+        },
+        _ => Agreement {
+            end: open.is_some(),
+            open: want.as_ref().map(opened),
+            note: None,
+        },
     }
 }
 
@@ -477,29 +638,7 @@ pub fn settle(rows: &mut Vec<Assignment>, now: &Now) {
     if rows.last().is_some_and(|a| a.ended_at.is_none()) {
         return;
     }
-    let base = |at: &str, host: &str| {
-        row(&Event {
-            at: at.to_string(),
-            host: host.to_string(),
-            ..Event::default()
-        })
-    };
-    if let Some(c) = &now.claim {
-        rows.push(Assignment {
-            branch: Some(c.branch.clone()),
-            machine: c.on.clone(),
-            runner: c.runner.clone(),
-            job: c.job.clone(),
-            ..base(&c.since, &c.host)
-        });
-    } else if let Some((at, note)) = &now.asked {
-        rows.push(Assignment {
-            assignee: OWNER.to_string(),
-            kind: Kind::Ask,
-            note: note.clone(),
-            ..base(at, "")
-        });
-    }
+    rows.extend(now.held().as_ref().map(opened));
 }
 
 #[cfg(test)]

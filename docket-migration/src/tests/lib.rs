@@ -2,7 +2,7 @@ use super::*;
 
 use crate::scratch::Scratch;
 
-const MIGRATIONS: [&str; 21] = [
+const MIGRATIONS: [&str; 24] = [
     "m20261001_000001_schema",
     "m20261002_000001_machines_and_leads",
     "m20261005_000001_owner_facts",
@@ -24,6 +24,9 @@ const MIGRATIONS: [&str; 21] = [
     "m20261006_163830_labels",
     "m20261006_164713_area_placements",
     "m20261006_174229_publications",
+    "m20261006_202103_column_labels",
+    "m20261006_210713_open_assignments",
+    "m20261006_213453_drop_old_columns",
 ];
 
 /// The migrations to apply to stand just before the one named.
@@ -33,6 +36,14 @@ fn steps_before(name: &str) -> u32 {
         .position(|m| m.name() == name)
         .unwrap_or_else(|| panic!("no migration named {name}"));
     u32::try_from(position).unwrap()
+}
+
+/// Every migration still to apply up to the drop of the columns the core replaced, so a test of an
+/// earlier one reads what those columns held.
+async fn migrate_before_the_drop(s: &Scratch) {
+    let applied = Migrator::get_applied_migrations(&s.db).await.unwrap().len();
+    let left = steps_before("m20261006_213453_drop_old_columns") - u32::try_from(applied).unwrap();
+    Migrator::up(&s.db, Some(left)).await.unwrap();
 }
 
 /// A migration's number is its name up to the label: `m20261005_000001`.
@@ -243,7 +254,7 @@ INSERT INTO links (rid, kind, to_rid) VALUES (4, 'opened', 6);
 "#,
     )
     .await;
-    migrate(&s.db).await.unwrap();
+    migrate_before_the_drop(&s).await;
     let deps = pairs(
         &s,
         "SELECT a.id, b.id FROM dependencies d JOIN items a ON a.rid=d.rid JOIN items b ON b.rid=d.on_rid \
@@ -293,7 +304,7 @@ INSERT INTO dependencies (rid, on_rid, created_at) VALUES (2, 1, 'w2');
 "#,
     )
     .await;
-    migrate(&s.db).await.unwrap();
+    migrate_before_the_drop(&s).await;
     let waits = pairs(
         &s,
         "SELECT id, COALESCE(wait_ref, '') FROM items WHERE wait_on IS NOT NULL ORDER BY id",
@@ -370,7 +381,7 @@ INSERT INTO items (rid, project, key, num, title, state, turn, theme, opened_at,
 "#,
     )
     .await;
-    migrate(&s.db).await.unwrap();
+    migrate_before_the_drop(&s).await;
     let rows = pairs(
         &s,
         "SELECT name, position::text FROM releases WHERE project='test/proj' ORDER BY position",
@@ -606,12 +617,11 @@ INSERT INTO events (uid, project, rid, at, host, kind, note, data) VALUES
 async fn test_an_assignment_names_the_agent_or_the_owner_and_no_one_else() {
     let s = Scratch::new(2).await;
     s.seed(
-        r#"
-INSERT INTO projects (slug, keys, created_at, updated_at) VALUES ('test/proj',
-  '[{"key": "T", "kind": "work"}]', 'c', 'u');
-INSERT INTO items (rid, project, key, num, title, state, turn, opened_at, updated_at) VALUES
-  (1, 'test/proj', 'T', 1, 'fire', 'open', 'agent', 'o', 'u');
-"#,
+        r"
+INSERT INTO projects (slug, created_at, updated_at) VALUES ('test/proj', 'c', 'u');
+INSERT INTO items (rid, project, key, num, title, state, opened_at, updated_at) VALUES
+  (1, 'test/proj', 'T', 1, 'fire', 'open', 'o', 'u');
+",
     )
     .await;
     let insert = |assignee: &str| {
@@ -668,7 +678,7 @@ UPDATE items SET wait_on='item', wait_item=1, wait_ref='T1', wait_since='w3' WHE
 "#,
     )
     .await;
-    migrate(&s.db).await.unwrap();
+    migrate_before_the_drop(&s).await;
     let waits = pairs(
         &s,
         "SELECT id, COALESCE(wait_ref, '') FROM items WHERE wait_on IS NOT NULL ORDER BY id",
@@ -701,7 +711,7 @@ INSERT INTO items (rid, project, key, num, title, state, turn, tags, opened_at, 
 "#,
     )
     .await;
-    migrate(&s.db).await.unwrap();
+    migrate_before_the_drop(&s).await;
     let got = pairs(
         &s,
         "SELECT id, type || ' ' || priority || ' ' || tags::text FROM items ORDER BY id",
@@ -781,9 +791,9 @@ async fn test_publications_read_back_newest_first_and_a_published_sha_is_recorde
     s.seed(&format!(
         r"
 INSERT INTO projects (slug, created_at, updated_at) VALUES ('test/proj', 'c', 'u');
-INSERT INTO items (rid, project, key, num, title, state, turn, resolution, type, opened_at, updated_at) VALUES
-  (1, 'test/proj', 'A', 1, 'lay the kiln', 'done', NULL, 'fired', 'plan', 'o', 'u'),
-  (2, 'test/proj', 'A', 2, 'glaze the bowls', 'done', NULL, 'fired', 'plan', 'o', 'u');
+INSERT INTO items (rid, project, key, num, title, state, resolution, type, opened_at, updated_at) VALUES
+  (1, 'test/proj', 'A', 1, 'lay the kiln', 'done', 'fired', 'plan', 'o', 'u'),
+  (2, 'test/proj', 'A', 2, 'glaze the bowls', 'done', 'fired', 'plan', 'o', 'u');
 INSERT INTO publications (id, project, published_sha, work_sha, created_at) VALUES
   (1, 'test/proj', '{old}', '{work}', '2026-01-01T00:00:00Z'),
   (2, 'test/proj', '{new}', '{work}', '2026-01-02T00:00:00Z');
@@ -818,4 +828,206 @@ INSERT INTO publication_plans (publication, rid) VALUES (1, 1), (2, 1), (2, 2);
         vec!["test/proj".into(), "e".repeat(40).into(), "t".into()],
     );
     assert!(s.db.execute_raw(short).await.is_err());
+}
+
+#[tokio::test]
+async fn test_a_group_tags_and_a_theme_naming_no_release_or_area_become_labels() {
+    let s = Scratch::bare(2).await;
+    Migrator::up(&s.db, Some(steps_before("m20261006_202103_column_labels")))
+        .await
+        .unwrap();
+    s.seed(
+        r#"
+INSERT INTO projects (slug, keys, created_at, updated_at) VALUES ('test/proj', '[]', 'c', 'u');
+INSERT INTO releases (id, project, name, position) VALUES (1, 'test/proj', '2.0', 0);
+INSERT INTO areas (id, project, name, position) VALUES (1, 'test/proj', 'kites', 0);
+INSERT INTO labels (id, project, name) VALUES (1, 'test/proj', 'Wet');
+INSERT INTO items (rid, project, key, num, title, body, state, turn, tags, group_name, theme, opened_at, updated_at) VALUES
+  (1, 'test/proj', 'T', 1, 'fold the frames', '', 'open', 'agent', '["wet", "high"]', 'paper', 'ci', 'o', 'u'),
+  (2, 'test/proj', 'T', 2, 'sweep the stalls', '', 'open', 'agent', '[]', ' ', '2.0', 'o', 'u'),
+  (3, 'test/proj', 'T', 3, 'tie the tails', '', 'open', 'agent', '[]', NULL, 'Kites', 'o', 'u');
+INSERT INTO item_labels (rid, label_id) VALUES (3, 1);
+"#,
+    )
+    .await;
+    migrate(&s.db).await.unwrap();
+    let carried = pairs(
+        &s,
+        "SELECT i.id, string_agg(l.name, ',' ORDER BY l.name) FROM item_labels il \
+         JOIN items i ON i.rid=il.rid JOIN labels l ON l.id=il.label_id GROUP BY i.id ORDER BY i.id",
+    )
+    .await;
+    let want = [("T1", "Wet,ci,group:paper"), ("T3", "Wet")];
+    assert_eq!(carried, want.map(|(a, b)| (a.to_string(), b.to_string())));
+}
+
+#[tokio::test]
+async fn test_each_open_row_comes_to_agree_with_the_claim_and_turn_and_the_columns_go_free() {
+    let s = Scratch::bare(2).await;
+    Migrator::up(
+        &s.db,
+        Some(steps_before("m20261006_210713_open_assignments")),
+    )
+    .await
+    .unwrap();
+    s.seed(
+        "INSERT INTO projects (slug, created_at, updated_at) VALUES ('pottery/kiln', 'c', 'u'); \
+         INSERT INTO items (rid, project, key, num, title, state, turn, turn_note, asked_at, claim_branch, \
+           claim_host, claim_since, resolution, opened_at, updated_at) VALUES \
+           (1, 'pottery/kiln', 'T', 1, 'Wedge the clay', 'open', 'agent', NULL, NULL, 'build/t1-1', 'wheel', 's1', NULL, 'o', 'u1'), \
+           (2, 'pottery/kiln', 'T', 2, 'Trim the foot', 'open', 'agent', NULL, NULL, NULL, NULL, NULL, NULL, 'o', 'u2'), \
+           (3, 'pottery/kiln', 'T', 3, 'Load the kiln', 'open', 'user', 'until it cools', 'a3', NULL, NULL, NULL, NULL, 'o', 'u3'), \
+           (4, 'pottery/kiln', 'T', 4, 'Fire the bisque', 'done', NULL, NULL, NULL, NULL, NULL, NULL, 'abc1234', 'o', 'u4'), \
+           (5, 'pottery/kiln', 'Q', 5, 'Which glaze', 'open', 'user', 'pick a glaze', 'a5', NULL, NULL, NULL, NULL, 'o', 'u5'), \
+           (6, 'pottery/kiln', 'T', 6, 'Sweep the floor', 'open', 'agent', NULL, NULL, 'build/t6-2', 'wheel', 's6', NULL, 'o', 'u6'); \
+         INSERT INTO assignments (rid, assignee, kind, started_at, branch, host, note) VALUES \
+           (1, 'agent', 'claim', 's1', 'build/t1-1', 'wheel', NULL), \
+           (2, 'owner', 'ask', 'a2', NULL, '', 'which way'), \
+           (4, 'agent', 'claim', 's4', 'build/t4-1', 'wheel', NULL), \
+           (5, 'owner', 'ask', 'a5', NULL, '', NULL), \
+           (6, 'agent', 'claim', 's6old', 'build/t6-1', 'wheel', NULL)",
+    )
+    .await;
+    Migrator::up(&s.db, Some(1)).await.unwrap();
+    let rows = s
+        .db
+        .query_all_raw(statement(
+            "SELECT rid, kind, started_at, COALESCE(ended_at, '-'), COALESCE(branch, '-'), COALESCE(note, '-') \
+             FROM assignments ORDER BY rid, id",
+            vec![],
+        ))
+        .await
+        .unwrap();
+    let got: Vec<(i64, String, String, String, String, String)> = rows
+        .iter()
+        .map(|r| {
+            (
+                r.try_get_by_index(0).unwrap(),
+                r.try_get_by_index(1).unwrap(),
+                r.try_get_by_index(2).unwrap(),
+                r.try_get_by_index(3).unwrap(),
+                r.try_get_by_index(4).unwrap(),
+                r.try_get_by_index(5).unwrap(),
+            )
+        })
+        .collect();
+    let row = |rid, kind: &str, from: &str, to: &str, branch: &str, note: &str| {
+        (
+            rid,
+            kind.to_string(),
+            from.to_string(),
+            to.to_string(),
+            branch.to_string(),
+            note.to_string(),
+        )
+    };
+    assert_eq!(
+        got,
+        [
+            row(1, "claim", "s1", "-", "build/t1-1", "-"),
+            row(2, "ask", "a2", "u2", "-", "which way"),
+            row(3, "ask", "a3", "-", "-", "until it cools"),
+            row(4, "claim", "s4", "u4", "build/t4-1", "-"),
+            row(5, "ask", "a5", "-", "-", "pick a glaze"),
+            row(6, "claim", "s6old", "u6", "build/t6-1", "-"),
+            row(6, "claim", "s6", "-", "build/t6-2", "-"),
+        ]
+    );
+    s.seed(
+        "UPDATE items SET turn=NULL, turn_note=NULL, asked_at=NULL, claim_branch='build/t2-9', \
+         claim_host=NULL, claim_since=NULL WHERE project='pottery/kiln'",
+    )
+    .await;
+}
+
+/// The columns a table holds now.
+async fn columns(s: &Scratch, table: &str) -> Vec<String> {
+    s.db.query_all_raw(statement(
+        "SELECT column_name::text FROM information_schema.columns \
+         WHERE table_schema='public' AND table_name=? ORDER BY column_name",
+        vec![table.into()],
+    ))
+    .await
+    .unwrap()
+    .iter()
+    .map(|r| r.try_get_by_index(0).unwrap())
+    .collect()
+}
+
+#[tokio::test]
+async fn test_the_drop_leaves_items_and_projects_without_the_columns_the_core_replaced() {
+    let s = Scratch::new(2).await;
+    let items = columns(&s, "items").await;
+    for gone in [
+        "turn",
+        "turn_note",
+        "asked_at",
+        "claim_branch",
+        "claim_host",
+        "claim_since",
+        "claim_runner",
+        "claim_job",
+        "claim_on",
+        "wait_on",
+        "wait_item",
+        "wait_ref",
+        "wait_since",
+        "scope",
+        "group_name",
+        "theme",
+        "rank",
+        "tags",
+        "conflict",
+    ] {
+        assert!(!items.contains(&gone.to_string()), "items still has {gone}");
+    }
+    for kept in [
+        "state",
+        "release_id",
+        "area_id",
+        "parent_rid",
+        "priority",
+        "type",
+    ] {
+        assert!(items.contains(&kept.to_string()), "items lost {kept}");
+    }
+    let index: Option<String> =
+        s.db.query_one_raw(statement("SELECT to_regclass('items_wait')::text", vec![]))
+            .await
+            .unwrap()
+            .unwrap()
+            .try_get_by_index(0)
+            .unwrap();
+    assert_eq!(index, None);
+    let projects = columns(&s, "projects").await;
+    assert!(!projects.contains(&"keys".to_string()));
+    assert!(!projects.contains(&"themes".to_string()));
+    s.seed(
+        "INSERT INTO projects (slug, created_at, updated_at) VALUES ('bakery/oven', 'c', 'u'); \
+         INSERT INTO items (project, key, num, title, state, opened_at, updated_at) \
+           VALUES ('bakery/oven', 'T', 1, 'Proof the dough', 'open', 'o', 'u')",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn test_the_drop_refuses_while_an_item_holds_a_sync_conflict_and_names_it() {
+    let s = Scratch::bare(2).await;
+    Migrator::up(
+        &s.db,
+        Some(steps_before("m20261006_213453_drop_old_columns")),
+    )
+    .await
+    .unwrap();
+    s.seed(
+        "INSERT INTO projects (slug, created_at, updated_at) VALUES ('bakery/oven', 'c', 'u'); \
+         INSERT INTO items (rid, project, key, num, title, state, turn, conflict, opened_at, updated_at) VALUES \
+           (1, 'bakery/oven', 'T', 1, 'Proof the dough', 'open', 'agent', 0, 'o', 'u'), \
+           (2, 'bakery/oven', 'T', 2, 'Score the loaf', 'open', 'agent', 1, 'o', 'u')",
+    )
+    .await;
+    let refused = migrate(&s.db).await.unwrap_err().to_string();
+    assert!(refused.contains("bakery/oven T2"), "{refused}");
+    assert!(!refused.contains("T1"), "{refused}");
+    assert!(columns(&s, "items").await.contains(&"conflict".to_string()));
 }

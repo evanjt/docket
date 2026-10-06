@@ -16,8 +16,8 @@ const SLUG: &str = "o/p";
 async fn scratch() -> (Scratch, Router) {
     let db = Scratch::new(4).await;
     db.seed(&format!(
-        "INSERT INTO projects (slug, keys, skills, created_at, updated_at) \
-         VALUES ('{SLUG}', '[]', '{{}}', 'c', 'u')"
+        "INSERT INTO projects (slug, skills, created_at, updated_at) \
+         VALUES ('{SLUG}', '{{}}', 'c', 'u')"
     ))
     .await;
     let keys = Keys::parse("alpha owner alphakey\nbeta agent betakey").unwrap();

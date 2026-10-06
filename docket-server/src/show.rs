@@ -13,6 +13,7 @@ use crate::entities::{item, link};
 use crate::reads::public::{Failure, Members, id_of, internal, item_of, project_of, public};
 use crate::store::to_item;
 use crate::verbs::graph::{member_count, open_under};
+use docket_core::assignment::Held;
 use docket_core::word::kind_of_type;
 
 #[derive(Deserialize)]
@@ -91,7 +92,13 @@ pub async fn show(
     );
     out.insert("cites".into(), json!(cites));
     if let Some(members) = members {
-        let live = members.iter().filter(|m| m.claim_branch.is_some()).count();
+        let rids: Vec<i64> = members.iter().map(|m| m.rid).collect();
+        let live = crate::store::held(&db, &rids)
+            .await
+            .map_err(|e| internal(&e))?
+            .values()
+            .filter(|h| matches!(h, Held::Claim(_)))
+            .count();
         let done = members.len() - members.iter().filter(|m| m.state == "open").count();
         out.insert(
             "progress".into(),
@@ -125,9 +132,12 @@ pub async fn offers(
     } else {
         Vec::new()
     };
+    let wait = crate::verbs::graph::wait_of(&db, row.rid)
+        .await
+        .map_err(|e| internal(&e))?;
     Ok(Json(json!({
         "id": id,
-        "verbs": rules_offers(&to_item(row), kind, &pending),
+        "verbs": rules_offers(&to_item(row), kind, &pending, wait.as_ref()),
         "priorities": PRIORITIES,
         "levels": COMPLEXITIES,
     })))

@@ -303,16 +303,6 @@ fn problem_line(p: &Value) -> String {
     let s = |k: &str| or_none(p[k].as_str()).to_string();
     let n = p["n"].as_i64().unwrap_or(0);
     match p["kind"].as_str().unwrap_or_default() {
-        "conflict" => format!(
-            "{} carries a sync conflict in its body: docket edit {} --body FILE",
-            s("id"),
-            s("id")
-        ),
-        "undefined_key" => format!(
-            "{n} {} filed under {}, which the project does not define",
-            if n == 1 { "item is" } else { "items are" },
-            s("key")
-        ),
         "integrity" => format!("integrity_check: {}", s("result")),
         "foreign_keys" => format!("{n} foreign key violations"),
         "cycle" => format!("{} waits in a cycle", s("id")),

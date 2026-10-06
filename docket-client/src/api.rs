@@ -12,8 +12,11 @@ use docket_core::api::{
     Common, FactRequest, FactSet, Facts, LeadRequest, LeadState, MachineRequest, Machines,
     PublicationRequest, Publications,
 };
+use docket_core::assignment::Held;
 use docket_core::metrics::ReleaseRow;
-use docket_core::rows::{Derived, EventRow, ItemRow, LinkRow, ProjectRow, Row, Shown, Status};
+use docket_core::rows::{
+    Derived, EventRow, HeldRow, ItemRow, LinkRow, ProjectRow, Row, Shown, Status,
+};
 
 use crate::config::Config;
 
@@ -463,12 +466,21 @@ impl Api {
         self.get("/areas", &of(slug))
     }
 
-    /// Every stored item of a project, bodies left out.
+    /// Every stored item of a project, bodies left out, each with the claim or the owner's ask its
+    /// open assignment holds.
     ///
     /// # Errors
     /// As `get`.
     pub fn items(&self, slug: &str) -> Result<Vec<ItemRow>> {
-        self.all("/items", &json!({ "project": slug }), "[\"rid\",\"ASC\"]")
+        let mut rows: Vec<ItemRow> =
+            self.all("/items", &json!({ "project": slug }), "[\"rid\",\"ASC\"]")?;
+        let held: Vec<HeldRow> = self.get("/held", &of(slug))?;
+        let held: std::collections::HashMap<i64, Held> =
+            held.into_iter().map(|h| (h.rid, h.held)).collect();
+        for r in &mut rows {
+            r.hold(held.get(&r.rid));
+        }
+        Ok(rows)
     }
 
     /// The links of one kind leaving any of the rids.

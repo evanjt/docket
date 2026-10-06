@@ -4,7 +4,7 @@ import type { Area, GraphNode } from './types';
 
 const area = (name: string, position: number, priority: string | null = null): Area => ({ id: position, name, description: `${name} work`, position, priority });
 const node = (id: string, areaName: string | null, word: string, kind: GraphNode['kind'] = 'work'): GraphNode => ({
-  id, key: id.replace(/\d+/, ''), kind, state: word === 'done' ? 'done' : 'open', theme: null, title: id, word, area: areaName,
+  id, key: id.replace(/\d+/, ''), kind, state: word === 'done' ? 'done' : 'open', title: id, word, area: areaName,
 });
 
 describe('areaCounts', () => {

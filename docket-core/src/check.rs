@@ -21,8 +21,6 @@ pub fn counts(problems: &Value) -> Vec<(String, u64)> {
 #[must_use]
 pub fn phrase(kind: &str, n: u64) -> String {
     let (one, many) = match kind {
-        "conflict" => ("sync conflict", "sync conflicts"),
-        "undefined_key" => ("undefined key", "undefined keys"),
         "integrity" => ("integrity failure", "integrity failures"),
         "foreign_keys" => ("foreign key violation", "foreign key violations"),
         "cycle" => ("cycle", "cycles"),

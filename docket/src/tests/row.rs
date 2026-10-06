@@ -40,12 +40,12 @@ fn test_fmt_row_waits_asks_and_ends() {
         turn: Some("user".into()),
         turn_note: Some("which one".into()),
         wait_on: Some("condition".into()),
-        wait_ref: Some("rain".into()),
+        wait_ref: Some("T4".into()),
         ..Row::default()
     };
     assert_eq!(
         fmt_row(&r, None),
-        "Q1     parked   Pick\n       waits until: rain (since None)\n       asked: which one"
+        "Q1     parked   Pick\n       waits on T4, a task for the owner (since None)\n       asked: which one"
     );
     r.state = "done".into();
     r.wait_on = None;
@@ -59,7 +59,7 @@ fn test_item_json_orders_columns_extras_and_derived() {
     let out = dumps_line(&item_json(&v, &["score"], &["snippet"]));
     assert!(out.starts_with("{\"project\": \"p\", \"key\": null, \"num\": null, \"id\": \"T1\""));
     assert!(out.ends_with(
-        "\"scope\": null, \"score\": -1.5, \"group\": null, \"word\": \"ready\", \
+        "\"claim_on\": null, \"score\": -1.5, \"group\": null, \"word\": \"ready\", \
          \"superseded_by\": null, \"priority\": null, \"snippet\": \"s\"}"
     ));
 }

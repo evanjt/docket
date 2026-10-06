@@ -15,8 +15,8 @@ const SLUG: &str = "test/proj";
 async fn scratch() -> (Scratch, Router) {
     let db = Scratch::new(2).await;
     db.seed(&format!(
-        "INSERT INTO projects (slug, keys, skills, created_at, updated_at) \
-         VALUES ('{SLUG}', '[]', '{{\"owner\": \"Ana\", \"pool\": \"local=2\"}}', 'c', 'u')"
+        "INSERT INTO projects (slug, skills, created_at, updated_at) \
+         VALUES ('{SLUG}', '{{\"owner\": \"Ana\", \"pool\": \"local=2\"}}', 'c', 'u')"
     ))
     .await;
     let keys = Keys::parse("hosta owner ownerkey\nhostb agent agentkey").unwrap();

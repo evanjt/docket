@@ -71,7 +71,7 @@
         <div><dt>Release</dt><dd>{rel.name}{rel.current ? ' (current)' : ''}</dd></div>
       {/if}
       {#if item.area}<div><dt>Area</dt><dd><a href={href(ctx.slug, 'work', { area: item.area })}>{item.area}</a></dd></div>{/if}
-      {#if item.theme && !ctx.releases.includes(item.theme)}<div><dt>Theme</dt><dd>{item.theme}</dd></div>{/if}
+      {#if item.labels?.length}<div><dt>Labels</dt><dd>{item.labels.join(', ')}</dd></div>{/if}
       {#if item.claim_branch}
         <div><dt>Claimed</dt><dd><span class="id">{item.claim_branch}</span> on {host(item.claim_on ?? item.claim_host)}, {ago(item.claim_since)}{#if item.claim_job}, job <span class="id">{item.claim_job}</span>{/if}</dd></div>
       {/if}
@@ -81,8 +81,9 @@
     {#if item.wait_on || item.turn_note || item.decision || item.resolution}
       <div class="standing" style="--c: var(--w-{item.word.replace(/ /g, '-')}, var(--accent))">
         {#if item.wait_on}
-          <p><strong>Waits {item.wait_on === 'item' ? 'on' : 'until'}</strong>
-            {#if item.wait_on === 'item' && item.wait_ref}<a class="id ref" href={ctx.item(item.wait_ref)}>{item.wait_ref}</a>{:else}{item.wait_ref}{/if}
+          <p><strong>Waits on</strong>
+            {#if item.wait_ref}<a class="id ref" href={ctx.item(item.wait_ref)}>{item.wait_ref}</a>{/if}
+            {#if item.wait_on === 'condition'}<span class="faint">a task for the owner</span>{/if}
             {#if item.wait_since}<span class="faint">since {ago(item.wait_since)}</span>{/if}
           </p>
         {/if}

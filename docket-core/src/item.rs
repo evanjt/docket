@@ -4,6 +4,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::assignment::{Ask, Claim, Held};
 use crate::word::{ItemType, Kind};
 
 /// A verb that cannot apply. The message is the whole explanation.
@@ -18,7 +19,8 @@ impl fmt::Display for Refused {
 
 impl std::error::Error for Refused {}
 
-/// The stored columns of one item, tags decoded.
+/// The stored columns of one item and its open assignment. What it waits on is read from its
+/// dependencies, never stored here.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Item {
     pub rid: i64,
@@ -28,41 +30,24 @@ pub struct Item {
     pub id: String,
     pub title: String,
     pub state: String,
-    pub turn: Option<String>,
-    pub turn_note: Option<String>,
-    pub asked_at: Option<String>,
-    pub claim_branch: Option<String>,
-    pub claim_host: Option<String>,
-    pub claim_since: Option<String>,
-    pub claim_runner: Option<String>,
-    pub claim_job: Option<String>,
-    pub claim_on: Option<String>,
-    pub wait_on: Option<String>,
-    pub wait_item: Option<i64>,
-    pub wait_ref: Option<String>,
-    pub wait_since: Option<String>,
+    /// The item's open assignment: the claim an agent holds on it, or the owner's ask.
+    pub held: Option<Held>,
     pub decision: Option<String>,
     pub decided_at: Option<String>,
     pub resolution: Option<String>,
     pub superseded_by: Option<i64>,
     /// The plan the item belongs to.
     pub parent_rid: Option<i64>,
-    pub scope: Option<String>,
     pub complexity: Option<String>,
-    pub group_name: Option<String>,
-    pub theme: Option<String>,
     /// The release row the item is in; none is the backlog.
     pub release_id: Option<i64>,
     /// The area row the item is in.
     pub area_id: Option<i64>,
-    pub rank: Option<i64>,
     /// What the item is; its rules follow from it.
     pub item_type: ItemType,
     /// One of critical, high, normal and low.
     pub priority: String,
-    pub tags: Vec<String>,
     pub body: String,
-    pub conflict: i64,
     pub opened_at: String,
     pub updated_at: String,
 }
@@ -72,75 +57,79 @@ pub struct Item {
 pub enum Field {
     Title(String),
     State(String),
-    Turn(Option<String>),
-    TurnNote(Option<String>),
-    AskedAt(Option<String>),
-    ClaimBranch(Option<String>),
-    ClaimHost(Option<String>),
-    ClaimSince(Option<String>),
-    ClaimRunner(Option<String>),
-    ClaimJob(Option<String>),
-    ClaimOn(Option<String>),
-    WaitOn(Option<String>),
-    WaitItem(Option<i64>),
-    WaitRef(Option<String>),
-    WaitSince(Option<String>),
     Decision(Option<String>),
     DecidedAt(Option<String>),
     Resolution(Option<String>),
     SupersededBy(Option<i64>),
     ParentRid(Option<i64>),
-    Scope(Option<String>),
     Complexity(Option<String>),
-    GroupName(Option<String>),
-    Theme(Option<String>),
     ReleaseId(Option<i64>),
     AreaId(Option<i64>),
-    Rank(Option<i64>),
     Priority(String),
-    Tags(Vec<String>),
     Body(String),
-    Conflict(i64),
 }
 
 impl Item {
+    /// The claim an agent holds on the item.
+    #[must_use]
+    pub fn claim(&self) -> Option<&Claim> {
+        match &self.held {
+            Some(Held::Claim(c)) => Some(c),
+            _ => None,
+        }
+    }
+
+    /// The branch holding the item.
+    #[must_use]
+    pub fn claim_branch(&self) -> Option<&str> {
+        self.claim().map(|c| c.branch.as_str())
+    }
+
+    /// What the owner was asked, while it is their turn.
+    #[must_use]
+    pub fn ask(&self) -> Option<&Ask> {
+        match &self.held {
+            Some(Held::Ask(a)) => Some(a),
+            _ => None,
+        }
+    }
+
+    /// Whose turn the open item is, `user` while the owner's ask is open, `agent` otherwise; none
+    /// once it is closed.
+    #[must_use]
+    pub fn turn(&self) -> Option<&'static str> {
+        turn_of(&self.state, self.ask().is_some())
+    }
+
     /// The item with the changes applied, as the row reads after the update.
     pub fn apply(&mut self, changes: &[Field]) {
         for c in changes {
             match c.clone() {
                 Field::Title(v) => self.title = v,
                 Field::State(v) => self.state = v,
-                Field::Turn(v) => self.turn = v,
-                Field::TurnNote(v) => self.turn_note = v,
-                Field::AskedAt(v) => self.asked_at = v,
-                Field::ClaimBranch(v) => self.claim_branch = v,
-                Field::ClaimHost(v) => self.claim_host = v,
-                Field::ClaimSince(v) => self.claim_since = v,
-                Field::ClaimRunner(v) => self.claim_runner = v,
-                Field::ClaimJob(v) => self.claim_job = v,
-                Field::ClaimOn(v) => self.claim_on = v,
-                Field::WaitOn(v) => self.wait_on = v,
-                Field::WaitItem(v) => self.wait_item = v,
-                Field::WaitRef(v) => self.wait_ref = v,
-                Field::WaitSince(v) => self.wait_since = v,
                 Field::Decision(v) => self.decision = v,
                 Field::DecidedAt(v) => self.decided_at = v,
                 Field::Resolution(v) => self.resolution = v,
                 Field::SupersededBy(v) => self.superseded_by = v,
                 Field::ParentRid(v) => self.parent_rid = v,
-                Field::Scope(v) => self.scope = v,
                 Field::Complexity(v) => self.complexity = v,
-                Field::GroupName(v) => self.group_name = v,
-                Field::Theme(v) => self.theme = v,
                 Field::ReleaseId(v) => self.release_id = v,
                 Field::AreaId(v) => self.area_id = v,
-                Field::Rank(v) => self.rank = v,
                 Field::Priority(v) => self.priority = v,
-                Field::Tags(v) => self.tags = v,
                 Field::Body(v) => self.body = v,
-                Field::Conflict(v) => self.conflict = v,
             }
         }
+    }
+}
+
+/// Whose turn an item in `state` is: the owner's while an ask is open, the agents' while it is
+/// open, none once it is closed.
+#[must_use]
+pub fn turn_of(state: &str, asked: bool) -> Option<&'static str> {
+    match (state, asked) {
+        ("open", true) => Some("user"),
+        ("open", false) => Some("agent"),
+        _ => None,
     }
 }
 
@@ -153,22 +142,10 @@ pub struct Ctx {
     pub force: bool,
 }
 
-/// One key of a project's matrix.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct KeySpec {
-    pub key: String,
-    pub kind: Kind,
-    #[serde(default)]
-    pub meaning: Option<String>,
-    #[serde(default)]
-    pub turn: Option<String>,
-}
-
-/// A project's slug and keys, all a rule needs of it.
+/// A project's slug, all a rule needs of it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Project {
     pub slug: String,
-    pub keys: Vec<KeySpec>,
 }
 
 impl Kind {

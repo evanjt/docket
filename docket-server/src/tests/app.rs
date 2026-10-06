@@ -7,21 +7,22 @@ use docket_migration::scratch::Scratch;
 
 use super::*;
 
-const SEED: &str = r#"
-INSERT INTO projects (slug, keys, created_at, updated_at) VALUES ('o/p',
-  '[{"key":"T","kind":"work"},{"key":"PK","kind":"package"},{"key":"CON","kind":"concept"}]', 'c', 'u');
-INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, group_name, opened_at, updated_at)
-  VALUES (1, 'o/p', 'T', 1, 'First', 'open', 'agent', '["single"]', 'Body text', 'g', 'o1', 'u1'),
-         (2, 'o/p', 'PK', 1, 'Package', 'open', 'agent', '[]', '', NULL, 'o2', 'u2'),
-         (3, 'o/p', 'CON', 1, 'Concept', 'open', 'agent', '[]', '', NULL, 'o3', 'u3');
-INSERT INTO items (rid, project, key, num, title, state, resolution, superseded_by, tags, opened_at, updated_at)
-  VALUES (4, 'o/p', 'T', 2, 'Old', 'dropped', 'replaced', 1, '[]', 'o4', 'u4');
+const SEED: &str = r"
+INSERT INTO projects (slug, created_at, updated_at) VALUES ('o/p', 'c', 'u');
+INSERT INTO items (rid, project, key, num, title, state, body, opened_at, updated_at)
+  VALUES (1, 'o/p', 'T', 1, 'First', 'open', 'Body text', 'o1', 'u1'),
+         (2, 'o/p', 'PK', 1, 'Package', 'open', '', 'o2', 'u2'),
+         (3, 'o/p', 'CON', 1, 'Concept', 'open', '', 'o3', 'u3');
+INSERT INTO labels (id, project, name) VALUES (1, 'o/p', 'group:g'), (2, 'o/p', 'single');
+INSERT INTO item_labels (rid, label_id) VALUES (1, 1), (1, 2);
+INSERT INTO items (rid, project, key, num, title, state, resolution, superseded_by, opened_at, updated_at)
+  VALUES (4, 'o/p', 'T', 2, 'Old', 'dropped', 'replaced', 1, 'o4', 'u4');
 UPDATE items SET parent_rid=2, priority='high' WHERE rid=1;
 UPDATE items SET type='plan' WHERE rid=2;
 INSERT INTO links (rid, kind, to_rid) VALUES (1, 'related', 3);
 INSERT INTO links (rid, kind, to_path, to_line) VALUES (1, 'cites_file', 'src/a.rs', 7);
 INSERT INTO events (uid, project, rid, at, host, kind) VALUES ('e1', 'o/p', 1, 'o1', 'devbox', 'opened');
-"#;
+";
 
 async fn seeded() -> (Router, Scratch) {
     let s = Scratch::new(2).await;
@@ -82,8 +83,8 @@ async fn test_show_matches_the_json_of_docket_show() {
         "claim_runner": null, "claim_job": null, "claim_on": null,
         "wait_on": null, "wait_ref": null, "wait_since": null,
         "decision": null, "decided_at": null, "resolution": null,
-        "scope": null, "complexity": null, "theme": null, "release": null, "area": null, "rank": null,
-        "type": "task", "tags": ["single"], "labels": [], "body": "Body text", "conflict": 0,
+        "complexity": null, "release": null, "area": null,
+        "type": "task", "labels": ["group:g", "single"], "body": "Body text",
         "opened_at": "o1", "updated_at": "u1",
         "group": "g", "word": "ready", "priority": "high", "superseded_by": null,
         "related": ["CON1"], "parent": "PK1", "origin": [], "children": [],
@@ -276,14 +277,13 @@ async fn test_web_client_leaves_every_route_behind_its_key() {
 async fn test_offers_leave_close_off_a_plan_whose_opened_work_is_open() {
     let s = Scratch::new(2).await;
     s.seed(
-        r#"
-INSERT INTO projects (slug, keys, created_at, updated_at) VALUES ('o/p',
-  '[{"key":"T","kind":"work"},{"key":"A","kind":"audit"}]', 'c', 'u');
-INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, opened_at, updated_at)
-  VALUES (1, 'o/p', 'A', 1, 'Plan', 'open', 'agent', '[]', '', 'o1', 'u1'),
-         (2, 'o/p', 'T', 1, 'Work', 'open', 'agent', '[]', '', 'o2', 'u2');
+        r"
+INSERT INTO projects (slug, created_at, updated_at) VALUES ('o/p', 'c', 'u');
+INSERT INTO items (rid, project, key, num, title, state, body, opened_at, updated_at)
+  VALUES (1, 'o/p', 'A', 1, 'Plan', 'open', '', 'o1', 'u1'),
+         (2, 'o/p', 'T', 1, 'Work', 'open', '', 'o2', 'u2');
 UPDATE items SET parent_rid=1 WHERE rid=2;
-"#,
+",
     )
     .await;
     s.seed(TYPES_BY_KEY).await;

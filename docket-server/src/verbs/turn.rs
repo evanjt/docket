@@ -17,11 +17,11 @@ use docket_core::rules;
 use docket_core::word::{ItemType, Kind};
 
 use crate::auth::Caller;
-use crate::store::NewItem;
+use crate::store::{ASKED, NewItem};
 use crate::verbs::areas;
 use crate::verbs::graph::{
     depends_on, holds_of, refuse_later, release_list, release_waiters, rewait, similar_rows,
-    standing,
+    standing, wait_of,
 };
 use crate::verbs::view::{brief, item_view};
 use crate::verbs::{Call, Failure, chars, given};
@@ -74,20 +74,16 @@ async fn owner_task(call: &mut Call, r: &Item, condition: &str) -> Result<Item, 
             key,
             num,
             title: condition.to_string(),
-            turn: "user".to_string(),
             body: format!(
                 "{} waits until this holds. Close it when it does, or drop it if it no longer matters.",
                 r.id
             ),
             complexity: None,
-            theme: r.theme.clone(),
             release_id: r.release_id,
             area_id: r.area_id,
-            group_name: None,
-            scope: None,
             item_type,
             priority: "normal".to_string(),
-            tags: Vec::new(),
+            labels: Vec::new(),
         })
         .await?;
     call.tx
@@ -97,19 +93,11 @@ async fn owner_task(call: &mut Call, r: &Item, condition: &str) -> Result<Item, 
             "opened",
             Some(&chars(condition, 120)),
             Some(call.branch()),
-            None,
+            Some(&json!({ "turn": "user" })),
         )
         .await?;
-    let task = call
-        .tx
-        .update(
-            task.rid,
-            &[
-                Field::TurnNote(Some(condition.to_string())),
-                Field::AskedAt(Some(call.ctx.now.clone())),
-            ],
-        )
-        .await?;
+    call.tx.note_ask(task.rid, Some(condition)).await?;
+    let task = call.tx.fresh(task.rid).await?;
     call.tx.set_link(r.rid, "related", task.rid, false).await?;
     call.tx.set_link(task.rid, "related", r.rid, false).await?;
     Ok(task)
@@ -117,6 +105,7 @@ async fn owner_task(call: &mut Call, r: &Item, condition: &str) -> Result<Item, 
 
 /// `r` depends on each of `on` as well as what it depended on, and waits while any still holds it.
 async fn depend(call: &mut Call, r: &Item, on: &[Item]) -> Result<Item, Failure> {
+    let before = wait_of(&call.tx.conn, r.rid).await?;
     let st = standing(&call.tx.conn, &call.slug).await?;
     let mut holds = holds_of(&call.tx.conn, &call.project, &st).await?;
     let mut had = depends_on(&call.tx.conn, r.rid).await?;
@@ -162,7 +151,7 @@ async fn depend(call: &mut Call, r: &Item, on: &[Item]) -> Result<Item, Failure>
             .await?;
     }
     call.tx.touch(r.rid);
-    rewait(&mut call.tx, &call.slug, r, &st, "").await?;
+    rewait(&mut call.tx, &call.slug, r, before.as_ref(), "").await?;
     let ids: Vec<&str> = on.iter().map(|t| t.id.as_str()).collect();
     let note = format!("on {}", ids.join(", "));
     call.tx
@@ -212,6 +201,7 @@ async fn undepend(call: &mut Call, r: &Item, on: &[Item]) -> Result<Item, Failur
     rules::require_open(r, "dep rm")?;
     rules::require_hold(r, &call.ctx, "dep rm")?;
     let had = depends_on(&call.tx.conn, r.rid).await?;
+    let before = wait_of(&call.tx.conn, r.rid).await?;
     if let Some(t) = on.iter().find(|t| !had.contains(&t.rid)) {
         return Err(Failure::Refused(format!(
             "{} does not depend on {}.",
@@ -239,9 +229,8 @@ async fn undepend(call: &mut Call, r: &Item, on: &[Item]) -> Result<Item, Failur
             None,
         )
         .await?;
-    let st = standing(&call.tx.conn, &call.slug).await?;
     let r = call.tx.fresh(r.rid).await?;
-    rewait(&mut call.tx, &call.slug, &r, &st, &note).await?;
+    rewait(&mut call.tx, &call.slug, &r, before.as_ref(), &note).await?;
     call.tx.fresh(r.rid).await
 }
 
@@ -256,7 +245,8 @@ pub async fn resume(
 ) -> Result<Json<Moved>, Failure> {
     let mut call = Call::begin(&db, &caller, &req.common).await?;
     let r = call.item(&req.id).await?;
-    let cols = rules::resume(&r)?;
+    let wait = wait_of(&call.tx.conn, r.rid).await?;
+    rules::resume(&r, wait.as_ref())?;
     let st = standing(&call.tx.conn, &call.slug).await?;
     let mut holding = Vec::new();
     for on in depends_on(&call.tx.conn, r.rid).await? {
@@ -270,7 +260,7 @@ pub async fn resume(
             holding.push(st.id(on));
         }
     }
-    let row = call.tx.update(r.rid, &cols).await?;
+    call.tx.update(r.rid, &[]).await?;
     let dropped =
         (!holding.is_empty()).then(|| format!("no longer depends on {}", holding.join(", ")));
     call.tx
@@ -283,6 +273,7 @@ pub async fn resume(
             None,
         )
         .await?;
+    let row = call.tx.fresh(r.rid).await?;
     let item = item_view(&call.tx.conn, &row).await?;
     call.tx.commit().await?;
     Ok(Json(Moved { item }))
@@ -298,7 +289,7 @@ pub async fn ensure_owner_room(call: &Call) -> Result<(), Failure> {
         .unwrap_or(docket_core::queue::OWNER_LIMIT);
     let held: Option<i64> = crate::store::scalar(
         conn,
-        "SELECT COUNT(*) FROM items WHERE project=? AND state='open' AND turn='user'",
+        &format!("SELECT COUNT(*) FROM items WHERE project=? AND state='open' AND {ASKED}"),
         vec![call.slug.clone().into()],
     )
     .await?;
@@ -320,7 +311,7 @@ pub async fn ask(
 ) -> Result<Json<Asked>, Failure> {
     let mut call = Call::begin(&db, &caller, &req.common).await?;
     let r = call.item(&req.id).await?;
-    let cols = rules::ask(&r, &call.ctx, given(Some(&req.note)))?;
+    rules::ask(&r, &call.ctx, given(Some(&req.note)))?;
     if let Some(need) = req.need.as_deref()
         && !docket_core::queue::NEEDS.contains(&need)
     {
@@ -329,12 +320,12 @@ pub async fn ask(
             docket_core::queue::NEEDS.join(", ")
         )));
     }
-    if r.turn.as_deref() != Some("user") {
+    if r.ask().is_none() {
         ensure_owner_room(&call).await?;
     }
     let data = req.need.as_ref().map(|need| json!({ "need": need }));
     let twins = similar_rows(&call.tx.conn, &call.slug, &r, 3, Some("done")).await?;
-    let row = call.tx.update(r.rid, &cols).await?;
+    call.tx.update(r.rid, &[]).await?;
     call.tx
         .event(
             &call.slug,
@@ -345,6 +336,7 @@ pub async fn ask(
             data.as_ref(),
         )
         .await?;
+    let row = call.tx.fresh(r.rid).await?;
     let out = Asked {
         item: item_view(&call.tx.conn, &row).await?,
         twins: twins
@@ -371,8 +363,8 @@ pub async fn reply(
 ) -> Result<Json<Moved>, Failure> {
     let mut call = Call::begin(&db, &caller, &req.common).await?;
     let r = call.item(&req.id).await?;
-    let cols = rules::reply(&r, given(Some(&req.note)))?;
-    let row = call.tx.update(r.rid, &cols).await?;
+    rules::reply(&r, given(Some(&req.note)))?;
+    call.tx.update(r.rid, &[]).await?;
     call.tx
         .event(
             &call.slug,
@@ -383,6 +375,7 @@ pub async fn reply(
             None,
         )
         .await?;
+    let row = call.tx.fresh(r.rid).await?;
     let item = item_view(&call.tx.conn, &row).await?;
     call.tx.commit().await?;
     Ok(Json(Moved { item }))
@@ -434,7 +427,7 @@ pub async fn answer(
         Field::Decision(d) => d.clone(),
         _ => None,
     });
-    let row = call.tx.update(r.rid, &cols).await?;
+    call.tx.update(r.rid, &cols).await?;
     call.tx
         .event(
             &call.slug,
@@ -445,14 +438,16 @@ pub async fn answer(
             None,
         )
         .await?;
-    let mut released = release_waiters(&mut call.tx, &call.project, &row, "decided").await?;
+    let row = call.tx.fresh(r.rid).await?;
+    let mut released = release_waiters(&mut call.tx, &call.project, &r, &row, "decided").await?;
     let row = if carriers.is_empty() {
         row
     } else {
+        let decided = row.clone();
         let ids: Vec<&str> = carriers.iter().map(|c| c.id.as_str()).collect();
         let resolution = format!("carried by {}", ids.join(", "));
         let cols = rules::close(&row, &call.ctx, Some(&resolution), kind, &[])?;
-        let row = call.tx.update(r.rid, &cols).await?;
+        call.tx.update(r.rid, &cols).await?;
         call.tx
             .event(
                 &call.slug,
@@ -463,10 +458,12 @@ pub async fn answer(
                 None,
             )
             .await?;
+        let row = call.tx.fresh(r.rid).await?;
         for c in &carriers {
             call.tx.set_link(c.rid, "origin", r.rid, false).await?;
         }
-        released.extend(release_waiters(&mut call.tx, &call.project, &row, "closed").await?);
+        released
+            .extend(release_waiters(&mut call.tx, &call.project, &decided, &row, "closed").await?);
         row
     };
     let out = Answered {

@@ -2,6 +2,8 @@
 //! label is stored on the item it was given to alone; `carried` reads it down every plan to the items
 //! under it.
 
+use std::collections::HashSet;
+
 use axum::Json;
 use axum::extract::{Extension, Query, State};
 use sea_orm::{ConnectionTrait, DatabaseConnection, DbErr};
@@ -12,7 +14,7 @@ use docket_core::label::{self, Label};
 use docket_core::member::{Edge, Tie, labels_carried};
 
 use crate::auth::Caller;
-use crate::store::{column, sql};
+use crate::store::{column, scalar, sql};
 use crate::verbs::{Call, Failure, given};
 
 /// The rids from `rid` up its parents, `rid` first, each once.
@@ -73,6 +75,189 @@ pub async fn carried<C: ConnectionTrait>(c: &C, rid: i64) -> Result<Vec<Label>, 
             name,
         })
         .collect())
+}
+
+/// The id of a project's label by name, ignoring case, made when the project has none by it.
+async fn made<C: ConnectionTrait>(c: &C, slug: &str, name: &str) -> Result<i64, DbErr> {
+    let known: Option<i64> = scalar(
+        c,
+        "SELECT id FROM labels WHERE project=? AND lower(name)=lower(?)",
+        vec![slug.into(), name.into()],
+    )
+    .await?;
+    match known {
+        Some(id) => Ok(id),
+        None => scalar(
+            c,
+            "INSERT INTO labels (project, name, description) VALUES (?, ?, NULL) RETURNING id",
+            vec![slug.into(), name.into()],
+        )
+        .await?
+        .ok_or(DbErr::RecordNotInserted),
+    }
+}
+
+/// Give an item a label by name, making the label when the project has none by it.
+///
+/// # Errors
+/// The database.
+pub async fn give<C: ConnectionTrait>(
+    c: &C,
+    slug: &str,
+    rid: i64,
+    name: &str,
+) -> Result<(), DbErr> {
+    let id = made(c, slug, name).await?;
+    c.execute_raw(sql(
+        "INSERT INTO item_labels (rid, label_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
+        vec![rid.into(), id.into()],
+    ))
+    .await?;
+    Ok(())
+}
+
+/// The item's own labels that `within` passes become `names`: each of them not among `names` is
+/// taken, and each of `names` the item lacks is given.
+///
+/// # Errors
+/// The database.
+pub async fn set<C: ConnectionTrait>(
+    c: &C,
+    slug: &str,
+    rid: i64,
+    names: &[String],
+    within: impl Fn(&str) -> bool,
+) -> Result<(), DbErr> {
+    for name in own(c, rid).await? {
+        let wanted = names.iter().any(|n| n.eq_ignore_ascii_case(&name));
+        if within(&name) && !wanted {
+            c.execute_raw(sql(
+                "DELETE FROM item_labels WHERE rid=? AND label_id IN \
+                 (SELECT id FROM labels WHERE project=? AND name=?)",
+                vec![rid.into(), slug.into(), name.into()],
+            ))
+            .await?;
+        }
+    }
+    for name in names {
+        give(c, slug, rid, name).await?;
+    }
+    Ok(())
+}
+
+/// The names of the labels an item was given itself, by name.
+///
+/// # Errors
+/// The database.
+pub async fn own<C: ConnectionTrait>(c: &C, rid: i64) -> Result<Vec<String>, DbErr> {
+    column(
+        c,
+        "SELECT l.name FROM item_labels il JOIN labels l ON l.id=il.label_id \
+         WHERE il.rid=? ORDER BY l.name",
+        vec![rid.into()],
+    )
+    .await
+}
+
+/// Each item of a project carrying a label whose name matches a `LIKE` pattern ignoring case, with
+/// the label's name: the items given it and everything under them. Binds the project, then the
+/// pattern.
+pub const CARRIERS: &str = "WITH RECURSIVE down(rid, name) AS ( \
+       SELECT il.rid, l.name FROM item_labels il JOIN labels l ON l.id=il.label_id \
+        WHERE l.project=? AND lower(l.name) LIKE lower(?) \
+       UNION SELECT i.rid, down.name FROM items i JOIN down ON i.parent_rid=down.rid) \
+     SELECT rid, name FROM down";
+
+/// The condition keeping the rows whose `column` is an item carrying a label by [`CARRIERS`], or
+/// with `not` one not carrying it. Binds as [`CARRIERS`] does.
+#[must_use]
+pub fn carried_cond(column: &str, not: bool) -> String {
+    let op = if not { "NOT IN" } else { "IN" };
+    format!(" AND {column} {op} (SELECT rid FROM ({CARRIERS}) c)")
+}
+
+/// The `LIKE` pattern that matches the label `name` alone.
+#[must_use]
+pub fn exactly(name: &str) -> String {
+    name.trim()
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
+/// The items of a project carrying a label whose name matches `pattern`, by [`CARRIERS`], by name
+/// then rid.
+///
+/// # Errors
+/// The database.
+pub async fn carriers<C: ConnectionTrait>(
+    c: &C,
+    slug: &str,
+    pattern: &str,
+) -> Result<Vec<(i64, String)>, DbErr> {
+    let rows = c
+        .query_all_raw(sql(
+            &format!("{CARRIERS} ORDER BY name, rid"),
+            vec![slug.into(), pattern.into()],
+        ))
+        .await?;
+    rows.iter()
+        .map(|r| Ok((r.try_get_by_index(0)?, r.try_get_by_index(1)?)))
+        .collect()
+}
+
+/// The items of a project carrying the label `name`, given it or under a plan given it.
+///
+/// # Errors
+/// The database.
+pub async fn carrying<C: ConnectionTrait>(
+    c: &C,
+    slug: &str,
+    name: &str,
+) -> Result<HashSet<i64>, DbErr> {
+    Ok(carriers(c, slug, &exactly(name))
+        .await?
+        .into_iter()
+        .map(|(rid, _)| rid)
+        .collect())
+}
+
+/// The items carrying the label `name` when one is given: what a read narrowed to a label keeps.
+///
+/// # Errors
+/// The database.
+pub async fn narrowed<C: ConnectionTrait>(
+    c: &C,
+    slug: &str,
+    name: Option<&str>,
+) -> Result<Option<HashSet<i64>>, DbErr> {
+    match name {
+        Some(name) => Ok(Some(carrying(c, slug, name).await?)),
+        None => Ok(None),
+    }
+}
+
+/// The other items of a project in the group an item's labels name, by rid; none when they name
+/// none.
+///
+/// # Errors
+/// The database.
+pub async fn grouped_with<C: ConnectionTrait>(
+    c: &C,
+    slug: &str,
+    rid: i64,
+) -> Result<Vec<i64>, DbErr> {
+    let mine: Vec<String> = carried(c, rid).await?.into_iter().map(|l| l.name).collect();
+    let Some(group) = label::group_of(&mine) else {
+        return Ok(Vec::new());
+    };
+    let mut others: Vec<i64> = carrying(c, slug, &label::of_group(group))
+        .await?
+        .into_iter()
+        .filter(|r| *r != rid)
+        .collect();
+    others.sort_unstable();
+    Ok(others)
 }
 
 /// A project's labels by name.
@@ -141,7 +326,7 @@ pub async fn label(
     let mut call = Call::begin(&db, &caller, &req.common).await?;
     let r = call.item(&req.id).await?;
     let name = label::check_name(&req.name)?;
-    let known: Option<i64> = crate::store::scalar(
+    let known: Option<i64> = scalar(
         &call.tx.conn,
         "SELECT id FROM labels WHERE project=? AND lower(name)=lower(?)",
         vec![call.slug.clone().into(), name.clone().into()],
@@ -149,33 +334,16 @@ pub async fn label(
     .await?;
     match req.action.as_str() {
         "add" => {
-            let about = given(req.about.as_deref()).map(str::to_string);
-            let id = match known {
-                Some(id) => {
-                    if req.about.is_some() {
-                        call.tx
-                            .execute(
-                                "UPDATE labels SET description=? WHERE id=?",
-                                vec![about.into(), id.into()],
-                            )
-                            .await?;
-                    }
-                    id
-                }
-                None => crate::store::scalar(
-                    &call.tx.conn,
-                    "INSERT INTO labels (project, name, description) VALUES (?, ?, ?) RETURNING id",
-                    vec![call.slug.clone().into(), name.clone().into(), about.into()],
-                )
-                .await?
-                .ok_or(DbErr::RecordNotInserted)?,
-            };
-            call.tx
-                .execute(
-                    "INSERT INTO item_labels (rid, label_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
-                    vec![r.rid.into(), id.into()],
-                )
-                .await?;
+            give(&call.tx.conn, &call.slug, r.rid, &name).await?;
+            if req.about.is_some() {
+                let about = given(req.about.as_deref()).map(str::to_string);
+                call.tx
+                    .execute(
+                        "UPDATE labels SET description=? WHERE project=? AND lower(name)=lower(?)",
+                        vec![about.into(), call.slug.clone().into(), name.clone().into()],
+                    )
+                    .await?;
+            }
         }
         "rm" => {
             let removed = match known {

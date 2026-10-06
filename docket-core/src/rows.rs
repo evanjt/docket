@@ -4,9 +4,10 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::assignment::{Held, HeldFields};
 use crate::word::Kind;
 
-/// One key of a project: what it holds and the turn a new item starts on.
+/// One key of a project's key list before the drop: what it holds and the turn a new item started on.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeySpec {
     pub key: String,
@@ -17,6 +18,7 @@ pub struct KeySpec {
     pub turn: Option<String>,
 }
 
+/// One of a project's themes before the drop, with its note.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Theme {
     pub name: String,
@@ -29,8 +31,6 @@ pub struct Theme {
 pub struct ProjectRow {
     pub slug: String,
     #[serde(default)]
-    pub themes: Vec<Theme>,
-    #[serde(default)]
     pub skills: BTreeMap<String, String>,
     #[serde(default)]
     pub updated_at: String,
@@ -42,7 +42,8 @@ pub struct ProjectRow {
     pub areas: crate::area::Listed,
 }
 
-/// An item as stored, as `/items` lists it: no body, rids rather than ids.
+/// An item as stored, as `/items` lists it: no body, rids rather than ids. Its claim and turn are
+/// filled from its open assignment, which `/items` does not carry.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ItemRow {
     pub rid: i64,
@@ -66,10 +67,11 @@ pub struct ItemRow {
     pub claim_job: Option<String>,
     #[serde(default)]
     pub claim_on: Option<String>,
+    /// What its dependencies hold it on, `item` or `condition`: `/items` sends none, so a reader fills
+    /// it from `/waiting`.
     #[serde(default)]
     pub wait_on: Option<String>,
-    #[serde(default)]
-    pub wait_item: Option<i64>,
+    /// The id of the item that holds it, filled with `wait_on`.
     #[serde(default)]
     pub wait_ref: Option<String>,
     #[serde(default)]
@@ -79,19 +81,9 @@ pub struct ItemRow {
     #[serde(default)]
     pub resolution: Option<String>,
     #[serde(default)]
-    pub scope: Option<String>,
-    #[serde(default)]
-    pub group_name: Option<String>,
-    #[serde(default)]
-    pub theme: Option<String>,
-    #[serde(default)]
     pub release_id: Option<i64>,
     #[serde(default)]
     pub area_id: Option<i64>,
-    #[serde(default)]
-    pub rank: Option<i64>,
-    #[serde(default)]
-    pub tags: Vec<String>,
     /// What the item is: task, bug, question, investigation or plan.
     #[serde(default, rename = "type")]
     pub item_type: String,
@@ -99,6 +91,27 @@ pub struct ItemRow {
     pub opened_at: String,
     #[serde(default)]
     pub updated_at: String,
+}
+
+/// An item's open assignment, as `/held` lists a project's.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeldRow {
+    pub rid: i64,
+    pub held: Held,
+}
+
+impl ItemRow {
+    /// The row's claim and turn set from the item's open assignment.
+    pub fn hold(&mut self, held: Option<&Held>) {
+        let f = HeldFields::of(&self.state, held);
+        self.turn = f.turn;
+        self.turn_note = f.turn_note;
+        self.claim_branch = f.claim_branch;
+        self.claim_host = f.claim_host;
+        self.claim_since = f.claim_since;
+        self.claim_job = f.claim_job;
+        self.claim_on = f.claim_on;
+    }
 }
 
 /// An item as the list routes and `/show` print it: ids for rids, with its word and priority.
@@ -150,21 +163,16 @@ pub struct Row {
     #[serde(default)]
     pub resolution: Option<String>,
     #[serde(default)]
-    pub scope: Option<String>,
-    #[serde(default)]
     pub complexity: Option<String>,
-    #[serde(default)]
-    pub theme: Option<String>,
     /// The release it is in; none is the backlog.
     #[serde(default)]
     pub release: Option<String>,
     /// The area it is in.
     #[serde(default)]
     pub area: Option<String>,
+    /// The labels it carries: its own, then those of each plan above it.
     #[serde(default)]
-    pub rank: Option<i64>,
-    #[serde(default)]
-    pub tags: Vec<String>,
+    pub labels: Vec<String>,
     #[serde(default)]
     pub body: String,
     #[serde(default)]

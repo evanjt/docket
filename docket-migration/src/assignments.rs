@@ -1,12 +1,14 @@
-//! The statements that write assignment rows, shared by the server's event writer, the migration
-//! that creates the table, the import and the restore.
+//! The statements that read and write assignment rows, shared by the server's event writer and its
+//! dump, the migration that creates the table and the restore.
 
 use std::collections::BTreeMap;
 
 use sea_orm::{ConnectionTrait, DbErr};
 
-use docket_core::assignment::{Assignment, End, Event, Kind, Now, Outcome, Usage, rebuild, settle};
-use docket_core::dump::ItemDump;
+use docket_core::assignment::{
+    Ask, Assignment, Claim, End, Event, Held, Kind, Now, Outcome, Usage, agree, rebuild, settle,
+};
+use docket_core::migrate::OldItem;
 
 use crate::statement;
 
@@ -76,6 +78,34 @@ pub async fn report<C: ConnectionTrait>(c: &C, id: i64, u: &Usage) -> Result<(),
     ))
     .await?;
     Ok(())
+}
+
+/// Every row of the items `rids` selects, `{rid: rows oldest first}`; `rids` is a `SELECT rid` bound
+/// with `values`.
+///
+/// # Errors
+/// The database refuses, or a row does not read as an assignment.
+pub async fn of_items<C: ConnectionTrait>(
+    c: &C,
+    rids: &str,
+    values: Vec<sea_orm::Value>,
+) -> Result<BTreeMap<i64, Vec<Assignment>>, DbErr> {
+    let mut out: BTreeMap<i64, Vec<Assignment>> = BTreeMap::new();
+    for r in c
+        .query_all_raw(statement(
+            &format!(
+                "SELECT a.rid, to_jsonb(a) FROM assignments a WHERE a.rid IN ({rids}) \
+                 ORDER BY a.rid, a.id"
+            ),
+            values,
+        ))
+        .await?
+    {
+        let row: serde_json::Value = r.try_get_by_index(1)?;
+        let a = serde_json::from_value(row).map_err(|e| DbErr::Json(e.to_string()))?;
+        out.entry(r.try_get_by_index(0)?).or_default().push(a);
+    }
+    Ok(out)
 }
 
 /// One row written for the item.
@@ -174,7 +204,7 @@ pub async fn rebuild_all<C: ConnectionTrait>(c: &C) -> Result<usize, DbErr> {
     let mut written = 0;
     for r in items {
         let rid: i64 = r.try_get_by_index(0)?;
-        let item = ItemDump {
+        let item = OldItem {
             state: r.try_get_by_index(1)?,
             turn: r.try_get_by_index(2)?,
             turn_note: r.try_get_by_index(3)?,
@@ -187,7 +217,7 @@ pub async fn rebuild_all<C: ConnectionTrait>(c: &C) -> Result<usize, DbErr> {
             claim_on: r.try_get_by_index(10)?,
             opened_at: r.try_get_by_index(11)?,
             updated_at: r.try_get_by_index(12)?,
-            ..ItemDump::default()
+            ..OldItem::default()
         };
         let mut rows = rebuild(events.get(&rid).map_or(&[][..], Vec::as_slice));
         settle(&mut rows, &Now::of(&item));
@@ -197,4 +227,80 @@ pub async fn rebuild_all<C: ConnectionTrait>(c: &C) -> Result<usize, DbErr> {
         written += rows.len();
     }
     Ok(written)
+}
+
+/// Every item's open row made to agree with the claim and turn its columns hold, for when the columns
+/// stop being written: a row the columns no longer hold ends at the item's last update with no known
+/// outcome, one they hold and no row has is opened from them, and an open ask takes the note they
+/// hold. Returns how many items it changed.
+///
+/// # Errors
+/// The database refuses.
+pub async fn agree_all<C: ConnectionTrait>(c: &C) -> Result<usize, DbErr> {
+    let rows = c
+        .query_all_raw(statement(
+            "SELECT i.rid, i.state, i.turn, i.turn_note, i.asked_at, i.claim_branch, i.claim_host, \
+             i.claim_since, i.claim_runner, i.claim_job, i.claim_on, i.opened_at, i.updated_at, \
+             a.id, a.kind, a.branch, a.note FROM items i \
+             LEFT JOIN assignments a ON a.rid=i.rid AND a.ended_at IS NULL \
+             WHERE i.state='open' OR a.id IS NOT NULL ORDER BY i.rid",
+            vec![],
+        ))
+        .await?;
+    let mut changed = 0;
+    for r in rows {
+        let rid: i64 = r.try_get_by_index(0)?;
+        let item = OldItem {
+            state: r.try_get_by_index(1)?,
+            turn: r.try_get_by_index(2)?,
+            turn_note: r.try_get_by_index(3)?,
+            asked_at: r.try_get_by_index(4)?,
+            claim_branch: r.try_get_by_index(5)?,
+            claim_host: r.try_get_by_index(6)?,
+            claim_since: r.try_get_by_index(7)?,
+            claim_runner: r.try_get_by_index(8)?,
+            claim_job: r.try_get_by_index(9)?,
+            claim_on: r.try_get_by_index(10)?,
+            opened_at: r.try_get_by_index(11)?,
+            updated_at: r.try_get_by_index(12)?,
+            ..OldItem::default()
+        };
+        let id: Option<i64> = r.try_get_by_index(13)?;
+        let kind: Option<String> = r.try_get_by_index(14)?;
+        let branch: Option<String> = r.try_get_by_index(15)?;
+        let note: Option<String> = r.try_get_by_index(16)?;
+        let open = kind.as_deref().and_then(Kind::parse).map(|k| match k {
+            Kind::Claim => Held::Claim(Claim {
+                branch: branch.unwrap_or_default(),
+                ..Claim::default()
+            }),
+            Kind::Ask => Held::Ask(Ask {
+                note,
+                ..Ask::default()
+            }),
+        });
+        let now = Now::of(&item);
+        let fix = agree(open.as_ref(), &now);
+        if let (Some(id), true) = (id, fix.end) {
+            let ended = End {
+                outcome: None,
+                note: None,
+            };
+            end(c, id, &now.updated_at, &ended, None).await?;
+        }
+        if let (Some(id), Some(note)) = (id, &fix.note) {
+            c.execute_raw(statement(
+                "UPDATE assignments SET note=? WHERE id=?",
+                vec![note.clone().into(), id.into()],
+            ))
+            .await?;
+        }
+        if let Some(a) = &fix.open {
+            insert(c, rid, a).await?;
+        }
+        if fix.end || fix.note.is_some() || fix.open.is_some() {
+            changed += 1;
+        }
+    }
+    Ok(changed)
 }

@@ -70,7 +70,7 @@
       if (!board || !problems.data) return [];
       return checkIds(problems.data, checkKind).flatMap((id) => {
         const n = board.nodes.get(id);
-        return n ? [{ id, title: n.title, word: n.word, theme: n.theme, release: n.release, area: n.area }] : [];
+        return n ? [{ id, title: n.title, word: n.word, release: n.release, area: n.area }] : [];
       });
     }
     if (word && !wordRoute) {
@@ -79,7 +79,7 @@
       return queueNodes(ctx.board, word)
         .filter((n) => !held || held.has(n.id))
         .sort((a, b) => byId(a.id, b.id))
-        .map((n) => ({ id: n.id, title: n.title, word: n.word, theme: n.theme, release: n.release, area: n.area }));
+        .map((n) => ({ id: n.id, title: n.title, word: n.word, release: n.release, area: n.area }));
     }
     return fetched.data ?? [];
   });

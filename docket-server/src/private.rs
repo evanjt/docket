@@ -16,8 +16,8 @@ use crate::verbs::{Failure, require_owner};
 const PROJECTS: &str = "SELECT slug FROM projects ORDER BY slug";
 const OWNERS: &str = "SELECT DISTINCT skills->>'owner' FROM projects \
                       WHERE skills->>'owner' IS NOT NULL AND skills->>'owner' <> '' ORDER BY 1";
-const HOSTS: &str = "SELECT host FROM events UNION SELECT claim_host FROM items \
-                     WHERE claim_host IS NOT NULL UNION SELECT host FROM leads ORDER BY 1";
+const HOSTS: &str = "SELECT host FROM events UNION SELECT host FROM assignments WHERE host <> '' \
+                     UNION SELECT host FROM leads ORDER BY 1";
 const TITLES: &str = "SELECT DISTINCT title FROM items WHERE length(title) >= $1 ORDER BY 1";
 const KEYS: &str = "SELECT DISTINCT key FROM items ORDER BY 1";
 

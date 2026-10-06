@@ -69,8 +69,8 @@ async fn test_tx_item_locks_the_row_until_commit() {
     let s = Scratch::new(4).await;
     s.seed(
         "INSERT INTO projects (slug, created_at, updated_at) VALUES ('o/p', 'c', 'u'); \
-         INSERT INTO items (project, key, num, title, state, turn, opened_at, updated_at) \
-         VALUES ('o/p', 'T', 1, 'One', 'open', 'agent', 'o', 'u')",
+         INSERT INTO items (project, key, num, title, state, opened_at, updated_at) \
+         VALUES ('o/p', 'T', 1, 'One', 'open', 'o', 'u')",
     )
     .await;
     let tx = Tx::begin(&s.db, "a").await.unwrap();

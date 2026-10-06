@@ -15,10 +15,10 @@ async fn scratch() -> (Scratch, Router) {
     let db = Scratch::new(4).await;
     db.seed(&format!(
         "INSERT INTO projects (slug, created_at, updated_at) VALUES ('{SLUG}', 'c', 'u');
-         INSERT INTO items (rid, project, key, num, title, state, turn, resolution, type, opened_at, updated_at) VALUES
-           (1, '{SLUG}', 'A', 1, 'lay the kiln', 'done', NULL, 'fired', 'plan', 'o', 'u'),
-           (2, '{SLUG}', 'A', 2, 'glaze the bowls', 'done', NULL, 'fired', 'plan', 'o', 'u'),
-           (3, '{SLUG}', 'T', 1, 'stack the wood', 'done', NULL, 'stacked', 'task', 'o', 'u');"
+         INSERT INTO items (rid, project, key, num, title, state, resolution, type, opened_at, updated_at) VALUES
+           (1, '{SLUG}', 'A', 1, 'lay the kiln', 'done', 'fired', 'plan', 'o', 'u'),
+           (2, '{SLUG}', 'A', 2, 'glaze the bowls', 'done', 'fired', 'plan', 'o', 'u'),
+           (3, '{SLUG}', 'T', 1, 'stack the wood', 'done', 'stacked', 'task', 'o', 'u');"
     ))
     .await;
     let keys = Keys::parse("alpha owner alphakey\nbeta agent betakey").unwrap();

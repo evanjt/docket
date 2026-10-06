@@ -1,10 +1,9 @@
 use super::*;
-use crate::dump::DumpPage;
 
 const PAGE: &str = include_str!("fixtures/migrate/page.json");
 
 fn planned(rules: Rules) -> Changes {
-    let page: DumpPage = serde_json::from_str(PAGE).unwrap();
+    let page: OldPage = serde_json::from_str(PAGE).unwrap();
     let rows = Rows::of(&page);
     plan(&rows[0], rules)
 }
@@ -304,7 +303,7 @@ fn test_the_dump_format_change_is_listed_and_every_case_prints() {
 
 #[test]
 fn test_a_project_with_no_release_sends_every_item_to_the_backlog() {
-    let mut page: DumpPage = serde_json::from_str(PAGE).unwrap();
+    let mut page: OldPage = serde_json::from_str(PAGE).unwrap();
     page.projects[0].skills = serde_json::json!({});
     for i in &mut page.items {
         i.theme = None;
@@ -326,7 +325,7 @@ fn test_a_project_with_no_release_sends_every_item_to_the_backlog() {
 
 #[test]
 fn test_a_wait_on_the_later_of_two_plans_is_still_a_cycle() {
-    let mut page: DumpPage = serde_json::from_str(PAGE).unwrap();
+    let mut page: OldPage = serde_json::from_str(PAGE).unwrap();
     let t12 = page.items.iter_mut().find(|i| i.id == "T12").unwrap();
     t12.opened = vec![s("A1"), s("A2")];
     let c = plan(&Rows::of(&page)[0], Rules::default());
@@ -358,20 +357,20 @@ fn test_a_wait_on_the_later_of_two_plans_is_still_a_cycle() {
 
 #[test]
 fn test_an_area_themed_item_takes_its_plans_release_and_the_backlog_without_one() {
-    let project = ProjectDump {
+    let project = OldProject {
         slug: s("o/p"),
         keys: serde_json::json!([{"key": "T", "kind": "work"}, {"key": "A", "kind": "audit"}]),
         skills: serde_json::json!({"releases": "0.3.0 0.3.1"}),
-        ..ProjectDump::default()
+        ..OldProject::default()
     };
-    let item = |id: &str, theme: &str, opened: &[&str]| ItemDump {
+    let item = |id: &str, theme: &str, opened: &[&str]| OldItem {
         project: s("o/p"),
         id: s(id),
         title: s(id),
         state: s("open"),
         theme: Some(s(theme)),
         opened: opened.iter().map(|o| s(o)).collect(),
-        ..ItemDump::default()
+        ..OldItem::default()
     };
     let items = [
         item("A1", "0.3.1", &[]),
@@ -416,7 +415,7 @@ fn test_an_area_themed_item_takes_its_plans_release_and_the_backlog_without_one(
 
 #[test]
 fn test_a_parent_already_set_is_kept_and_held_like_an_opened_one() {
-    let mut page: DumpPage = serde_json::from_str(PAGE).unwrap();
+    let mut page: OldPage = serde_json::from_str(PAGE).unwrap();
     let t2 = page.items.iter_mut().find(|i| i.id == "T2").unwrap();
     t2.opened.clear();
     t2.parent = Some(s("A1"));
@@ -432,12 +431,12 @@ fn test_a_parent_already_set_is_kept_and_held_like_an_opened_one() {
     assert_eq!(held.len(), 1, "{:#?}", c.risky);
 }
 
-fn placed_in(items: &[ItemDump]) -> Changes {
-    let project = ProjectDump {
+fn placed_in(items: &[OldItem]) -> Changes {
+    let project = OldProject {
         slug: s("o/p"),
         keys: serde_json::json!([{"key": "T", "kind": "work"}, {"key": "A", "kind": "audit"}]),
         skills: serde_json::json!({"releases": "0.3.0 0.8.0"}),
-        ..ProjectDump::default()
+        ..OldProject::default()
     };
     let rows = Rows {
         project: &project,
@@ -447,8 +446,8 @@ fn placed_in(items: &[ItemDump]) -> Changes {
     plan(&rows, Rules::default())
 }
 
-fn open_item(id: &str, release: &str, opened: &[&str], waits_on: Option<&str>) -> ItemDump {
-    ItemDump {
+fn open_item(id: &str, release: &str, opened: &[&str], waits_on: Option<&str>) -> OldItem {
+    OldItem {
         project: s("o/p"),
         id: s(id),
         title: s(id),
@@ -457,7 +456,7 @@ fn open_item(id: &str, release: &str, opened: &[&str], waits_on: Option<&str>) -
         opened: opened.iter().map(|o| s(o)).collect(),
         wait_on: waits_on.map(|_| s("item")),
         wait_ref: waits_on.map(s),
-        ..ItemDump::default()
+        ..OldItem::default()
     }
 }
 
@@ -502,22 +501,22 @@ fn test_a_plan_pulled_in_as_a_dependency_takes_its_children_with_it() {
 }
 
 fn plan_with(fact: &str, themes: &[&str]) -> Changes {
-    let project = ProjectDump {
+    let project = OldProject {
         slug: s("o/p"),
         keys: serde_json::json!([{"key": "T", "kind": "work"}]),
         skills: serde_json::json!({ "releases": fact }),
-        ..ProjectDump::default()
+        ..OldProject::default()
     };
-    let items: Vec<ItemDump> = themes
+    let items: Vec<OldItem> = themes
         .iter()
         .enumerate()
-        .map(|(n, t)| ItemDump {
+        .map(|(n, t)| OldItem {
             project: s("o/p"),
             id: format!("T{}", n + 1),
             title: s("item"),
             state: s("open"),
             theme: Some(s(t)),
-            ..ItemDump::default()
+            ..OldItem::default()
         })
         .collect();
     let rows = Rows {
@@ -571,8 +570,8 @@ fn test_a_semantic_theme_is_placed_in_version_order_among_the_facts_names() {
     assert!(writable_but_for_areas(&c), "{:#?}", c.risky);
 }
 
-fn crafts() -> (ProjectDump, Vec<ItemDump>, Vec<EventDump>) {
-    let project = ProjectDump {
+fn crafts() -> (OldProject, Vec<OldItem>, Vec<EventDump>) {
+    let project = OldProject {
         slug: s("o/crafts"),
         keys: serde_json::json!([
             {"key": "T", "kind": "work"},
@@ -581,9 +580,9 @@ fn crafts() -> (ProjectDump, Vec<ItemDump>, Vec<EventDump>) {
             {"key": "CID", "kind": "idea"},
         ]),
         skills: serde_json::json!({"releases": "0.1.0"}),
-        ..ProjectDump::default()
+        ..OldProject::default()
     };
-    let item = |id: &str, title: &str, related: &[&str], parent: Option<&str>| ItemDump {
+    let item = |id: &str, title: &str, related: &[&str], parent: Option<&str>| OldItem {
         project: s("o/crafts"),
         id: s(id),
         title: s(title),
@@ -591,7 +590,7 @@ fn crafts() -> (ProjectDump, Vec<ItemDump>, Vec<EventDump>) {
         related: related.iter().map(|r| s(r)).collect(),
         parent: parent.map(s),
         opened_at: s("2026-02-01T00:00:00Z"),
-        ..ItemDump::default()
+        ..OldItem::default()
     };
     let mut lanterns = item("CON1", "Lanterns: paper and wire", &["A1"], None);
     lanterns.body = s("Lamps for the night market.");
@@ -631,14 +630,14 @@ fn crafts() -> (ProjectDump, Vec<ItemDump>, Vec<EventDump>) {
     (project, items, events)
 }
 
-fn done_item(id: &str, title: &str) -> ItemDump {
-    ItemDump {
+fn done_item(id: &str, title: &str) -> OldItem {
+    OldItem {
         project: s("o/crafts"),
         id: s(id),
         title: s(title),
         state: s("done"),
         opened_at: s("2026-02-01T00:00:00Z"),
-        ..ItemDump::default()
+        ..OldItem::default()
     }
 }
 
@@ -888,19 +887,19 @@ fn test_a_placement_on_an_item_a_plan_or_concept_places_is_ignored_with_a_line()
 }
 
 fn spans() -> Changes {
-    let project = ProjectDump {
+    let project = OldProject {
         slug: s("o/spans"),
         keys: serde_json::json!([{"key": "T", "kind": "work"}, {"key": "A", "kind": "audit"}]),
         skills: serde_json::json!({"releases": "0.1.0"}),
-        ..ProjectDump::default()
+        ..OldProject::default()
     };
-    let item = |id: &str, opened: &[&str]| ItemDump {
+    let item = |id: &str, opened: &[&str]| OldItem {
         project: s("o/spans"),
         id: s(id),
         title: s(id),
         state: s("open"),
         opened: opened.iter().map(|o| s(o)).collect(),
-        ..ItemDump::default()
+        ..OldItem::default()
     };
     let items = [item("A1", &[]), item("T1", &["A1"])];
     let events = [
@@ -993,7 +992,7 @@ fn test_a_concept_named_like_an_area_the_project_has_joins_it_and_new_ones_follo
 
 #[test]
 fn test_items_under_a_projects_own_work_key_become_tasks_labelled_with_the_key() {
-    let project = ProjectDump {
+    let project = OldProject {
         slug: s("o/kilns"),
         keys: serde_json::json!([
             {"key": "T", "kind": "work"},
@@ -1001,15 +1000,15 @@ fn test_items_under_a_projects_own_work_key_become_tasks_labelled_with_the_key()
             {"key": "ZD", "kind": "decision", "meaning": "forks"},
         ]),
         skills: serde_json::json!({"releases": "0.1.0"}),
-        ..ProjectDump::default()
+        ..OldProject::default()
     };
-    let item = |id: &str, state: &str| ItemDump {
+    let item = |id: &str, state: &str| OldItem {
         project: s("o/kilns"),
         id: s(id),
         title: s(id),
         state: s(state),
         opened_at: s("2026-02-01T00:00:00Z"),
-        ..ItemDump::default()
+        ..OldItem::default()
     };
     let items = [
         item("T1", "open"),
@@ -1079,4 +1078,66 @@ fn test_an_open_item_with_a_stored_area_and_no_other_tie_is_placed_in_it() {
     assert_eq!(c.placed.unplaced, 0);
     assert!(risky(&c, |k| matches!(k, Case::Unplaced { .. })).is_empty());
     assert!(c.writable().is_ok(), "{:?}", c.writable());
+}
+
+#[test]
+fn test_a_dump_page_reads_the_open_attempt_as_the_turn_and_each_key_by_its_items_type() {
+    use crate::dump::{DumpPage, ItemDump, ProjectDump};
+    let attempts = |rows: serde_json::Value| Some(serde_json::from_value(rows).unwrap());
+    let page = DumpPage {
+        projects: vec![ProjectDump {
+            slug: s("tide/pool"),
+            ..ProjectDump::default()
+        }],
+        items: vec![
+            ItemDump {
+                project: s("tide/pool"),
+                id: s("Q1"),
+                state: s("open"),
+                item_type: s("question"),
+                assignments: attempts(serde_json::json!([
+                    {"assignee": "agent", "kind": "claim", "started_at": "c1", "ended_at": "c2",
+                     "host": "reef", "branch": "build/q1-1"},
+                    {"assignee": "owner", "kind": "ask", "started_at": "a1", "host": "",
+                     "note": "which net"},
+                ])),
+                ..ItemDump::default()
+            },
+            ItemDump {
+                project: s("tide/pool"),
+                id: s("T2"),
+                state: s("open"),
+                item_type: s("task"),
+                assignments: attempts(serde_json::json!([
+                    {"assignee": "agent", "kind": "claim", "started_at": "c3", "host": "reef",
+                     "branch": "build/t2-1"},
+                ])),
+                ..ItemDump::default()
+            },
+        ],
+        ..DumpPage::default()
+    };
+    let old = OldPage::of(&page);
+    let q1 = &old.items[0];
+    assert_eq!(
+        (
+            q1.turn.as_deref(),
+            q1.turn_note.as_deref(),
+            q1.asked_at.as_deref()
+        ),
+        (Some("user"), Some("which net"), Some("a1"))
+    );
+    assert_eq!(q1.claim_branch, None);
+    let t2 = &old.items[1];
+    assert_eq!(
+        (
+            t2.turn.as_deref(),
+            t2.claim_branch.as_deref(),
+            t2.claim_host.as_deref()
+        ),
+        (Some("agent"), Some("build/t2-1"), Some("reef"))
+    );
+    let keys: Vec<KeySpec> = serde_json::from_value(old.projects[0].keys.clone()).unwrap();
+    let kinds: Vec<(&str, Kind)> = keys.iter().map(|k| (k.key.as_str(), k.kind)).collect();
+    assert_eq!(kinds, [("Q", Kind::Decision), ("T", Kind::Work)]);
 }

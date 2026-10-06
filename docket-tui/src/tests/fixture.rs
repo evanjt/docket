@@ -21,7 +21,6 @@ use docket_core::board::Board;
 fn project(slug: &str, skills: &[(&str, &str)]) -> ProjectRow {
     ProjectRow {
         slug: slug.into(),
-        themes: Vec::new(),
         skills: skills
             .iter()
             .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
@@ -74,6 +73,11 @@ fn item(rid: i64, id: &str, title: &str, state: &str) -> ItemRow {
     }
 }
 
+/// The group an item's labels name: the blocked bug alone is in one.
+fn group_of(rid: i64) -> Option<String> {
+    (rid == 7).then(|| "loaves".to_string())
+}
+
 fn items() -> Vec<ItemRow> {
     let mut claimed = item(2, "T2", "Second member being built", "open");
     claimed.claim_branch = Some("audit/t2-1".into());
@@ -87,7 +91,6 @@ fn items() -> Vec<ItemRow> {
     let mut blocked = item(7, "B1", "Loaves vanish after a restock", "open");
     blocked.wait_on = Some("item".into());
     blocked.wait_ref = Some("Q1".into());
-    blocked.group_name = Some("loaves".into());
     let plan = item(8, "A1", "Loaves stay put", "open");
     let mut out = vec![
         item(1, "T1", "First member, done", "done"),
@@ -203,7 +206,7 @@ impl Fixture {
             state: i.state.clone(),
             word: b.word(i),
             priority: "normal".into(),
-            group: i.group_name.clone(),
+            group: group_of(i.rid),
             turn: i.turn.clone(),
             turn_note: i.turn_note.clone(),
             claim_branch: i.claim_branch.clone(),
@@ -348,13 +351,13 @@ impl Source for Fixture {
             "todo" => self.rows(|_, i| i.state == "open" && i.turn.as_deref() == Some("user")),
             "questions" => self.rows(|b, i| b.kind(i) == Kind::Decision && i.state == "open"),
             "wip" => self.rows(|_, i| i.claim_branch.is_some()),
-            "groups" => self.rows(|_, i| i.group_name.is_some()),
+            "groups" => self.rows(|_, i| group_of(i.rid).is_some()),
             _ => Vec::new(),
         })
     }
 
     fn group(&self, _: &str, name: &str) -> Result<Vec<Row>> {
-        Ok(self.rows(|_, i| i.group_name.as_deref() == Some(name)))
+        Ok(self.rows(|_, i| group_of(i.rid).as_deref() == Some(name)))
     }
 
     fn derived(&self, _: &str) -> Result<Vec<Derived>> {

@@ -3,7 +3,7 @@
 //! The cursor is the last event `seq` written. Writes commit one at a time (`Tx::begin`), so no event
 //! below the cursor becomes visible after a page is read. An item a write changes without an event of
 //! its own links to or waits on one with an event in that write, so the items after a cursor are those
-//! with an event and their neighbours. Every project is sent, since setting a key logs no event.
+//! with an event and their neighbours. Every project is sent, since a project write logs no event.
 
 use std::collections::HashMap;
 
@@ -15,12 +15,11 @@ use sea_orm::{
 };
 use serde::Deserialize;
 
-use docket_core::dump::{DumpPage, EventDump, ItemDump, ProjectDump};
+use docket_core::dump::{Dependency, DumpPage, EventDump, ItemDump, ProjectDump};
 use docket_core::pyjson;
 
 use crate::entities::{item, project};
 use crate::reads::public::{Failure, internal, sql};
-use crate::store::to_item;
 
 #[derive(Deserialize)]
 pub struct Since {
@@ -32,7 +31,10 @@ pub struct Since {
 const CHANGED: &str = "SELECT rid FROM events WHERE seq > ? AND seq <= ? AND rid IS NOT NULL \
      UNION SELECT l.rid FROM links l JOIN events e ON l.to_rid = e.rid \
        WHERE e.seq > ? AND e.seq <= ? AND l.kind IN ('related', 'origin') \
-     UNION SELECT i.rid FROM items i JOIN events e ON i.wait_item = e.rid OR i.parent_rid = e.rid \
+     UNION SELECT i.rid FROM items i JOIN events e ON i.parent_rid = e.rid \
+       WHERE e.seq > ? AND e.seq <= ? \
+     UNION SELECT d.rid FROM dependencies d JOIN items o ON o.rid = d.on_rid \
+       JOIN events e ON e.rid = o.rid OR e.rid = o.superseded_by \
        WHERE e.seq > ? AND e.seq <= ?";
 
 #[derive(FromQueryResult)]
@@ -69,7 +71,7 @@ impl Scope {
             return ("SELECT rid FROM items".to_string(), vec![]);
         }
         let bounds = [self.since, self.cursor];
-        let values = bounds.iter().cycle().take(6).map(|v| (*v).into()).collect();
+        let values = bounds.iter().cycle().take(8).map(|v| (*v).into()).collect();
         (CHANGED.to_string(), values)
     }
 }
@@ -129,9 +131,7 @@ async fn projects(tx: &DatabaseTransaction) -> Result<Vec<ProjectDump>, DbErr> {
             .publications;
         out.push(ProjectDump {
             slug: p.slug,
-            keys: p.keys,
             remotes: p.remotes,
-            themes: p.themes,
             cite_roots: p.cite_roots,
             repos: p.repos,
             fleet_repo: p.fleet_repo,
@@ -162,24 +162,39 @@ async fn items(tx: &DatabaseTransaction, scope: &Scope) -> Result<Vec<ItemDump>,
     let rows = tx.query_all_raw(sql(&text, values.clone())).await?;
     let mut links = links(tx, &rids, values.clone()).await?;
     let mut labels = labels(tx, &rids, values.clone()).await?;
-    let mut depends = depends(tx, &rids, values).await?;
+    let mut depends = depends(tx, &rids, values.clone()).await?;
+    let mut attempts = docket_migration::assignments::of_items(tx, &rids, values).await?;
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
         let superseded: Option<String> = row.try_get("", "superseded_id")?;
         let release: Option<String> = row.try_get("", "release_name")?;
         let area: Option<String> = row.try_get("", "area_name")?;
         let parent: Option<String> = row.try_get("", "parent_id")?;
-        let stored = to_item(item::Model::from_query_result(&row, "")?);
-        let (related, origin) = links.remove(&stored.rid).unwrap_or_default();
-        let on = depends.remove(&stored.rid);
+        let r = item::Model::from_query_result(&row, "")?;
+        let (related, origin) = links.remove(&r.rid).unwrap_or_default();
         out.push(ItemDump {
-            depends: on,
-            labels: labels.remove(&stored.rid),
+            depends: depends.remove(&r.rid),
+            labels: labels.remove(&r.rid),
+            assignments: attempts.remove(&r.rid),
+            origin: (!origin.is_empty()).then_some(origin),
+            project: r.project,
+            id: r.id,
+            title: r.title,
+            state: r.state,
+            decision: r.decision,
+            decided_at: r.decided_at,
+            resolution: r.resolution,
+            superseded_by: superseded,
+            complexity: r.complexity,
             release,
             area,
+            item_type: r.item_type,
+            priority: r.priority,
+            related,
             parent,
-            origin: (!origin.is_empty()).then_some(origin),
-            ..item_dump(stored, superseded, related)
+            opened_at: r.opened_at,
+            updated_at: r.updated_at,
+            body: r.body,
         });
     }
     Ok(out)
@@ -229,71 +244,26 @@ async fn labels(
     Ok(out)
 }
 
-/// `{rid: ids depended on}` for the items of a scope, oldest first.
+/// `{rid: what it depends on}` for the items of a scope, oldest first.
 async fn depends(
     tx: &DatabaseTransaction,
     rids: &str,
     values: Vec<Value>,
-) -> Result<HashMap<i64, Vec<String>>, DbErr> {
+) -> Result<HashMap<i64, Vec<Dependency>>, DbErr> {
     let text = format!(
-        "SELECT d.rid, t.id FROM dependencies d JOIN items t ON t.rid = d.on_rid \
-         WHERE d.rid IN ({rids}) ORDER BY d.rid, d.created_at, d.on_rid"
+        "SELECT d.rid, t.id, d.created_at FROM dependencies d JOIN items t ON t.rid = d.on_rid \
+         WHERE d.rid IN ({rids}) ORDER BY d.rid, d.created_at, t.key, t.num"
     );
-    let mut out: HashMap<i64, Vec<String>> = HashMap::new();
+    let mut out: HashMap<i64, Vec<Dependency>> = HashMap::new();
     for r in tx.query_all_raw(sql(&text, values)).await? {
         out.entry(r.try_get_by_index(0)?)
             .or_default()
-            .push(r.try_get_by_index(1)?);
+            .push(Dependency {
+                on: r.try_get_by_index(1)?,
+                created_at: r.try_get_by_index(2)?,
+            });
     }
     Ok(out)
-}
-
-fn item_dump(
-    r: docket_core::item::Item,
-    superseded_by: Option<String>,
-    related: Vec<String>,
-) -> ItemDump {
-    ItemDump {
-        project: r.project,
-        id: r.id,
-        title: r.title,
-        state: r.state,
-        turn: r.turn,
-        turn_note: r.turn_note,
-        asked_at: r.asked_at,
-        claim_branch: r.claim_branch,
-        claim_host: r.claim_host,
-        claim_since: r.claim_since,
-        claim_runner: r.claim_runner,
-        claim_job: r.claim_job,
-        claim_on: r.claim_on,
-        wait_on: r.wait_on,
-        wait_ref: r.wait_ref,
-        wait_since: r.wait_since,
-        decision: r.decision,
-        decided_at: r.decided_at,
-        resolution: r.resolution,
-        superseded_by,
-        scope: r.scope,
-        complexity: r.complexity,
-        group: r.group_name,
-        theme: r.theme,
-        release: None,
-        area: None,
-        rank: r.rank,
-        item_type: r.item_type.as_str().to_string(),
-        priority: r.priority,
-        tags: r.tags,
-        related,
-        parent: None,
-        origin: None,
-        opened: Vec::new(),
-        depends: None,
-        labels: None,
-        opened_at: r.opened_at,
-        updated_at: r.updated_at,
-        body: r.body,
-    }
 }
 
 async fn events(tx: &DatabaseTransaction, scope: &Scope) -> Result<Vec<EventDump>, DbErr> {

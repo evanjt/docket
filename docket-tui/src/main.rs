@@ -17,7 +17,7 @@ fn project_arg() -> Option<String> {
 
 fn main() -> ExitCode {
     match Config::load() {
-        Ok(config) => docket_tui::run::main(config, project_arg(), "docket-tui", None),
+        Ok(config) => docket_tui::run::main(config, project_arg(), "docket-tui"),
         Err(e) => {
             eprintln!("docket-tui: {e}");
             ExitCode::from(2)

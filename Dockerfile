@@ -7,7 +7,7 @@
 # Cargo.toml is copied, or cargo refuses to load the workspace.
 FROM rust:1.98-alpine AS cacher
 WORKDIR /build
-# musl-dev and gcc are for the bundled sqlite, which the import reads, and for ring, which rustls pulls in.
+# musl-dev and gcc are for ring, which rustls pulls in.
 RUN apk --no-cache upgrade && \
     apk add --no-cache musl-dev gcc make perl
 COPY Cargo.toml Cargo.lock ./

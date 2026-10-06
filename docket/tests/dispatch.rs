@@ -15,22 +15,22 @@ use std::process::{Command, Output};
 use common::{Server, serve};
 
 const SEED: &str = r#"
-INSERT INTO projects (slug, keys, skills, created_at, updated_at) VALUES ('o/p',
-  '[{"key":"T","kind":"work"},{"key":"A","kind":"audit"},{"key":"Q","kind":"decision"}]',
+INSERT INTO projects (slug, skills, created_at, updated_at) VALUES ('o/p',
   '{"models":"low=claude:small medium=codex:middle high=claude:large:high audit=codex:middle:high"}',
   'c', 'u');
-INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, complexity, opened_at, updated_at) VALUES
-  (1, 'o/p', 'T', 1, 'Write one', 'open', 'agent', '[]', '', 'low', '2026-01-01T00:00:00Z', 'u'),
-  (2, 'o/p', 'T', 2, 'Write two', 'open', 'agent', '[]', '', 'low', '2026-01-01T00:00:00Z', 'u'),
-  (3, 'o/p', 'T', 3, 'Write three', 'open', 'agent', '[]', '', 'high', '2026-01-01T00:00:00Z', 'u'),
-  (4, 'o/p', 'A', 1, 'A plan', 'open', 'agent', '[]', '', NULL, '2026-01-01T00:00:00Z', 'u'),
-  (5, 'o/p', 'T', 4, 'Write four', 'open', 'agent', '[]', '', 'medium', '2026-01-01T00:00:00Z', 'u'),
-  (6, 'o/p', 'T', 5, 'Write five', 'open', 'agent', '[]', '', 'medium', '2026-01-01T00:00:00Z', 'u'),
-  (7, 'o/p', 'T', 6, 'Write six', 'open', 'agent', '[]', '', 'medium', '2026-01-01T00:00:00Z', 'u'),
-  (8, 'o/p', 'A', 2, 'A finished plan', 'open', 'agent', '[]', '', NULL, '2026-01-01T00:00:00Z', 'u'),
-  (9, 'o/p', 'T', 7, 'Written', 'open', 'agent', '[]', '', 'low', '2026-01-01T00:00:00Z', 'u');
-UPDATE items SET parent_rid = 8, state = 'done', turn = NULL, resolution = 'abc1234' WHERE rid = 9;
-UPDATE items SET group_name = 'streams' WHERE rid IN (1, 2);
+INSERT INTO items (rid, project, key, num, title, state, body, complexity, opened_at, updated_at) VALUES
+  (1, 'o/p', 'T', 1, 'Write one', 'open', '', 'low', '2026-01-01T00:00:00Z', 'u'),
+  (2, 'o/p', 'T', 2, 'Write two', 'open', '', 'low', '2026-01-01T00:00:00Z', 'u'),
+  (3, 'o/p', 'T', 3, 'Write three', 'open', '', 'high', '2026-01-01T00:00:00Z', 'u'),
+  (4, 'o/p', 'A', 1, 'A plan', 'open', '', NULL, '2026-01-01T00:00:00Z', 'u'),
+  (5, 'o/p', 'T', 4, 'Write four', 'open', '', 'medium', '2026-01-01T00:00:00Z', 'u'),
+  (6, 'o/p', 'T', 5, 'Write five', 'open', '', 'medium', '2026-01-01T00:00:00Z', 'u'),
+  (7, 'o/p', 'T', 6, 'Write six', 'open', '', 'medium', '2026-01-01T00:00:00Z', 'u'),
+  (8, 'o/p', 'A', 2, 'A finished plan', 'open', '', NULL, '2026-01-01T00:00:00Z', 'u'),
+  (9, 'o/p', 'T', 7, 'Written', 'open', '', 'low', '2026-01-01T00:00:00Z', 'u');
+UPDATE items SET parent_rid = 8, state = 'done', resolution = 'abc1234' WHERE rid = 9;
+INSERT INTO labels (id, project, name) VALUES (1, 'o/p', 'group:streams');
+INSERT INTO item_labels (rid, label_id) VALUES (1, 1), (2, 1);
 UPDATE items SET type = 'plan' WHERE key = 'A';
 "#;
 

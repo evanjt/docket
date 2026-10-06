@@ -142,11 +142,12 @@ pub async fn deps(
         }
         out.insert(tie.into(), json!(shaped(&db, &project, found).await?));
     }
-    if let Some(g) = &r.group_name {
+    let others = crate::verbs::labels::grouped_with(&db, &q.project, r.rid).await?;
+    if !others.is_empty() {
         let found = rows_with(
             &db,
-            "SELECT * FROM items WHERE project=? AND group_name=? AND rid<>? ORDER BY state, rid",
-            vec![q.project.clone().into(), g.clone().into(), r.rid.into()],
+            "SELECT * FROM items WHERE rid = ANY(?) ORDER BY state, rid",
+            vec![others.into()],
             &[],
         )
         .await?;

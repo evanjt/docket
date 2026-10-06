@@ -6,14 +6,14 @@ use sea_orm::DatabaseConnection;
 use serde_json::Value;
 
 use docket_core::api::{Common, ProjectRequest, ProjectResolved, Reindexed};
-use docket_core::project::{default_keys, matches};
+use docket_core::project::matches;
 
 use crate::auth::Caller;
 use crate::store::{Tx, column, json, scalar};
 use crate::verbs::Failure;
 
 /// The project a checkout belongs to: matched by its remote's slug, a shared remote or its directory
-/// name, else created with the default keys. Its remotes are recorded on the project either way.
+/// name, else created. Its remotes are recorded on the project either way.
 ///
 /// # Errors
 /// 409 when the checkout could be several projects, or none is found and creating is not asked.
@@ -90,10 +90,9 @@ fn sorted_unique(urls: impl IntoIterator<Item = String>) -> Value {
 
 async fn create(tx: &mut Tx, slug: &str, remotes: &[String]) -> Result<(), Failure> {
     tx.execute(
-        "INSERT INTO projects (slug, keys, remotes, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO projects (slug, remotes, created_at, updated_at) VALUES (?, ?, ?, ?)",
         vec![
             slug.into(),
-            json(default_keys()),
             json(sorted_unique(remotes.iter().cloned())),
             tx.now.clone().into(),
             tx.now.clone().into(),

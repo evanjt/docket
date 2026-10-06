@@ -3,7 +3,6 @@
 use std::sync::LazyLock;
 
 use regex::Regex;
-use serde_json::{Value, json};
 
 use crate::item::Refused;
 use crate::word::ItemType;
@@ -54,24 +53,6 @@ pub fn require_fileable(key: &str) -> Result<ItemType, Refused> {
             keys.join(", ")
         ))
     })
-}
-
-/// The keys a new project opens with: one per item type, as docket fixes them.
-#[must_use]
-pub fn default_keys() -> Value {
-    Value::Array(
-        ItemType::ALL
-            .into_iter()
-            .map(|t| {
-                let turn = if t == ItemType::Question {
-                    "user"
-                } else {
-                    "agent"
-                };
-                json!({"key": t.key(), "kind": t.kind(), "meaning": t.meaning(), "turn": turn})
-            })
-            .collect(),
-    )
 }
 
 #[cfg(test)]

@@ -51,18 +51,6 @@ impl ItemType {
         }
     }
 
-    /// What the key is for, as a new project's key list states it.
-    #[must_use]
-    pub fn meaning(self) -> &'static str {
-        match self {
-            ItemType::Task => "tasks",
-            ItemType::Bug => "bugs",
-            ItemType::Question => "questions, a decision not a commit",
-            ItemType::Investigation => "investigations, measured before decided",
-            ItemType::Plan => "plans, checked against the tree once all they opened is closed",
-        }
-    }
-
     /// The kind whose rules the type's items follow.
     #[must_use]
     pub fn kind(self) -> Kind {

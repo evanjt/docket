@@ -40,11 +40,11 @@ pub fn run(ctx: &mut Ctx, cmd: Option<&Cmd>) -> Result<i32> {
     match cmd {
         Cmd::Status => status::status(ctx),
         Cmd::Next(q) => lists::next(ctx, q),
-        Cmd::Complex { n, theme } => {
+        Cmd::Complex { n, label } => {
             let q = Queue {
                 n: *n,
                 complexity: Some("high".into()),
-                theme: theme.clone(),
+                label: label.clone(),
                 ..Queue::default()
             };
             lists::next(ctx, &q)
@@ -52,7 +52,7 @@ pub fn run(ctx: &mut Ctx, cmd: Option<&Cmd>) -> Result<i32> {
         Cmd::Todo(q) => lists::todo(ctx, q),
         Cmd::Wip { host } => lists::wip(ctx, host.as_ref()),
         Cmd::Waiting { on } => lists::waiting(ctx, on.as_ref()),
-        Cmd::Questions { theme } => lists::questions(ctx, theme.as_ref()),
+        Cmd::Questions { label } => lists::questions(ctx, label.as_ref()),
         Cmd::Research => lists::research(ctx),
         Cmd::Derived { n } => lists::derived(ctx, *n),
         Cmd::Done(r) => lists::recent(ctx, r, "done"),
@@ -68,8 +68,8 @@ pub fn run(ctx: &mut Ctx, cmd: Option<&Cmd>) -> Result<i32> {
             state,
             n,
             raw,
-            theme,
-            without_theme,
+            label,
+            without_label,
         } => lists::search(
             ctx,
             words,
@@ -77,8 +77,8 @@ pub fn run(ctx: &mut Ctx, cmd: Option<&Cmd>) -> Result<i32> {
             state,
             *n,
             *raw,
-            theme.as_ref(),
-            without_theme.as_ref(),
+            label.as_ref(),
+            without_label.as_ref(),
         ),
         Cmd::Similar { id, n, state } => lists::similar(ctx, id, *n, state),
         Cmd::Deps { id } => show::deps(ctx, id),
@@ -87,14 +87,14 @@ pub fn run(ctx: &mut Ctx, cmd: Option<&Cmd>) -> Result<i32> {
         Cmd::Audit {
             id,
             group,
-            theme,
+            label,
             area,
         } => audit::audit(
             ctx,
             &audit::Target {
                 id: id.as_ref(),
                 group: group.as_ref(),
-                theme: theme.as_ref(),
+                label: label.as_ref(),
                 area: area.as_ref(),
             },
         ),

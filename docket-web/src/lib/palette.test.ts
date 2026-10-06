@@ -3,7 +3,7 @@ import { findItems, score } from './palette';
 import type { GraphNode } from './types';
 
 const n = (id: string, title: string, word = 'ready'): GraphNode => ({
-  id, title, word, key: 'T', kind: 'work', state: 'open', theme: null,
+  id, title, word, key: 'T', kind: 'work', state: 'open',
 });
 
 describe('score', () => {

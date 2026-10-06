@@ -3,12 +3,13 @@
 use sea_orm::{ConnectionTrait, DbErr};
 
 use docket_core::api::{Brief, Cite, ItemView};
+use docket_core::assignment::HeldFields;
 use docket_core::item::Item;
 use docket_core::word::Kind;
 
 use crate::reads::public::{Members, word_of};
 use crate::store::{column, id_of, sql};
-use crate::verbs::graph::{member_count, package_progress};
+use crate::verbs::graph::{member_count, package_progress, wait_of};
 
 pub fn brief(row: &Item) -> Brief {
     Brief {
@@ -51,6 +52,13 @@ pub async fn item_view<C: ConnectionTrait>(c: &C, row: &Item) -> Result<ItemView
         None => None,
     };
     let area = crate::verbs::areas::name_of(c, row.area_id).await?;
+    let wait = wait_of(c, row.rid).await?;
+    let labels: Vec<String> = crate::verbs::labels::carried(c, row.rid)
+        .await?
+        .into_iter()
+        .map(|l| l.name)
+        .collect();
+    let held = HeldFields::of(&row.state, row.held.as_ref());
     Ok(ItemView {
         project: row.project.clone(),
         key: row.key.clone(),
@@ -58,47 +66,31 @@ pub async fn item_view<C: ConnectionTrait>(c: &C, row: &Item) -> Result<ItemView
         id: row.id.clone(),
         title: row.title.clone(),
         state: row.state.clone(),
-        turn: row.turn.clone(),
-        turn_note: row.turn_note.clone(),
-        asked_at: row.asked_at.clone(),
-        claim_branch: row.claim_branch.clone(),
-        claim_host: row.claim_host.clone(),
-        claim_since: row.claim_since.clone(),
-        claim_runner: row.claim_runner.clone(),
-        claim_job: row.claim_job.clone(),
-        claim_on: row.claim_on.clone(),
-        wait_on: row.wait_on.clone(),
-        wait_ref: row.wait_ref.clone(),
-        wait_since: row.wait_since.clone(),
+        turn: held.turn,
+        turn_note: held.turn_note,
+        asked_at: held.asked_at,
+        claim_branch: held.claim_branch,
+        claim_host: held.claim_host,
+        claim_since: held.claim_since,
+        claim_runner: held.claim_runner,
+        claim_job: held.claim_job,
+        claim_on: held.claim_on,
+        wait_on: wait.as_ref().map(|w| w.on.to_string()),
+        wait_ref: wait.as_ref().map(|w| w.id.clone()),
+        wait_since: wait.as_ref().map(|w| w.since.clone()),
         decision: row.decision.clone(),
         decided_at: row.decided_at.clone(),
         resolution: row.resolution.clone(),
-        scope: row.scope.clone(),
         complexity: row.complexity.clone(),
-        theme: row.theme.clone(),
         release,
         area,
-        rank: row.rank,
-        tags: row.tags.clone(),
-        labels: crate::verbs::labels::carried(c, row.rid)
-            .await?
-            .into_iter()
-            .map(|l| l.name)
-            .collect(),
+        group: docket_core::label::group_of(&labels).map(str::to_string),
+        labels,
         body: row.body.clone(),
-        conflict: row.conflict,
+        conflict: 0,
         opened_at: row.opened_at.clone(),
         updated_at: row.updated_at.clone(),
-        group: row.group_name.clone(),
-        word: word_of(
-            &row.state,
-            row.claim_branch.as_deref(),
-            row.wait_on.as_deref(),
-            row.turn.as_deref(),
-            kind,
-            members,
-        )
-        .to_string(),
+        word: word_of(&row.state, row.held.as_ref(), wait.is_some(), kind, members).to_string(),
         priority: row.priority.clone(),
         item_type: row.item_type.as_str().to_string(),
         superseded_by,

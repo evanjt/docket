@@ -8,6 +8,7 @@ use regex::Regex;
 use serde_json::Value;
 
 use docket_core::label::{self, Label};
+use docket_core::word::{Kind, kind_of_type};
 
 use crate::cmd::show::progress_line;
 use crate::ctx::{Ctx, id};
@@ -159,6 +160,16 @@ pub fn closed_states(
     out
 }
 
+/// How `closed_states` reads a stored row: `work` for a task or a bug, whose resolution names the
+/// commits that closed it, `other` for any other type.
+#[must_use]
+pub fn closed_kind(row: &Value) -> &'static str {
+    match kind_of_type(row["item_type"].as_str().unwrap_or_default()) {
+        Kind::Work => "work",
+        _ => "other",
+    }
+}
+
 static CLOSE_SUBJECT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^Close ([A-Za-z]+\d+)\b").unwrap());
 
@@ -218,18 +229,18 @@ fn repo_dirs(ctx: &Ctx, slug: &str, project: &Value) -> Vec<PathBuf> {
 pub struct Target<'a> {
     pub id: Option<&'a String>,
     pub group: Option<&'a String>,
-    pub theme: Option<&'a String>,
+    pub label: Option<&'a String>,
     pub area: Option<&'a String>,
 }
 
 /// # Errors
-/// No id, group, theme or area is named, the project cannot be resolved, or the id is unknown.
+/// No id, group, label or area is named, the project cannot be resolved, or the id is unknown.
 pub fn audit(ctx: &mut Ctx, t: &Target) -> Result<i32> {
     let slug = ctx.project()?;
     let given = |v: Option<&String>| v.filter(|s| !s.is_empty()).cloned();
     let item = match given(t.id) {
         Some(x)
-            if given(t.group).is_none() && given(t.theme).is_none() && given(t.area).is_none() =>
+            if given(t.group).is_none() && given(t.label).is_none() && given(t.area).is_none() =>
         {
             Some(id(&x)?)
         }
@@ -239,7 +250,7 @@ pub fn audit(ctx: &mut Ctx, t: &Target) -> Result<i32> {
         "/audit",
         &[
             ("group", given(t.group)),
-            ("theme", given(t.theme)),
+            ("label", given(t.label)),
             ("area", given(t.area)),
             ("id", item),
         ],
@@ -289,8 +300,8 @@ fn heading(a: &Value, t: &Target) -> String {
     if let Some(g) = t.group.filter(|g| !g.is_empty()) {
         return format!("Group {g}");
     }
-    if let Some(th) = t.theme.filter(|th| !th.is_empty()) {
-        return format!("Theme {th}");
+    if let Some(l) = t.label.filter(|l| !l.is_empty()) {
+        return format!("Label {l}");
     }
     format!(
         "{}  {}",
@@ -1061,25 +1072,13 @@ fn closed_off_integration(
         "/items",
         &[("filter", filter), ("range", "[0,99999]".to_string())],
     )?;
-    let other: Vec<String> = project["keys"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|k| k["kind"] != "work")
-        .filter_map(|k| k["key"].as_str().map(str::to_string))
-        .collect();
     let done: Vec<Value> = rows
         .as_array()
         .into_iter()
         .flatten()
         .map(|r| {
             let mut r = r.clone();
-            let key = r["key"].as_str().unwrap_or_default();
-            r["kind"] = Value::from(if other.iter().any(|k| k == key) {
-                "other"
-            } else {
-                "work"
-            });
+            r["kind"] = Value::from(closed_kind(&r));
             r
         })
         .collect();

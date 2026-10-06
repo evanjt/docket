@@ -1,4 +1,5 @@
 use super::*;
+use crate::assignment::{Ask, Claim, Held};
 use crate::word::kind_of_type;
 
 fn ctx() -> Ctx {
@@ -20,32 +21,41 @@ fn open(id: &str) -> Item {
         id: id.into(),
         title: "x".into(),
         state: "open".into(),
-        turn: Some("agent".into()),
         ..Item::default()
     }
 }
 
-fn claimed(id: &str) -> Item {
+fn claimed_on(id: &str, branch: &str, host: &str) -> Item {
     let mut row = open(id);
-    row.apply(&[
-        Field::ClaimBranch(Some("audit/t-1".into())),
-        Field::ClaimHost(Some("testbox".into())),
-        Field::ClaimSince(Some("2026-09-30T00:00:00Z".into())),
-    ]);
+    row.held = Some(Held::Claim(Claim {
+        branch: branch.into(),
+        host: host.into(),
+        since: "2026-09-30T00:00:00Z".into(),
+        ..Claim::default()
+    }));
     row
 }
 
+fn claimed(id: &str) -> Item {
+    claimed_on(id, "audit/t-1", "testbox")
+}
+
 fn held_elsewhere(id: &str) -> Item {
-    let mut row = claimed(id);
-    row.claim_branch = Some("audit/other-2".into());
-    row.claim_host = Some("otherbox".into());
+    claimed_on(id, "audit/other-2", "otherbox")
+}
+
+fn asked(id: &str, note: Option<&str>) -> Item {
+    let mut row = open(id);
+    row.held = Some(Held::Ask(Ask {
+        since: "t".into(),
+        note: note.map(str::to_string),
+    }));
     row
 }
 
 fn done(id: &str) -> Item {
     let mut row = open(id);
     row.state = "done".into();
-    row.turn = None;
     row.resolution = Some("abc1234".into());
     row
 }
@@ -95,68 +105,60 @@ fn test_require_open_names_the_state_and_resolution() {
 }
 
 #[test]
-fn test_start_sets_the_claim() {
-    assert_eq!(
-        start(&open("B1"), &ctx()).unwrap(),
-        vec![
-            Field::ClaimBranch(Some("audit/t-1".into())),
-            Field::ClaimHost(Some("testbox".into())),
-            Field::ClaimSince(Some("2026-10-01T12:00:00Z".into())),
-        ]
-    );
+fn test_start_takes_an_open_unclaimed_item() {
+    assert!(start(&open("B1"), &ctx(), None).is_ok());
+}
+
+#[test]
+fn test_the_turn_is_the_owners_while_an_ask_is_open_and_none_once_closed() {
+    assert_eq!(open("B1").turn(), Some("agent"));
+    assert_eq!(claimed("B1").turn(), Some("agent"));
+    assert_eq!(asked("B1", None).turn(), Some("user"));
+    assert_eq!(done("B1").turn(), None);
+    assert_eq!(claimed("B1").claim_branch(), Some("audit/t-1"));
+    assert_eq!(asked("B1", None).claim_branch(), None);
 }
 
 #[test]
 fn test_start_refusals() {
     assert_eq!(
-        refusal(start(&claimed("B1"), &ctx())),
+        refusal(start(&claimed("B1"), &ctx(), None)),
         "B1 is already yours, claimed 2026-09-30T00:00:00Z."
     );
     assert_eq!(
-        refusal(start(&held_elsewhere("B1"), &ctx())),
+        refusal(start(&held_elsewhere("B1"), &ctx(), None)),
         "B1 is held by audit/other-2 on otherbox since 2026-09-30T00:00:00Z. Pick another, or --force if that claim is abandoned."
     );
     let forced = Ctx {
         force: true,
         ..ctx()
     };
-    assert!(start(&held_elsewhere("B1"), &forced).is_ok());
-    let mut row = open("B1");
-    row.scope = Some("inbox".into());
-    assert!(start(&row, &ctx()).is_ok());
-    let mut row = open("B1");
-    row.wait_on = Some("item".into());
-    row.wait_ref = Some("Q1".into());
-    row.wait_since = Some("t".into());
+    assert!(start(&held_elsewhere("B1"), &forced, None).is_ok());
+    let mut wait = Wait {
+        on: "item",
+        item: 7,
+        id: "Q1".into(),
+        since: "t".into(),
+    };
     assert_eq!(
-        refusal(start(&row, &ctx())),
+        refusal(start(&open("B1"), &ctx(), Some(&wait))),
         "B1 is waiting on item Q1 since t. resume it first."
     );
-    row.wait_on = Some("condition".into());
-    row.wait_ref = Some("the fleet is quiet".into());
+    wait.on = "condition";
+    wait.id = "T4".into();
     assert_eq!(
-        refusal(start(&row, &ctx())),
-        "B1 is waiting on the fleet is quiet since t. resume it first."
+        refusal(start(&open("B1"), &ctx(), Some(&wait))),
+        "B1 is waiting on T4, a task on the owner's turn, since t. resume it first."
     );
-    let mut row = open("Q1");
-    row.turn = Some("user".into());
-    row.asked_at = Some("t".into());
     assert_eq!(
-        refusal(start(&row, &ctx())),
+        refusal(start(&asked("Q1", None), &ctx(), None)),
         "Q1 is the owner's turn: asked t. reply to it first if you are taking it back."
     );
-    row.turn_note = Some("needs the handset".into());
     assert_eq!(
-        refusal(start(&row, &ctx())),
+        refusal(start(&asked("Q1", Some("needs the handset")), &ctx(), None)),
         "Q1 is the owner's turn: needs the handset. reply to it first if you are taking it back."
     );
-    let mut row = open("B1");
-    row.conflict = 1;
-    assert_eq!(
-        refusal(start(&row, &ctx())),
-        "B1 carries a sync conflict in its body. resolve it first."
-    );
-    assert!(start(&done("B1"), &ctx()).is_err());
+    assert!(start(&done("B1"), &ctx(), None).is_err());
 }
 
 #[test]
@@ -177,23 +179,19 @@ fn test_a_plan_closes_with_work_open_under_it_only_while_held() {
 }
 
 #[test]
-fn test_release_clears_every_claim_column() {
-    assert_eq!(release(&claimed("B1"), &ctx()).unwrap(), unclaimed());
+fn test_release_takes_a_claim_held_here() {
+    assert!(release(&claimed("B1"), &ctx()).is_ok());
     assert_eq!(refusal(release(&open("B1"), &ctx())), "B1 is not claimed.");
     assert!(release(&held_elsewhere("B1"), &ctx()).is_err());
 }
 
 #[test]
-fn test_close_sets_done_and_clears_claim_and_wait() {
+fn test_close_sets_done() {
     let got = close(&claimed("B1"), &ctx(), Some("abc1234"), Kind::Work, &[]).unwrap();
-    let mut want = vec![
+    let want = vec![
         Field::State("done".into()),
-        Field::Turn(None),
-        Field::TurnNote(None),
         Field::Resolution(Some("abc1234".into())),
     ];
-    want.extend(unclaimed());
-    want.extend(unwaiting());
     assert_eq!(got, want);
 }
 
@@ -222,12 +220,10 @@ fn test_close_refusals() {
 }
 
 #[test]
-fn test_prioritise_writes_the_column_and_leaves_labels_alone() {
+fn test_prioritise_writes_the_priority_column_alone() {
     let mut row = open("B1");
-    row.tags = vec!["single".into(), "kites".into()];
     row.apply(&prioritise("high").unwrap());
     assert_eq!(row.priority, "high");
-    assert_eq!(row.tags, ["single", "kites"]);
     assert_eq!(
         prioritise("critical").unwrap(),
         vec![Field::Priority("critical".into())]
@@ -242,9 +238,9 @@ fn test_prioritise_writes_the_column_and_leaves_labels_alone() {
 fn test_drop_records_why_and_what_supersedes_it() {
     let got = drop(&open("B2"), &ctx(), Some("superseded by B1"), Some(1)).unwrap();
     assert_eq!(got[0], Field::State("dropped".into()));
-    assert_eq!(got[3], Field::Resolution(Some("superseded by B1".into())));
-    assert_eq!(got[4], Field::SupersededBy(Some(1)));
-    assert_eq!(got.len(), 5 + 6 + 4);
+    assert_eq!(got[1], Field::Resolution(Some("superseded by B1".into())));
+    assert_eq!(got[2], Field::SupersededBy(Some(1)));
+    assert_eq!(got.len(), 3);
     assert_eq!(
         refusal(drop(&open("B2"), &ctx(), None, None)),
         "drop needs a reason."
@@ -255,20 +251,19 @@ fn test_drop_records_why_and_what_supersedes_it() {
 #[test]
 fn test_reopen_needs_a_closed_item_and_a_reason() {
     assert_eq!(
-        reopen(&done("B1"), Some("not a duplicate"), "agent").unwrap(),
+        reopen(&done("B1"), Some("not a duplicate")).unwrap(),
         vec![
             Field::State("open".into()),
-            Field::Turn(Some("agent".into())),
             Field::Resolution(None),
             Field::SupersededBy(None),
         ]
     );
     assert_eq!(
-        refusal(reopen(&open("B1"), Some("x"), "agent")),
+        refusal(reopen(&open("B1"), Some("x"))),
         "B1 is already open."
     );
     assert_eq!(
-        refusal(reopen(&done("B1"), None, "agent")),
+        refusal(reopen(&done("B1"), None)),
         "reopen needs a reason, it is recorded."
     );
 }
@@ -276,11 +271,10 @@ fn test_reopen_needs_a_closed_item_and_a_reason() {
 #[test]
 fn test_an_item_depends_on_another_never_on_itself() {
     assert!(depend(&claimed("B1"), &ctx(), 7).is_ok());
-    let mut row = open("B1");
-    row.wait_on = Some("item".into());
-    row.wait_ref = Some("Q1".into());
-    row.wait_since = Some("t".into());
-    assert!(depend(&row, &ctx(), 7).is_ok(), "a second dependency");
+    assert!(
+        depend(&open("B1"), &ctx(), 7).is_ok(),
+        "a second dependency"
+    );
     assert_eq!(
         refusal(depend(&open("B1"), &ctx(), 1)),
         "B1 cannot depend on itself."
@@ -290,27 +284,28 @@ fn test_an_item_depends_on_another_never_on_itself() {
 }
 
 #[test]
-fn test_resume_clears_the_wait_and_hands_it_to_an_agent() {
-    let mut row = open("B1");
-    row.wait_on = Some("condition".into());
-    row.wait_ref = Some("x".into());
-    row.wait_since = Some("t".into());
-    let mut want = unwaiting();
-    want.push(Field::Turn(Some("agent".into())));
-    assert_eq!(resume(&row).unwrap(), want);
-    assert_eq!(refusal(resume(&open("B1"))), "B1 is not waiting.");
+fn test_resume_needs_a_wait() {
+    let wait = Wait {
+        on: "condition",
+        item: 7,
+        id: "T4".into(),
+        since: "t".into(),
+    };
+    assert!(resume(&open("B1"), Some(&wait)).is_ok());
+    assert_eq!(refusal(resume(&open("B1"), None)), "B1 is not waiting.");
 }
 
 #[test]
-fn test_ask_parks_with_the_owner_and_drops_the_claim() {
-    let got = ask(&claimed("B1"), &ctx(), Some("needs a run on the S22")).unwrap();
-    let mut want = vec![
-        Field::Turn(Some("user".into())),
-        Field::TurnNote(Some("needs a run on the S22".into())),
-        Field::AskedAt(Some("2026-10-01T12:00:00Z".into())),
-    ];
-    want.extend(unclaimed());
-    assert_eq!(got, want);
+fn test_ask_needs_a_note_and_an_item_held_here() {
+    assert!(ask(&claimed("B1"), &ctx(), Some("needs a run on the bench")).is_ok());
+    assert!(
+        ask(
+            &held_elsewhere("B1"),
+            &ctx(),
+            Some("needs a run on the bench")
+        )
+        .is_err()
+    );
     assert_eq!(
         refusal(ask(&open("B1"), &ctx(), None)),
         "ask needs a note saying what is needed."
@@ -320,15 +315,8 @@ fn test_ask_parks_with_the_owner_and_drops_the_claim() {
 
 #[test]
 fn test_reply_needs_the_owners_turn() {
-    let mut row = open("B1");
-    row.turn = Some("user".into());
-    assert_eq!(
-        reply(&row, Some("crashes on open")).unwrap(),
-        vec![
-            Field::Turn(Some("agent".into())),
-            Field::TurnNote(Some("crashes on open".into())),
-        ]
-    );
+    let row = asked("B1", Some("which way"));
+    assert!(reply(&row, Some("crashes on open")).is_ok());
     assert_eq!(
         refusal(reply(&open("B1"), Some("nothing to reply to"))),
         "B1 is already the agent's turn."
@@ -341,17 +329,15 @@ fn test_reply_needs_the_owners_turn() {
 
 #[test]
 fn test_answer_records_the_decision() {
-    let mut row = open("Q1");
-    row.turn = Some("user".into());
+    let row = asked("Q1", None);
     let got = answer(&row, &ctx(), Some("Two"), Kind::Decision, None).unwrap();
-    assert_eq!(got[0], Field::Turn(Some("agent".into())));
-    assert_eq!(got[1], Field::TurnNote(Some("Two".into())));
-    assert_eq!(got[2], Field::Decision(Some("Two".into())));
     assert_eq!(
-        got[3],
-        Field::DecidedAt(Some("2026-10-01T12:00:00Z".into()))
+        got,
+        [
+            Field::Decision(Some("Two".into())),
+            Field::DecidedAt(Some("2026-10-01T12:00:00Z".into())),
+        ]
     );
-    assert_eq!(got[4..], unclaimed()[..]);
 }
 
 #[test]
@@ -366,7 +352,7 @@ fn test_answer_derived_carries_its_basis_and_never_replaces_the_owners() {
     )
     .unwrap();
     assert_eq!(
-        got[2],
+        got[0],
         Field::Decision(Some(
             "Derived from CID3, one owner per cache: Two, the read path is hot".into()
         ))
@@ -424,8 +410,6 @@ fn test_apply_reads_back_as_the_row_after_the_update() {
     let mut row = claimed("B1");
     row.apply(&close(&row, &ctx(), Some("abc1234"), Kind::Work, &[]).unwrap());
     assert_eq!(row.state, "done");
-    assert_eq!(row.turn, None);
-    assert_eq!(row.claim_branch, None);
     assert_eq!(row.resolution.as_deref(), Some("abc1234"));
 }
 

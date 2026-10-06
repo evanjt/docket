@@ -1,6 +1,6 @@
-//! `docket audit`: where a plan, story, package, idea, group, theme or area stands.
+//! `docket audit`: where a plan, story, package, idea, group, label or area stands.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use axum::Json;
 use axum::extract::{Query, State};
@@ -8,7 +8,10 @@ use sea_orm::DatabaseConnection;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
+use docket_core::assignment::Held;
+use docket_core::label;
 use docket_core::member::{Tie, descendants};
+use docket_core::stall::Wait;
 use docket_core::text::{principle_refs, principles};
 use docket_core::touch::declared_files;
 use docket_core::word::Kind;
@@ -18,8 +21,8 @@ use crate::reads::public::{Members, member_counts, word_of};
 use crate::reads::rows::{marks, project_model, rows};
 use crate::store;
 use crate::verbs::Failure;
-use crate::verbs::areas;
-use crate::verbs::graph::{package_progress, project_ties};
+use crate::verbs::graph::{package_progress, project_ties, waits};
+use crate::verbs::{areas, labels};
 use docket_core::word::kind_of_type;
 
 /// Every tie of the project, as the server's graph reads it.
@@ -54,14 +57,16 @@ pub struct AuditQuery {
     project: String,
     id: Option<String>,
     group: Option<String>,
-    theme: Option<String>,
+    /// The items carrying a label; `theme` is the name it had.
+    #[serde(alias = "theme")]
+    label: Option<String>,
     area: Option<String>,
 }
 
 /// The rows an audit reads and what it says about its target, for the client to section and print.
 ///
 /// # Errors
-/// 400 without an id, a group, a theme or an area; 404 for an unknown project, item or area.
+/// 400 without an id, a group, a label or an area; 404 for an unknown project, item or area.
 pub async fn audit(
     State(db): State<DatabaseConnection>,
     Query(q): Query<AuditQuery>,
@@ -92,18 +97,20 @@ pub async fn audit(
             vec![q.project.clone().into(), id.into()],
         )
         .await?
-    } else if let Some(g) = &q.group {
+    } else if let Some(name) = q
+        .group
+        .as_deref()
+        .map(label::of_group)
+        .or_else(|| q.label.clone())
+    {
+        let carrying: Vec<i64> = labels::carrying(&db, &q.project, &name)
+            .await?
+            .into_iter()
+            .collect();
         rows(
             &db,
-            "SELECT * FROM items WHERE project=? AND group_name=? ORDER BY state, rid",
-            vec![q.project.clone().into(), g.clone().into()],
-        )
-        .await?
-    } else if let Some(t) = &q.theme {
-        rows(
-            &db,
-            "SELECT * FROM items WHERE project=? AND lower(theme)=lower(?) ORDER BY state, rid",
-            vec![q.project.clone().into(), t.clone().into()],
+            "SELECT * FROM items WHERE rid = ANY(?) ORDER BY state, rid",
+            vec![carrying.into()],
         )
         .await?
     } else if let Some(id) = &q.id {
@@ -113,17 +120,23 @@ pub async fn audit(
         found
     } else {
         return Err(Failure::Invalid(
-            "audit takes an id, --group, --theme or --area.".into(),
+            "audit takes an id, --group, --label or --area.".into(),
         ));
     };
     let counts = member_counts(&db, &q.project).await?;
+    let rids: Vec<i64> = found.iter().map(|r| r.rid).collect();
+    let held = store::held(&db, &rids).await?;
+    let waiting = waits(&db, &q.project).await?;
     let listed: Vec<Value> = found
         .iter()
-        .map(|r| listed_row(r, counts.get(&r.rid).copied().unwrap_or_default()))
+        .map(|r| {
+            let members = counts.get(&r.rid).copied().unwrap_or_default();
+            listed_row(r, held.get(&r.rid), waiting.get(&r.rid), members)
+        })
         .collect();
     let mut out = json!({ "rows": listed, "breakdown": breakdown, "area": area });
     if let Some(t) = &target {
-        let about = about_target(&db, &q.project, t, &counts).await?;
+        let about = about_target(&db, &q.project, t, &counts, &waiting).await?;
         if let (Value::Object(o), Value::Object(a)) = (&mut out, about) {
             o.extend(a);
         }
@@ -131,20 +144,22 @@ pub async fn audit(
     Ok(Json(out))
 }
 
-/// One row as the audit lists it.
-fn listed_row(r: &item::Model, members: Members) -> Value {
+/// One row as the audit lists it, with its open assignment and what its dependencies hold it on.
+fn listed_row(
+    r: &item::Model,
+    held: Option<&Held>,
+    wait: Option<&Wait>,
+    members: Members,
+) -> Value {
     let kind = kind_of_type(&r.item_type);
+    let claim_branch = match held {
+        Some(Held::Claim(c)) => Some(c.branch.as_str()),
+        _ => None,
+    };
     json!({
         "id": r.id, "title": r.title, "state": r.state, "kind": kind.as_str(),
-        "word": word_of(
-            &r.state,
-            r.claim_branch.as_deref(),
-            r.wait_on.as_deref(),
-            r.turn.as_deref(),
-            kind,
-            members,
-        ),
-        "claim_branch": r.claim_branch, "wait_ref": r.wait_ref, "resolution": r.resolution,
+        "word": word_of(&r.state, held, wait.is_some(), kind, members),
+        "claim_branch": claim_branch, "wait_ref": wait.map(|w| &w.id), "resolution": r.resolution,
     })
 }
 
@@ -176,13 +191,14 @@ async fn about_target(
     slug: &str,
     t: &docket_core::item::Item,
     counts: &HashMap<i64, Members>,
+    waiting: &BTreeMap<i64, Wait>,
 ) -> Result<Value, Failure> {
     let kind = t.item_type.kind();
     let members = counts.get(&t.rid).copied().unwrap_or_default();
     let model = rows(db, "SELECT * FROM items WHERE rid=?", vec![t.rid.into()]).await?;
     let word = model
         .first()
-        .map(|m| listed_row(m, members)["word"].clone())
+        .map(|m| listed_row(m, t.held.as_ref(), waiting.get(&m.rid), members)["word"].clone())
         .unwrap_or_default();
     let mut served: Map<String, Value> = Map::new();
     let citing = rows(

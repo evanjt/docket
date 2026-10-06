@@ -11,7 +11,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use docket_core::fact::Model;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -899,58 +898,6 @@ fn begin(
     })
 }
 
-/// The brief a lead session starts with. It names no project: the session runs in the checkout.
-const LEAD_BRIEF: &str = "Lead this project with the lead skill. Take the lead claim, dispatch the \
-queue as the skill says, and stop when the skill says to stop.";
-
-/// Start a lead for a project: a session in the checkout itself on the branch it is on, in the job
-/// state like any job so `docket jobs` lists it and `docket job kill` stops it.
-///
-/// # Errors
-/// The checkout is not on a branch, a lead started this second is already there, or the process
-/// fails to start.
-pub fn start_lead(
-    project: &str,
-    checkout: &Path,
-    root: &Path,
-    model: &Model,
-    env: &[(&str, &str)],
-    program: &str,
-) -> Result<Started, String> {
-    if !RUNNERS.contains(&model.runner.as_str()) {
-        return Err(format!(
-            "no runner {}: one of {}",
-            model.runner,
-            RUNNERS.join(", ")
-        ));
-    }
-    let branch = git(checkout, &["branch", "--show-current"])?;
-    if branch.is_empty() {
-        return Err(format!("{} is not on a branch", checkout.display()));
-    }
-    let base = git(checkout, &["rev-parse", "HEAD"])?;
-    let started = now();
-    let name = format!("lead-{started}");
-    let dir = project_dir(root, project).join(&name);
-    if dir.exists() {
-        return Err(format!("a job {name} is already here ({})", dir.display()));
-    }
-    let meta = Meta {
-        name,
-        project: project.to_string(),
-        id: String::new(),
-        branch,
-        runner: model.runner.clone(),
-        model: model.model.clone(),
-        effort: model.effort.clone(),
-        role: "lead".into(),
-        worktree: checkout.display().to_string(),
-        started,
-        base: Some(base),
-    };
-    begin(&dir, &meta, LEAD_BRIEF, program, env, &Launch::default())
-}
-
 /// The project's provision command, run in the worktree; when it fails the worktree is removed and
 /// the error carries its output.
 fn provision(checkout: &Path, worktree: &Path, cmd: Option<&str>) -> Result<(), String> {
@@ -1232,7 +1179,8 @@ pub fn remove(dir: &Path, keep_branch: bool) -> Result<(), String> {
         ));
     }
     let worktree = Path::new(&r.worktree);
-    // A lead runs in the checkout itself, which is not the job's to remove.
+    // A lead job, which earlier versions started from the screen, ran in the checkout itself,
+    // which is not the job's to remove.
     if r.role != "lead" && worktree.is_dir() {
         let common = git(
             worktree,

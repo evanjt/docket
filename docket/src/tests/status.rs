@@ -26,13 +26,13 @@ fn test_bar_rounds_half_to_even_and_handles_nothing() {
 #[test]
 fn test_problem_lines_word_each_kind() {
     let problems = json!([
-        {"kind": "undefined_key", "key": "X", "n": 1},
+        {"kind": "foreign_keys", "n": 2},
         {"kind": "stale_wait", "id": "T3", "since": "2026-01-01T00:00:00Z", "until": "rain"},
     ]);
     assert_eq!(
         problem_lines(&problems),
         [
-            "1 item is filed under X, which the project does not define",
+            "2 foreign key violations",
             "T3 has waited since 2026-01-01T00:00:00Z until: rain",
         ]
     );

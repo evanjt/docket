@@ -13,10 +13,10 @@ use std::process::{Command, Output};
 use common::{Server, serve};
 
 const SEED: &str = r#"
-INSERT INTO projects (slug, keys, skills, created_at, updated_at) VALUES
-  ('acme/widgets', '[{"key":"T","kind":"work"},{"key":"A","kind":"audit"}]', '{"owner":"Ada Lovelace"}', 'c', 'u');
-INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, opened_at, updated_at)
-  VALUES (1, 'acme/widgets', 'T', 1, 'The proofing timer drifts after every restart', 'open', 'agent', '[]', '', 'o', 'u');
+INSERT INTO projects (slug, skills, created_at, updated_at) VALUES
+  ('acme/widgets', '{"owner":"Ada Lovelace"}', 'c', 'u');
+INSERT INTO items (rid, project, key, num, title, state, body, opened_at, updated_at)
+  VALUES (1, 'acme/widgets', 'T', 1, 'The proofing timer drifts after every restart', 'open', '', 'o', 'u');
 INSERT INTO machines (name, ssh, slots, runners, note, updated_at)
   VALUES ('alpha', 'user@203.0.113.7', 2, '["claude"]', NULL, 'u');
 "#;

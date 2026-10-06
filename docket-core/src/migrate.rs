@@ -1,32 +1,33 @@
 //! The move of a project's rows onto the core: releases as rows, dependencies, one parent plan, an
 //! origin link, areas, labels, a priority column and assignment rows. `plan` is the one place the mapping
-//! is written; it reads the rows the dump carries and returns every change with the cases that need
+//! is written; it reads the rows as they stood before the drop (`OldItem`, `OldProject`) and returns every change with the cases that need
 //! a person's eye. A case whose repair turns on an undecided rule waits on it, and nothing is
 //! written while one does.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use semver::Version;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::area::Placement;
 use crate::assignment;
-use crate::dump::{DumpPage, EventDump, ItemDump, ProjectDump};
+use crate::dump::{DumpPage, EventDump, ItemDump};
 use crate::item::Refused;
 use crate::rows::{KeySpec, Theme};
 use crate::word::{Kind, PRIORITIES, priority};
 
-/// One project's rows as the dump carries them: items with their links by id, and events.
+/// One project's rows: items with their links by id, and events.
 pub struct Rows<'a> {
-    pub project: &'a ProjectDump,
-    pub items: Vec<&'a ItemDump>,
+    pub project: &'a OldProject,
+    pub items: Vec<&'a OldItem>,
     pub events: Vec<&'a EventDump>,
 }
 
 impl<'a> Rows<'a> {
     /// The rows of each project a page carries, in the page's order.
     #[must_use]
-    pub fn of(page: &'a DumpPage) -> Vec<Rows<'a>> {
+    pub fn of(page: &'a OldPage) -> Vec<Rows<'a>> {
         page.projects
             .iter()
             .map(|project| Rows {
@@ -43,6 +44,206 @@ impl<'a> Rows<'a> {
                     .collect(),
             })
             .collect()
+    }
+}
+
+/// One item as its row stood before the drop of the columns the core replaced, with ids for every
+/// reference: the shape the earlier migrations build and the plan reads.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OldItem {
+    pub project: String,
+    pub id: String,
+    pub title: String,
+    pub state: String,
+    pub turn: Option<String>,
+    pub turn_note: Option<String>,
+    pub asked_at: Option<String>,
+    pub claim_branch: Option<String>,
+    pub claim_host: Option<String>,
+    pub claim_since: Option<String>,
+    pub claim_runner: Option<String>,
+    pub claim_job: Option<String>,
+    pub claim_on: Option<String>,
+    pub wait_on: Option<String>,
+    pub wait_ref: Option<String>,
+    pub wait_since: Option<String>,
+    pub decision: Option<String>,
+    pub decided_at: Option<String>,
+    pub resolution: Option<String>,
+    pub superseded_by: Option<String>,
+    pub scope: Option<String>,
+    pub complexity: Option<String>,
+    pub group: Option<String>,
+    pub theme: Option<String>,
+    /// The release it is in by name; none is the backlog.
+    pub release: Option<String>,
+    /// The area it is in by name.
+    pub area: Option<String>,
+    pub rank: Option<i64>,
+    /// What the item is; a file written before the column carries none, and a restore reads it from
+    /// the key.
+    #[serde(rename = "type")]
+    pub item_type: String,
+    /// A file written before the column carries none, and a restore reads it from the tags.
+    pub priority: String,
+    pub tags: Vec<String>,
+    pub related: Vec<String>,
+    /// The plan the item belongs to.
+    pub parent: Option<String>,
+    /// What spawned the item; none when nothing is recorded.
+    pub origin: Option<Vec<String>>,
+    /// The `opened` links an item file carried before parents and origins, read so an older dump
+    /// restores; never written.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub opened: Vec<String>,
+    /// What the item depends on; none when it depends on nothing.
+    pub depends: Option<Vec<String>>,
+    /// The labels it was given, never those it inherits; none when it was given none.
+    pub labels: Option<Vec<String>>,
+    pub opened_at: String,
+    pub updated_at: String,
+    pub body: String,
+}
+
+/// A project row as it stood before the drop of its keys and themes, its JSON columns decoded.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OldProject {
+    pub slug: String,
+    pub keys: Value,
+    pub remotes: Value,
+    pub themes: Value,
+    pub cite_roots: Value,
+    pub repos: Value,
+    pub fleet_repo: Option<String>,
+    pub integration_ref: Option<String>,
+    pub worktree_hint: Option<String>,
+    pub test_hint: Option<String>,
+    pub skills: Value,
+    pub created_at: String,
+    pub updated_at: String,
+    /// Every release, shipped or not, in position order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub releases: Vec<crate::release::Release>,
+    /// Every area, in position order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub areas: Vec<crate::area::Area>,
+    /// Every label, by name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<crate::label::Label>,
+    /// Every publication, newest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub publications: Vec<crate::publication::Publication>,
+}
+
+/// Every project, item and event in the shape the plan reads.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OldPage {
+    pub projects: Vec<OldProject>,
+    pub items: Vec<OldItem>,
+    pub events: Vec<EventDump>,
+}
+
+impl OldPage {
+    /// A dump page read in the shape the plan reads: each item's claim and turn from its open
+    /// assignment, and each project's keys from the types of the items filed under them. What the
+    /// drop removed reads as unset.
+    #[must_use]
+    pub fn of(page: &DumpPage) -> Self {
+        let projects = page
+            .projects
+            .iter()
+            .map(|p| {
+                let mut keys: BTreeMap<String, Kind> = BTreeMap::new();
+                for i in page.items.iter().filter(|i| i.project == p.slug) {
+                    keys.entry(key_num(&i.id).0.to_string())
+                        .or_insert_with(|| crate::word::kind_of_type(&i.item_type));
+                }
+                let keys: Vec<KeySpec> = keys
+                    .into_iter()
+                    .map(|(key, kind)| KeySpec {
+                        key,
+                        kind,
+                        meaning: None,
+                        turn: None,
+                    })
+                    .collect();
+                OldProject {
+                    slug: p.slug.clone(),
+                    keys: serde_json::to_value(keys).unwrap_or_default(),
+                    remotes: p.remotes.clone(),
+                    themes: serde_json::Value::Array(Vec::new()),
+                    cite_roots: p.cite_roots.clone(),
+                    repos: p.repos.clone(),
+                    fleet_repo: p.fleet_repo.clone(),
+                    integration_ref: p.integration_ref.clone(),
+                    worktree_hint: p.worktree_hint.clone(),
+                    test_hint: p.test_hint.clone(),
+                    skills: p.skills.clone(),
+                    created_at: p.created_at.clone(),
+                    updated_at: p.updated_at.clone(),
+                    releases: p.releases.clone(),
+                    areas: p.areas.clone(),
+                    labels: p.labels.clone(),
+                    publications: p.publications.clone(),
+                }
+            })
+            .collect();
+        OldPage {
+            projects,
+            items: page.items.iter().map(OldItem::of).collect(),
+            events: page.events.clone(),
+        }
+    }
+}
+
+impl OldItem {
+    /// A dumped item in the old shape, its claim and turn read from its open assignment.
+    #[must_use]
+    pub fn of(i: &ItemDump) -> Self {
+        let held = i
+            .assignments
+            .iter()
+            .flatten()
+            .find(|a| a.ended_at.is_none())
+            .map(|a| assignment::Held::of(a.kind, a));
+        let h = assignment::HeldFields::of(&i.state, held.as_ref());
+        OldItem {
+            project: i.project.clone(),
+            id: i.id.clone(),
+            title: i.title.clone(),
+            state: i.state.clone(),
+            turn: h.turn,
+            turn_note: h.turn_note,
+            asked_at: h.asked_at,
+            claim_branch: h.claim_branch,
+            claim_host: h.claim_host,
+            claim_since: h.claim_since,
+            claim_runner: h.claim_runner,
+            claim_job: h.claim_job,
+            claim_on: h.claim_on,
+            decision: i.decision.clone(),
+            decided_at: i.decided_at.clone(),
+            resolution: i.resolution.clone(),
+            superseded_by: i.superseded_by.clone(),
+            complexity: i.complexity.clone(),
+            release: i.release.clone(),
+            area: i.area.clone(),
+            item_type: i.item_type.clone(),
+            priority: i.priority.clone(),
+            related: i.related.clone(),
+            parent: i.parent.clone(),
+            origin: i.origin.clone(),
+            depends: i
+                .depends
+                .as_ref()
+                .map(|d| d.iter().map(|d| d.on.clone()).collect()),
+            labels: i.labels.clone(),
+            opened_at: i.opened_at.clone(),
+            updated_at: i.updated_at.clone(),
+            body: i.body.clone(),
+            ..OldItem::default()
+        }
     }
 }
 
@@ -608,8 +809,8 @@ const FIXED_KEYS: [&str; 10] = ["T", "B", "Q", "R", "I", "A", "STY", "CON", "CID
 
 struct Project<'a> {
     rules: Rules,
-    items: Vec<&'a ItemDump>,
-    by_id: BTreeMap<&'a str, &'a ItemDump>,
+    items: Vec<&'a OldItem>,
+    by_id: BTreeMap<&'a str, &'a OldItem>,
     kinds: BTreeMap<String, Kind>,
     /// The meaning of each key the project made.
     meanings: BTreeMap<String, String>,
@@ -793,7 +994,7 @@ impl<'a> Project<'a> {
     }
 
     /// An item whose theme is not a release: labelled with it, and left unplaced for `theme_places`.
-    fn theme(&mut self, i: &ItemDump, theme: &str, notes: &[Theme]) {
+    fn theme(&mut self, i: &OldItem, theme: &str, notes: &[Theme]) {
         let label = format!("area:{theme}");
         let about = notes
             .iter()
@@ -893,7 +1094,7 @@ impl<'a> Project<'a> {
         }
     }
 
-    fn labels_of(&mut self, i: &ItemDump) {
+    fn labels_of(&mut self, i: &OldItem) {
         let id = i.id.clone();
         let tier = priority(&i.tags);
         if tier != "normal" {
@@ -912,7 +1113,7 @@ impl<'a> Project<'a> {
             .cloned()
             .collect();
         if let Some(g) = &i.group {
-            labels.push(format!("group:{g}"));
+            labels.push(crate::label::of_group(g));
         }
         let kind = self.kind(&id);
         let key = key_num(&id).0;
@@ -984,7 +1185,7 @@ impl<'a> Project<'a> {
     /// else a new row after them. A name two concepts share takes the second's id.
     fn concept_areas(&mut self, existing: &[crate::area::Area]) -> BTreeMap<String, String> {
         let mut named = BTreeMap::new();
-        let concepts: Vec<&ItemDump> = self
+        let concepts: Vec<&OldItem> = self
             .items
             .iter()
             .copied()
@@ -1027,7 +1228,7 @@ impl<'a> Project<'a> {
     /// does and never passed down; an open one waits on a placement. Ideas stay labels.
     fn areas(&mut self, existing: &[crate::area::Area], events: &[&EventDump]) {
         let named = self.concept_areas(existing);
-        let concepts: Vec<&ItemDump> = self
+        let concepts: Vec<&OldItem> = self
             .items
             .iter()
             .copied()
@@ -1035,7 +1236,7 @@ impl<'a> Project<'a> {
             .collect();
         let ages = tie_ages(events);
         let placements = placements(events);
-        let mut items: Vec<&ItemDump> = self
+        let mut items: Vec<&OldItem> = self
             .items
             .iter()
             .copied()
@@ -1131,7 +1332,7 @@ impl<'a> Project<'a> {
     /// that gives up another tie listed for an open item.
     fn rule_area(
         &mut self,
-        i: &ItemDump,
+        i: &OldItem,
         plan: Option<(String, String)>,
         mut own: Vec<String>,
     ) -> Option<String> {
@@ -1571,7 +1772,7 @@ pub fn area_name(title: &str) -> String {
 
 /// The label a central idea becomes: `goal:` and its title's words before the first colon, the id when
 /// the title gives none.
-fn goal_label(i: &ItemDump) -> String {
+fn goal_label(i: &OldItem) -> String {
     let slug = area_name(&i.title);
     format!(
         "goal:{}",
@@ -1585,17 +1786,17 @@ fn goal_label(i: &ItemDump) -> String {
 
 /// The areas of the concepts an item is tied to, its oldest tie first, then in id order.
 fn own_areas(
-    i: &ItemDump,
-    concepts: &[&ItemDump],
+    i: &OldItem,
+    concepts: &[&OldItem],
     named: &BTreeMap<String, String>,
     ages: &BTreeMap<(String, String), String>,
 ) -> Vec<String> {
-    let age = |c: &ItemDump| {
+    let age = |c: &OldItem| {
         ages.get(&pair(&i.id, &c.id))
             .cloned()
             .unwrap_or_else(|| i.opened_at.clone().max(c.opened_at.clone()))
     };
-    let mut own: Vec<&ItemDump> = concepts.iter().copied().filter(|c| tied(i, c)).collect();
+    let mut own: Vec<&OldItem> = concepts.iter().copied().filter(|c| tied(i, c)).collect();
     own.sort_by_cached_key(|c| (age(c), key_num(&c.id)));
     let mut seen = BTreeSet::new();
     own.iter()
@@ -1626,7 +1827,7 @@ fn placements(events: &[&EventDump]) -> BTreeMap<String, (Placement, String)> {
 }
 
 /// Whether two items are tied by a `related` link, either way.
-fn tied(a: &ItemDump, b: &ItemDump) -> bool {
+fn tied(a: &OldItem, b: &OldItem) -> bool {
     a.id != b.id && (a.related.contains(&b.id) || b.related.contains(&a.id))
 }
 

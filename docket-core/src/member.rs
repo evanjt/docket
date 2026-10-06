@@ -102,32 +102,6 @@ pub fn labels_carried<S: BuildHasher>(
     out
 }
 
-/// What belongs to a standing item: anything tied to it either way, with everything under that at
-/// any depth. Standing items are never members of each other.
-#[must_use]
-pub fn members_of<S: BuildHasher>(
-    ties: &[Tie],
-    standing: &HashSet<i64, S>,
-    rid: i64,
-) -> HashSet<i64> {
-    let children = children_of(ties);
-    let mut out = HashSet::new();
-    for t in ties.iter().filter(|t| !t.is_parent()) {
-        let near = match (t.rid == rid, t.to == rid) {
-            (true, _) => t.to,
-            (_, true) => t.rid,
-            _ => continue,
-        };
-        if standing.contains(&near) {
-            continue;
-        }
-        out.insert(near);
-        out.extend(below(&children, near));
-    }
-    out.retain(|x| !standing.contains(x));
-    out
-}
-
 /// What a plan holds at any depth: its open items and its closed ones.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Members {

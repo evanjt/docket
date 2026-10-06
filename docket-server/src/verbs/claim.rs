@@ -2,7 +2,7 @@
 
 use axum::Json;
 use axum::extract::{Extension, State};
-use sea_orm::{DatabaseConnection, Value};
+use sea_orm::DatabaseConnection;
 use serde_json::{Map, Value as Json_, json};
 
 use docket_core::api::{
@@ -19,7 +19,7 @@ use docket_core::word::Kind;
 use crate::auth::Caller;
 use crate::store::scalar;
 use crate::verbs::areas;
-use crate::verbs::graph::{hold_waiters, live_overlaps, open_under, release_waiters};
+use crate::verbs::graph::{hold_waiters, live_overlaps, open_under, release_waiters, wait_of};
 use crate::verbs::view::{brief, item_view};
 use crate::verbs::{Call, Failure, ROLES, RUNNERS, choice, given};
 
@@ -63,9 +63,10 @@ pub async fn start(
             req.job.unwrap_or_default()
         )));
     }
-    let cols = rules::start(&r, &call.ctx)?;
+    let wait = wait_of(&call.tx.conn, r.rid).await?;
+    rules::start(&r, &call.ctx, wait.as_ref())?;
     let kind = r.item_type.kind();
-    if kind == Kind::Audit && r.claim_branch.is_none() {
+    if kind == Kind::Audit && r.claim().is_none() {
         let open: Vec<String> = open_under(&call.tx.conn, &call.slug, r.rid)
             .await?
             .into_iter()
@@ -99,61 +100,21 @@ pub async fn start(
         }
     }
     data.extend(run_facts(req.runner.as_deref(), req.model.as_deref()));
-    let row = claim_row(&mut call, &r, &cols, &req).await?;
+    call.tx.update(r.rid, &[]).await?;
     call.tx
         .event(
             &call.slug,
-            Some(row.rid),
+            Some(r.rid),
             "claimed",
             None,
             Some(call.branch()),
             data_or_none(data).as_ref(),
         )
         .await?;
+    let row = call.tx.fresh(r.rid).await?;
     let out = started(&call, &row).await?;
     call.tx.commit().await?;
     Ok(Json(out))
-}
-
-/// The claim written only if nobody took the item first.
-async fn claim_row(
-    call: &mut Call,
-    r: &Item,
-    cols: &[docket_core::item::Field],
-    req: &StartRequest,
-) -> Result<Item, Failure> {
-    let mut claimed = r.clone();
-    claimed.apply(cols);
-    let values: Vec<Value> = vec![
-        claimed.claim_branch.into(),
-        claimed.claim_host.into(),
-        claimed.claim_since.into(),
-        req.runner.clone().into(),
-        req.job.clone().into(),
-        req.on.clone().into(),
-        call.ctx.now.clone().into(),
-        r.rid.into(),
-        call.ctx.force.into(),
-    ];
-    let rows = call
-        .tx
-        .items(
-            "UPDATE items SET claim_branch=?, claim_host=?, claim_since=?, claim_runner=?, claim_job=?, \
-             claim_on=?, updated_at=? WHERE rid=? AND state='open' AND (claim_branch IS NULL OR ?) RETURNING *",
-            values,
-        )
-        .await?;
-    let Some(row) = rows.into_iter().next() else {
-        let r2 = call.tx.fresh(r.rid).await?;
-        return Err(Failure::Refused(format!(
-            "{} was taken by {} on {} a moment ago.",
-            r.id,
-            r2.claim_branch.unwrap_or_default(),
-            r2.claim_host.unwrap_or_default()
-        )));
-    };
-    call.tx.touch(row.rid);
-    Ok(row)
 }
 
 async fn started(call: &Call, row: &Item) -> Result<Started, Failure> {
@@ -161,23 +122,23 @@ async fn started(call: &Call, row: &Item) -> Result<Started, Failure> {
     let shares = live_overlaps(c, &call.slug, row)
         .await?
         .into_iter()
-        .map(|(holder, paths)| Share {
-            holder: holder.id,
-            branch: holder.claim_branch.unwrap_or_default(),
-            host: holder.claim_host.unwrap_or_default(),
-            paths,
+        .map(|(holder, paths)| {
+            let claim = holder.claim().cloned().unwrap_or_default();
+            Share {
+                holder: holder.id,
+                branch: claim.branch,
+                host: claim.host,
+                paths,
+            }
         })
         .collect();
-    let group_others =
-        match &row.group_name {
-            Some(g) => crate::store::column(
-                c,
-                "SELECT id FROM items WHERE project=? AND group_name=? AND rid<>? AND state='open' ORDER BY rid",
-                vec![call.slug.clone().into(), g.clone().into(), row.rid.into()],
-            )
-            .await?,
-            None => Vec::new(),
-        };
+    let others = crate::verbs::labels::grouped_with(c, &call.slug, row.rid).await?;
+    let group_others = crate::store::column(
+        c,
+        "SELECT id FROM items WHERE rid = ANY(?) AND state='open' ORDER BY rid",
+        vec![others.into()],
+    )
+    .await?;
     Ok(Started {
         item: item_view(c, row).await?,
         kind: row.item_type.kind().as_str().to_string(),
@@ -199,8 +160,8 @@ pub async fn release(
     choice("outcome", req.outcome.as_deref(), &OUTCOMES)?;
     let mut call = Call::begin(&db, &caller, &req.common).await?;
     let r = call.item(&req.id).await?;
-    let cols = rules::release(&r, &call.ctx)?;
-    let row = call.tx.update(r.rid, &cols).await?;
+    rules::release(&r, &call.ctx)?;
+    let row = call.tx.update(r.rid, &[]).await?;
     let mut data = run_facts(req.runner.as_deref(), req.model.as_deref());
     if let Some(outcome) = given(req.outcome.as_deref()) {
         data.insert("outcome".into(), json!(outcome));
@@ -259,16 +220,7 @@ async fn assign_past_failure_limit(call: &mut Call, rid: i64) -> Result<(), Fail
         return Ok(());
     }
     let note = format!("{failed} attempts failed: it needs the owner to look at why");
-    call.tx
-        .update(
-            rid,
-            &[
-                Field::Turn(Some("user".to_string())),
-                Field::TurnNote(Some(note.clone())),
-                Field::AskedAt(Some(call.ctx.now.clone())),
-            ],
-        )
-        .await?;
+    call.tx.update(rid, &[]).await?;
     call.tx
         .event(&call.slug, Some(rid), "asked", Some(&note), None, None)
         .await?;
@@ -287,7 +239,7 @@ pub async fn job_report(
 ) -> Result<Json<Moved>, Failure> {
     let call = Call::begin(&db, &caller, &req.common).await?;
     let r = call.item(&req.id).await?;
-    if r.claim_branch.is_none() {
+    if r.claim().is_none() {
         return Err(Failure::Refused(format!("{} holds no claim", r.id)));
     }
     let mut data = Map::new();
@@ -337,7 +289,7 @@ pub async fn close(
     if resolution.is_none() && kind != Kind::Decision {
         return Err(Failure::Refused(format!(
             "close needs a resolution: the sha the work landed as, or what closed it. No branch of {} was found to read one from.",
-            r.claim_branch.as_deref().unwrap_or("this item")
+            r.claim_branch().unwrap_or("this item")
         )));
     }
     let open_members: Vec<String> = if kind == Kind::Audit {
@@ -355,7 +307,7 @@ pub async fn close(
     if given(req.gates.as_deref()).is_some() {
         data.insert("gates".into(), json!(gates_result(req.gates.as_deref())?));
     }
-    let row = call.tx.update(r.rid, &cols).await?;
+    call.tx.update(r.rid, &cols).await?;
     call.tx
         .event(
             &call.slug,
@@ -366,7 +318,8 @@ pub async fn close(
             data_or_none(data).as_ref(),
         )
         .await?;
-    let released = release_waiters(&mut call.tx, &call.project, &row, "closed").await?;
+    let row = call.tx.fresh(r.rid).await?;
+    let released = release_waiters(&mut call.tx, &call.project, &r, &row, "closed").await?;
     let out = Closed {
         item: item_view(&call.tx.conn, &row).await?,
         released: released.iter().map(brief).collect(),
@@ -396,7 +349,7 @@ pub async fn drop(
         (None, None) => None,
     };
     let cols = rules::drop(&r, &call.ctx, why.as_deref(), sup.as_ref().map(|s| s.rid))?;
-    let row = call.tx.update(r.rid, &cols).await?;
+    call.tx.update(r.rid, &cols).await?;
     call.tx
         .event(
             &call.slug,
@@ -407,7 +360,8 @@ pub async fn drop(
             None,
         )
         .await?;
-    let released = release_waiters(&mut call.tx, &call.project, &row, "dropped").await?;
+    let row = call.tx.fresh(r.rid).await?;
+    let released = release_waiters(&mut call.tx, &call.project, &r, &row, "dropped").await?;
     let out = Dropped {
         item: item_view(&call.tx.conn, &row).await?,
         released: released.iter().map(brief).collect(),
@@ -427,7 +381,7 @@ pub async fn reopen(
 ) -> Result<Json<Moved>, Failure> {
     let mut call = Call::begin(&db, &caller, &req.common).await?;
     let r = call.item(&req.id).await?;
-    let mut cols = rules::reopen(&r, given(Some(&req.why)), "agent")?;
+    let mut cols = rules::reopen(&r, given(Some(&req.why)))?;
     let listed = areas::listed(&call.tx.conn, &call.slug).await?;
     let own = listed.name(r.area_id).map(str::to_string);
     let given = req.area.as_deref().map(str::trim).filter(|a| !a.is_empty());
@@ -477,7 +431,7 @@ pub async fn reopen(
         )
         .await?;
     let row = call.tx.fresh(r.rid).await?;
-    hold_waiters(&mut call.tx, &call.project, &row).await?;
+    hold_waiters(&mut call.tx, &call.project, &r, &row).await?;
     let item = item_view(&call.tx.conn, &row).await?;
     call.tx.commit().await?;
     Ok(Json(Moved { item }))

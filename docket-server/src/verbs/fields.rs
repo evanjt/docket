@@ -9,15 +9,16 @@ use docket_core::api::{
     RateRequest,
 };
 use docket_core::item::{Field, Item};
+use docket_core::label;
 use docket_core::rules::{prioritise, rate as rate_rule, set_tags};
 
 use crate::auth::Caller;
 use crate::store::id_of;
-use crate::verbs::areas;
 use crate::verbs::graph::{Order, holds_of, parent_ties, refuse_later, release_list, standing};
 use crate::verbs::releases::{name_of, release_id};
 use crate::verbs::view::{item_view, item_views};
 use crate::verbs::{Call, Failure};
+use crate::verbs::{areas, labels};
 
 const EDITABLE: [&str; 6] = ["title", "complexity", "theme", "group", "tags", "turn_note"];
 
@@ -102,7 +103,14 @@ pub async fn edit(
     let mut cols = Vec::new();
     let mut notes = Vec::new();
     for kv in &req.set {
-        cols.push(set_field(&kv.field, &kv.value)?);
+        if !set_labels(&call, r.rid, &kv.field, &kv.value).await? {
+            if let Some(col) = set_field(&kv.field, &kv.value)? {
+                cols.push(col);
+            } else {
+                let note = Some(kv.value.as_str()).filter(|v| !v.is_empty());
+                call.tx.note_ask(r.rid, note).await?;
+            }
+        }
         notes.push(format!("{}={}", kv.field, kv.value));
     }
     if let Some(given) = &req.release {
@@ -148,9 +156,6 @@ pub async fn edit(
     }
     if body != r.body {
         cols.push(Field::Body(body.trim_start_matches('\n').to_string()));
-        if r.conflict != 0 && req.body.is_some() {
-            cols.push(Field::Conflict(0));
-        }
     }
     let row = call.tx.update(r.rid, &cols).await?;
     call.tx
@@ -193,33 +198,51 @@ async fn move_area(call: &mut Call, r: &Item, given: &str) -> Result<(Field, Str
     Ok((Field::AreaId(to), format!("area {label}")))
 }
 
-fn set_field(k: &str, v: &str) -> Result<Field, Failure> {
+/// `--set theme=`, `group=` and `tags=`, which are labels: the theme is given as a label, the group
+/// becomes the item's one group label (blank takes it away), and the tags become the item's own
+/// labels other than its group's. False for any other field.
+async fn set_labels(call: &Call, rid: i64, field: &str, value: &str) -> Result<bool, Failure> {
+    let (c, slug, value) = (&call.tx.conn, call.slug.as_str(), value.trim());
+    let is_group = |name: &str| name.starts_with(label::GROUP);
+    match field {
+        "theme" if value.is_empty() => {
+            return Err(Failure::Refused(
+                "a theme is a label: take it away with docket label rm ID NAME.".to_string(),
+            ));
+        }
+        "theme" => labels::give(c, slug, rid, value).await?,
+        "group" => {
+            let names: Vec<String> = Some(value)
+                .filter(|v| !v.is_empty())
+                .map(label::of_group)
+                .into_iter()
+                .collect();
+            labels::set(c, slug, rid, &names, is_group).await?;
+        }
+        "tags" => labels::set(c, slug, rid, &set_tags(value), |n| !is_group(n)).await?,
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
+/// The column an edit sets; none for the turn note, which is the note of the owner's open ask.
+fn set_field(k: &str, v: &str) -> Result<Option<Field>, Failure> {
     if !EDITABLE.contains(&k) {
         return Err(Failure::Refused(format!(
             "{k} is not editable; fields are {}. State and turn move with their own verbs. Also priority: docket priority, release: --release NAME, area: --area NAME.",
             EDITABLE.join(", ")
         )));
     }
-    let blank = |v: &str| {
-        if v.is_empty() {
-            None
-        } else {
-            Some(v.to_string())
-        }
-    };
-    Ok(match k {
+    Ok(Some(match k {
         "complexity" => rate_rule(v)?.remove(0),
-        "group" => Field::GroupName(blank(v)),
-        "tags" => Field::Tags(set_tags(v)),
         "title" => {
             if v.trim().is_empty() {
                 return Err(Failure::Refused("a title cannot be empty".to_string()));
             }
             Field::Title(v.trim().to_string())
         }
-        "theme" => Field::Theme(blank(v)),
-        _ => Field::TurnNote(blank(v)),
-    })
+        _ => return Ok(None),
+    }))
 }
 
 /// A related B, or B the origin of A; several A at once.

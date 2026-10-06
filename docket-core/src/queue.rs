@@ -14,11 +14,9 @@ pub struct Candidate<'a> {
     pub turn: Option<&'a str>,
     pub claimed: bool,
     pub waiting: bool,
-    pub conflict: bool,
     /// For a question, whether it has its decision; an undecided one is the owner's, never offered.
     pub decided: bool,
     pub complexity: Option<&'a str>,
-    pub theme: Option<&'a str>,
     /// The release by name; none is the backlog.
     pub release: Option<&'a str>,
     pub tier: usize,
@@ -76,7 +74,8 @@ pub struct Filter<'a> {
     pub rid: Option<i64>,
     pub under: Option<&'a HashSet<i64>>,
     pub complexity: Option<&'a str>,
-    pub theme: Option<&'a str>,
+    /// Only the items carrying a label, given or inherited from a plan above them.
+    pub labelled: Option<&'a HashSet<i64>>,
     /// Only items in this area, matched ignoring case.
     pub area: Option<&'a str>,
     /// Only items of this release, a name already resolved.
@@ -166,7 +165,6 @@ fn takeable(c: &Candidate, f: &Filter, ties: &[Tie], open: &HashSet<i64>) -> boo
         && c.turn == Some("agent")
         && !c.claimed
         && !c.waiting
-        && !c.conflict
         && !c.kind.is_retired_plan()
         && role_of(c, ties, open).is_some_and(|r| f.roles.is_empty() || f.roles.contains(&r))
         && f.under.is_none_or(|u| u.contains(&c.rid))
@@ -176,8 +174,7 @@ fn takeable(c: &Candidate, f: &Filter, ties: &[Tie], open: &HashSet<i64>) -> boo
         && release_rank(f.releases, c.release).is_some()
         && (!f.current_release_only || in_current(f.releases, c.release))
         && f.release.is_none_or(|r| c.release == Some(r))
-        && f.theme
-            .is_none_or(|t| c.theme.is_some_and(|mine| mine.eq_ignore_ascii_case(t)))
+        && f.labelled.is_none_or(|l| l.contains(&c.rid))
         && f.area
             .is_none_or(|a| c.area.is_some_and(|mine| mine.eq_ignore_ascii_case(a)))
 }
@@ -236,7 +233,6 @@ pub struct OwnerRow<'a> {
     pub waiting: bool,
     pub derived: bool,
     pub need: Option<&'a str>,
-    pub theme: Option<&'a str>,
     pub area: Option<&'a str>,
     pub release: Option<&'a str>,
     pub tier: usize,
@@ -248,7 +244,8 @@ pub struct OwnerRow<'a> {
 pub struct OwnerFilter<'a> {
     pub priority: Option<usize>,
     pub key: Option<&'a str>,
-    pub theme: Option<&'a str>,
+    /// Only the items carrying a label, given or inherited from a plan above them.
+    pub labelled: Option<&'a HashSet<i64>>,
     /// Only items in this area, matched ignoring case.
     pub area: Option<&'a str>,
     pub releases: &'a [String],
@@ -294,11 +291,7 @@ pub fn owner_queue(items: &[OwnerRow], filter: &OwnerFilter) -> OwnerQueue {
         .iter()
         .filter(|r| filter.priority.is_none_or(|p| r.tier <= p))
         .filter(|r| filter.key.is_none_or(|k| r.key == k))
-        .filter(|r| {
-            filter
-                .theme
-                .is_none_or(|t| r.theme.is_some_and(|mine| mine.eq_ignore_ascii_case(t)))
-        })
+        .filter(|r| filter.labelled.is_none_or(|l| l.contains(&r.rid)))
         .filter(|r| {
             filter
                 .area

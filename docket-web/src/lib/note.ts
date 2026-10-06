@@ -7,6 +7,6 @@ export function note(r: Row): string {
     const host = (r.claim_on ?? r.claim_host ?? '').split('.')[0];
     return host ? `${r.claim_branch} on ${host}` : r.claim_branch;
   }
-  if (r.wait_on) return r.wait_on === 'item' ? `waits on ${r.wait_ref ?? ''}` : `waits until ${r.wait_ref ?? ''}`;
+  if (r.wait_on) return r.wait_on === 'condition' ? `waits on ${r.wait_ref ?? ''}, for the owner` : `waits on ${r.wait_ref ?? ''}`;
   return r.turn_note ?? '';
 }

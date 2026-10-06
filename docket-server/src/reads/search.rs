@@ -16,6 +16,7 @@ use crate::reads::public::{
     Failure, failure, internal, item_of, member_counts, project_of, public, sql,
 };
 use crate::reads::queue::under_cond;
+use crate::verbs::labels::{carried_cond, exactly};
 use docket_core::word::kind_of_type;
 
 const STATES: [&str; 4] = ["open", "done", "dropped", "any"];
@@ -28,8 +29,10 @@ pub(crate) struct Narrow {
     pub decided: Vec<String>,
     pub state: Option<String>,
     pub exclude: Option<i64>,
-    pub theme: Option<String>,
-    pub without_theme: Option<String>,
+    /// Only the items carrying this label.
+    pub label: Option<String>,
+    /// Only the items not carrying this label.
+    pub without_label: Option<String>,
     /// Only items under this plan, story or concept, by the rule `next` applies.
     pub under: Option<String>,
     pub n: i64,
@@ -75,13 +78,12 @@ pub(crate) fn ranked(
         text.push_str(" AND i.rid<>?");
         values.push(rid.into());
     }
-    if let Some(theme) = &narrow.theme {
-        text.push_str(" AND i.theme ILIKE ? ESCAPE ''");
-        values.push(format!("%{theme}%").into());
-    }
-    if let Some(theme) = &narrow.without_theme {
-        text.push_str(" AND (i.theme IS NULL OR i.theme NOT ILIKE ? ESCAPE '')");
-        values.push(format!("%{theme}%").into());
+    for (name, not) in [(&narrow.label, false), (&narrow.without_label, true)] {
+        if let Some(name) = name {
+            text.push_str(&carried_cond("i.rid", not));
+            values.push(slug.into());
+            values.push(exactly(name).into());
+        }
     }
     text.push_str(&under.0);
     values.extend(under.1);
@@ -154,8 +156,11 @@ pub struct SearchQuery {
     n: i64,
     #[serde(default)]
     raw: bool,
-    theme: Option<String>,
-    without_theme: Option<String>,
+    /// `theme` is the name it had.
+    #[serde(alias = "theme")]
+    label: Option<String>,
+    #[serde(alias = "without_theme")]
+    without_label: Option<String>,
     under: Option<String>,
 }
 
@@ -184,8 +189,8 @@ pub async fn search(
         decided: Vec::new(),
         state: q.state,
         exclude: None,
-        theme: q.theme,
-        without_theme: q.without_theme,
+        label: q.label,
+        without_label: q.without_label,
         under: q.under,
         n: q.n,
     };

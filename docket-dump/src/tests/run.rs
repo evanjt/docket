@@ -30,9 +30,7 @@ impl Source for Pages {
 fn project() -> ProjectDump {
     ProjectDump {
         slug: "o/p".into(),
-        keys: json!([{"key": "T", "kind": "work"}]),
         remotes: json!([]),
-        themes: json!([]),
         cite_roots: json!([]),
         repos: json!([]),
         skills: json!({}),

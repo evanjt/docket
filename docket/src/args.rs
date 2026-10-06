@@ -44,9 +44,9 @@ pub struct Queue {
     pub complexity: Option<String>,
     #[arg(long)]
     pub key: Option<String>,
-    /// only items carrying this theme
-    #[arg(long)]
-    pub theme: Option<String>,
+    /// only items carrying this label, given or from a plan above them
+    #[arg(long, alias = "theme")]
+    pub label: Option<String>,
     /// only items in this area, by name
     #[arg(long)]
     pub area: Option<String>,
@@ -72,9 +72,9 @@ pub struct Queue {
 #[derive(Args, Debug, Clone)]
 pub struct OwnerQueue {
     pub n: Option<i64>,
-    /// only this theme
-    #[arg(long)]
-    pub theme: Option<String>,
+    /// only items carrying this label, given or from a plan above them
+    #[arg(long, alias = "theme")]
+    pub label: Option<String>,
     /// only items in this area, by name
     #[arg(long)]
     pub area: Option<String>,
@@ -102,8 +102,9 @@ pub enum Cmd {
     /// shorthand for next --complexity high
     Complex {
         n: Option<i64>,
-        #[arg(long)]
-        theme: Option<String>,
+        /// only items carrying this label
+        #[arg(long, alias = "theme")]
+        label: Option<String>,
     },
     /// the owner's queue: derived answers to confirm, questions, then asks by what the owner must hold or do
     Todo(OwnerQueue),
@@ -118,11 +119,12 @@ pub enum Cmd {
         #[arg(long, value_parser = WAITS)]
         on: Option<String>,
     },
-    /// open decisions, by theme
+    /// open decisions, by area
     #[command(alias = "q")]
     Questions {
-        #[arg(long)]
-        theme: Option<String>,
+        /// only questions carrying this label
+        #[arg(long, alias = "theme")]
+        label: Option<String>,
     },
     /// decided questions that owe work items
     Research,
@@ -161,11 +163,13 @@ pub enum Cmd {
         complexity: Option<String>,
         #[arg(long, value_parser = PRIORITIES)]
         priority: Option<String>,
+        /// a label to give it, by name
         #[arg(long)]
         theme: Option<String>,
         /// the release it is filed for: current or a release not shipped; none files it in the backlog; required in a job
         #[arg(long, value_name = "RELEASE")]
         release: Option<String>,
+        /// the group it is taken with: the label group:NAME
         #[arg(long)]
         group: Option<String>,
         /// the area it is filed in; under a plan it is the plan's, and naming another is refused
@@ -351,7 +355,7 @@ pub enum Cmd {
     /// fields, an appended note, or the whole body
     Edit {
         id: String,
-        /// title, complexity, theme, group, tags or `turn_note`; priority has `docket priority`
+        /// title, complexity, theme (gives that label), group (its group:NAME label), tags (its own labels) or `turn_note`; priority has `docket priority`
         #[arg(long = "set", value_name = "FIELD=VALUE")]
         set: Vec<String>,
         /// the release it moves to: current, a release not shipped, or "" for the backlog
@@ -441,13 +445,14 @@ pub enum Cmd {
         #[arg(long)]
         none: bool,
     },
-    /// where a plan, story, package, idea, group, theme or area stands
+    /// where a plan, story, package, idea, group, label or area stands
     Audit {
         id: Option<String>,
         #[arg(long)]
         group: Option<String>,
-        #[arg(long)]
-        theme: Option<String>,
+        /// every item carrying a label, given or from a plan above it
+        #[arg(long, alias = "theme")]
+        label: Option<String>,
         /// an area whole: its description, its priority and every item carrying it
         #[arg(long)]
         area: Option<String>,
@@ -473,10 +478,12 @@ pub enum Cmd {
         /// pass the FTS5 query through untouched
         #[arg(long)]
         raw: bool,
-        #[arg(long)]
-        theme: Option<String>,
-        #[arg(long)]
-        without_theme: Option<String>,
+        /// only items carrying this label
+        #[arg(long, alias = "theme")]
+        label: Option<String>,
+        /// only items not carrying this label
+        #[arg(long, alias = "without-theme")]
+        without_label: Option<String>,
     },
     /// items close to this one by title, files and symbols
     Similar {

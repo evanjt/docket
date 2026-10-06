@@ -7,21 +7,24 @@ use serde_json::{Value, json};
 
 use std::collections::HashMap;
 
+use docket_core::assignment::Held;
 use docket_core::flow::{DERIVED, derived_parts};
 use docket_core::queue::{OwnerFilter, OwnerRow, owner_queue};
+use docket_core::stall::Wait;
 use docket_core::word::PRIORITIES;
 
+use crate::entities::item;
 use crate::reads::public::{
     Failure, decision_keys, failure, internal, items_where, marks, member_counts, one_of,
     project_of, public, public_rows, sql,
 };
 use crate::reads::queue::under_cond;
 use crate::reads::search::{Narrow, similar_rows};
+use crate::store::{ASKED, CLAIMED, CLAIMED_ON, HELD_SINCE, held_in};
+use crate::verbs::graph::waits;
+use crate::verbs::labels::{carried_cond, carriers, exactly, narrowed};
+use docket_core::label;
 use docket_core::word::kind_of_type;
-
-fn like(words: &str) -> sea_orm::Value {
-    format!("%{words}%").into()
-}
 
 async fn listed(
     db: &DatabaseConnection,
@@ -49,7 +52,9 @@ pub struct OwnerQuery {
     under: Option<String>,
     n: Option<usize>,
     key: Option<String>,
-    theme: Option<String>,
+    /// Only the items carrying this label; `theme` is the name it had.
+    #[serde(alias = "theme")]
+    label: Option<String>,
     area: Option<String>,
     priority: Option<String>,
 }
@@ -58,6 +63,21 @@ pub struct OwnerQuery {
 struct OpenNeed {
     rid: i64,
     need: Option<String>,
+}
+
+/// What each open ask of a project needs of the owner, where it names it.
+async fn open_needs(db: &DatabaseConnection, slug: &str) -> Result<HashMap<i64, String>, Failure> {
+    Ok(OpenNeed::find_by_statement(sql(
+        "SELECT a.rid, a.need FROM assignments a JOIN items i ON i.rid=a.rid \
+         WHERE i.project=? AND a.ended_at IS NULL AND a.kind='ask' AND a.need IS NOT NULL",
+        vec![slug.into()],
+    ))
+    .all(db)
+    .await
+    .map_err(|e| internal(&e))?
+    .into_iter()
+    .filter_map(|n| n.need.map(|need| (n.rid, need)))
+    .collect())
 }
 
 /// The owner's queue as `docket-core` orders it, and the rows it names in that order, each with its group.
@@ -86,58 +106,55 @@ async fn owner_rows(
     let items = items_where(
         db,
         &q.project,
-        &format!("{cond} AND state='open' AND (turn='user'{derived})"),
+        &format!("{cond} AND state='open' AND ({ASKED}{derived})"),
         bound,
     )
     .await?;
-    let needs: HashMap<i64, String> = OpenNeed::find_by_statement(sql(
-        "SELECT a.rid, a.need FROM assignments a JOIN items i ON i.rid=a.rid \
-         WHERE i.project=? AND a.ended_at IS NULL AND a.kind='ask' AND a.need IS NOT NULL",
-        vec![q.project.clone().into()],
-    ))
-    .all(db)
-    .await
-    .map_err(|e| internal(&e))?
-    .into_iter()
-    .filter_map(|n| n.need.map(|need| (n.rid, need)))
-    .collect();
+    let needs = open_needs(db, &q.project).await?;
     let listed = crate::verbs::releases::listed(db, &q.project)
         .await
         .map_err(|e| internal(&e))?;
     let areas = crate::verbs::areas::listed(db, &q.project)
         .await
         .map_err(|e| internal(&e))?;
+    let waiting = waits(db, &q.project).await.map_err(|e| internal(&e))?;
+    let held = held_in(db, &q.project).await.map_err(|e| internal(&e))?;
     let rows: Vec<OwnerRow> = items
         .iter()
         .map(|r| OwnerRow {
             rid: r.rid,
             key: &r.key,
             kind: kind_of_type(&r.item_type),
-            waiting: r.wait_on.is_some(),
+            waiting: waiting.contains_key(&r.rid),
             derived: r
                 .decision
                 .as_deref()
                 .is_some_and(|d| d.starts_with(DERIVED)),
             need: needs.get(&r.rid).map(String::as_str),
-            theme: r.theme.as_deref(),
             area: areas.name(r.area_id),
             release: listed.name(r.release_id),
             tier: PRIORITIES
                 .iter()
                 .position(|p| *p == r.priority)
                 .unwrap_or(2),
-            asked_at: r.asked_at.as_deref().unwrap_or(&r.opened_at),
+            asked_at: match held.get(&r.rid) {
+                Some(Held::Ask(a)) => &a.since,
+                _ => &r.opened_at,
+            },
         })
         .collect();
     let key = q.key.as_deref().map(str::to_uppercase);
     let releases = listed.open.clone();
+    let labelled = narrowed(db, &q.project, q.label.as_deref())
+        .await
+        .map_err(|e| internal(&e))?;
     let filter = OwnerFilter {
         priority: q
             .priority
             .as_deref()
             .and_then(|p| PRIORITIES.iter().position(|x| *x == p)),
         key: key.as_deref(),
-        theme: q.theme.as_deref(),
+        labelled: labelled.as_ref(),
         area: q.area.as_deref(),
         releases: &releases,
         limit,
@@ -225,12 +242,15 @@ pub async fn wip(
     State(db): State<DatabaseConnection>,
     Query(q): Query<ByHost>,
 ) -> Result<Json<Value>, Failure> {
-    let (mut tail, mut values) = ("AND claim_branch IS NOT NULL".to_string(), vec![]);
-    if let Some(host) = q.host {
-        tail.push_str(" AND claim_host=?");
-        values.push(host.into());
-    }
-    tail.push_str(" ORDER BY claim_since, rid");
+    let mut values = vec![];
+    let on = match q.host {
+        Some(host) => {
+            values.push(host.into());
+            format!(" AND {CLAIMED_ON}")
+        }
+        None => String::new(),
+    };
+    let tail = format!("AND {CLAIMED}{on} ORDER BY {HELD_SINCE}, rid");
     listed(&db, &q.project, q.under.as_deref(), &tail, values).await
 }
 
@@ -250,67 +270,58 @@ pub async fn waiting(
     Query(q): Query<ByWait>,
 ) -> Result<Json<Value>, Failure> {
     one_of("on", q.on.as_deref(), &["item", "condition"])?;
-    let (mut tail, mut values) = (
-        "AND state='open' AND wait_on IS NOT NULL".to_string(),
-        vec![],
-    );
-    if let Some(on) = q.on {
-        tail.push_str(" AND wait_on=?");
-        values.push(on.into());
-    }
     let project = project_of(&db, &q.project).await?;
-    let (cond, under) = under_cond(&db, &q.project, q.under.as_deref(), "rid").await?;
-    tail.push_str(&cond);
-    values.extend(under);
-    tail.push_str(" ORDER BY wait_on, wait_ref NULLS FIRST, wait_since, rid");
-    let rows = items_where(&db, &q.project, &tail, values).await?;
-    let targets: Vec<i64> = rows
-        .iter()
-        .filter(|r| r.wait_on.as_deref() == Some("item"))
-        .filter_map(|r| r.wait_item)
+    let held = waits(&db, &q.project).await.map_err(|e| internal(&e))?;
+    let mut held: Vec<(i64, Wait)> = held
+        .into_iter()
+        .filter(|(_, w)| q.on.as_deref().is_none_or(|on| on == w.on))
         .collect();
-    let mut by_id = std::collections::HashMap::new();
-    if !targets.is_empty() {
-        let found = items_where(
-            &db,
-            &q.project,
-            &format!("AND rid IN ({})", marks(targets.len())),
-            targets.into_iter().map(Into::into).collect(),
-        )
-        .await?;
-        for t in public_rows(&db, &project, found).await? {
-            if let Some(id) = t["id"].as_str() {
-                by_id.insert(
-                    id.to_string(),
-                    json!({ "word": t["word"], "title": t["title"] }),
-                );
-            }
+    let (cond, mut values) = under_cond(&db, &q.project, q.under.as_deref(), "rid").await?;
+    let rids: Vec<i64> = held.iter().map(|(rid, _)| *rid).collect();
+    values.push(rids.into());
+    let rows = items_where(&db, &q.project, &format!("{cond} AND rid = ANY(?)"), values).await?;
+    let mut rows: HashMap<i64, item::Model> = rows.into_iter().map(|r| (r.rid, r)).collect();
+    held.retain(|(rid, _)| rows.contains_key(rid));
+    held.sort_by(|(a, x), (b, y)| (x.on, &x.id, &x.since, a).cmp(&(y.on, &y.id, &y.since, b)));
+    let holders: Vec<i64> = held.iter().map(|(_, w)| w.item).collect();
+    let found = items_where(&db, &q.project, "AND rid = ANY(?)", vec![holders.into()]).await?;
+    let mut by_id = HashMap::new();
+    for t in public_rows(&db, &project, found).await? {
+        if let Some(id) = t["id"].as_str() {
+            by_id.insert(
+                id.to_string(),
+                json!({ "word": t["word"], "title": t["title"] }),
+            );
         }
     }
-    let waits: Vec<Option<String>> = rows.iter().map(|r| r.wait_ref.clone()).collect();
-    let mut out = public_rows(&db, &project, rows).await?;
-    for (row, wait) in out.iter_mut().zip(waits) {
-        row["wait_target"] = wait
-            .and_then(|id| by_id.get(&id).cloned())
-            .unwrap_or(Value::Null);
+    let ordered: Vec<item::Model> = held
+        .iter()
+        .filter_map(|(rid, _)| rows.remove(rid))
+        .collect();
+    let mut out = public_rows(&db, &project, ordered).await?;
+    for (row, (_, wait)) in out.iter_mut().zip(&held) {
+        row["wait_target"] = by_id.get(&wait.id).cloned().unwrap_or(Value::Null);
     }
     Ok(Json(Value::Array(out)))
 }
 
 #[derive(Deserialize)]
-pub struct ByTheme {
+pub struct ByLabel {
     under: Option<String>,
     project: String,
-    theme: Option<String>,
+    /// Only the questions carrying this label; `theme` is the name it had.
+    #[serde(alias = "theme")]
+    label: Option<String>,
 }
 
-/// `docket questions`: open decisions still undecided, by theme. Empty where no key holds decisions.
+/// `docket questions`: open decisions still undecided, by area in the areas' order. Empty where no
+/// key holds decisions.
 ///
 /// # Errors
 /// 404 for an unknown project.
 pub async fn questions(
     State(db): State<DatabaseConnection>,
-    Query(q): Query<ByTheme>,
+    Query(q): Query<ByLabel>,
 ) -> Result<Json<Value>, Failure> {
     let project = project_of(&db, &q.project).await?;
     let qkeys = decision_keys();
@@ -323,14 +334,17 @@ pub async fn questions(
         marks(qkeys.len())
     );
     let mut values: Vec<sea_orm::Value> = qkeys.into_iter().map(Into::into).collect();
-    if let Some(theme) = q.theme {
-        tail.push_str(" AND theme ILIKE ? ESCAPE ''");
-        values.push(like(&theme));
+    if let Some(name) = q.label {
+        tail.push_str(&carried_cond("rid", false));
+        values.push(q.project.clone().into());
+        values.push(exactly(&name).into());
     }
     let (cond, under) = under_cond(&db, &q.project, q.under.as_deref(), "rid").await?;
     tail.push_str(&cond);
     values.extend(under);
-    tail.push_str(" ORDER BY theme IS NULL, theme, rank IS NULL, rank, rid");
+    tail.push_str(
+        " ORDER BY (SELECT a.position FROM areas a WHERE a.id=items.area_id) NULLS LAST, rid",
+    );
     let rows = items_where(&db, &q.project, &tail, values).await?;
     let counts = member_counts(&db, &q.project)
         .await
@@ -471,7 +485,8 @@ pub struct ByGroup {
     name: Option<String>,
 }
 
-/// `docket groups`: items meant to be taken together, by group, rank and number.
+/// `docket groups`: items meant to be taken together, the items carrying a group's label, by group,
+/// number and state.
 ///
 /// # Errors
 /// 404 for an unknown project.
@@ -479,13 +494,33 @@ pub async fn groups(
     State(db): State<DatabaseConnection>,
     Query(q): Query<ByGroup>,
 ) -> Result<Json<Value>, Failure> {
-    let (mut tail, mut values) = ("AND group_name IS NOT NULL".to_string(), vec![]);
-    if let Some(name) = q.name {
-        tail.push_str(" AND group_name=?");
-        values.push(name.into());
-    }
-    tail.push_str(" ORDER BY group_name, rank IS NULL, rank, num, state, rid");
-    listed(&db, &q.project, None, &tail, values).await
+    let project = project_of(&db, &q.project).await?;
+    let pattern = format!("{}%", exactly(label::GROUP));
+    let rids: Vec<i64> = carriers(&db, &q.project, &pattern)
+        .await
+        .map_err(|e| internal(&e))?
+        .into_iter()
+        .map(|(rid, _)| rid)
+        .collect();
+    let rows = items_where(&db, &q.project, "AND rid = ANY(?)", vec![rids.into()]).await?;
+    let mut rows: Vec<Value> = public_rows(&db, &project, rows)
+        .await?
+        .into_iter()
+        .filter(|r| {
+            let group = r["group"].as_str();
+            group.is_some() && q.name.as_deref().is_none_or(|n| group == Some(n))
+        })
+        .collect();
+    let order = |r: &Value| {
+        (
+            r["group"].as_str().unwrap_or_default().to_string(),
+            r["num"].as_i64(),
+            r["state"].as_str().unwrap_or_default().to_string(),
+            r["key"].as_str().unwrap_or_default().to_string(),
+        )
+    };
+    rows.sort_by_key(order);
+    Ok(Json(Value::Array(rows)))
 }
 
 #[derive(Deserialize)]

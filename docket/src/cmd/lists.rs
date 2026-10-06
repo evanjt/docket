@@ -46,7 +46,7 @@ pub fn next(ctx: &mut Ctx, q: &Queue) -> Result<i32> {
             ("n", Some(q.n.unwrap_or(10).to_string())),
             ("complexity", q.complexity.clone()),
             ("key", q.key.clone()),
-            ("theme", q.theme.clone()),
+            ("label", q.label.clone()),
             ("area", q.area.clone()),
             ("release", q.release.clone()),
             ("under", opt_id(q.under.as_ref())?),
@@ -79,7 +79,7 @@ pub fn todo(ctx: &mut Ctx, q: &OwnerQueue) -> Result<i32> {
     let pairs = [
         ("n", q.n.map(|n| n.to_string())),
         ("key", q.key.clone()),
-        ("theme", q.theme.clone()),
+        ("label", q.label.clone()),
         ("area", q.area.clone()),
         ("priority", q.priority.clone()),
     ];
@@ -196,23 +196,18 @@ pub fn waiting(ctx: &mut Ctx, on: Option<&String>) -> Result<i32> {
     let mut last: Option<String> = None;
     for (r, t) in rows.iter().zip(&targets) {
         let wref = or_none(r.wait_ref.as_deref()).to_string();
-        let item = r.wait_on.as_deref() == Some("item");
-        let head = if item {
-            wref.clone()
-        } else {
-            format!("until: {wref}")
-        };
-        if last.as_ref() != Some(&head) {
-            if item {
-                println!(
-                    "\n{head}  {}  {}",
-                    t["word"].as_str().unwrap_or_default(),
-                    cut(t["title"].as_str().unwrap_or_default(), 70)
-                );
+        let title = t["title"].as_str().unwrap_or_default();
+        if last.as_ref() != Some(&wref) {
+            if r.wait_on.as_deref() == Some("condition") {
+                println!("\nuntil: {}  ({wref}, for the owner)", cut(title, 70));
             } else {
-                println!("\n{head}");
+                println!(
+                    "\n{wref}  {}  {}",
+                    t["word"].as_str().unwrap_or_default(),
+                    cut(title, 70)
+                );
             }
-            last = Some(head);
+            last = Some(wref);
         }
         println!(
             "  {:<6} {}  (since {})",
@@ -275,10 +270,8 @@ pub fn print_decided_like(ctx: &mut Ctx, r: &Row, qkeys: &[String]) -> Result<()
 
 /// # Errors
 /// As `next`.
-pub fn questions(ctx: &mut Ctx, theme: Option<&String>) -> Result<i32> {
-    let slug = ctx.project()?;
-    let project = ctx.project_row(&slug)?;
-    let rows = ctx.read("/questions", &[("theme", theme.cloned())])?;
+pub fn questions(ctx: &mut Ctx, label: Option<&String>) -> Result<i32> {
+    let rows = ctx.read("/questions", &[("label", label.cloned())])?;
     if ctx.json {
         print_rows(ctx, &rows, "Nothing.");
         return Ok(0);
@@ -304,23 +297,20 @@ pub fn questions(ctx: &mut Ctx, theme: Option<&String>) -> Result<i32> {
             .push(w.id);
     }
     println!(
-        "{} open questions, by theme. These are decisions, not work:",
+        "{} open questions, by area. These are decisions, not work:",
         rows.len()
     );
     let mut last: Option<Option<String>> = None;
     for (i, r) in rows.iter().enumerate() {
-        if last.as_ref() != Some(&r.theme) {
-            last = Some(r.theme.clone());
+        if last.as_ref() != Some(&r.area) {
+            last = Some(r.area.clone());
             println!(
                 "\n  -- {}",
-                r.theme
+                r.area
                     .as_deref()
-                    .filter(|t| !t.is_empty())
-                    .unwrap_or("no theme")
+                    .filter(|a| !a.is_empty())
+                    .unwrap_or("no area")
             );
-            if let Some(note) = theme_note(&project, r.theme.as_deref()) {
-                println!("     {note}");
-            }
         }
         print_question(i + 1, r, twins.get(i).and_then(Option::as_ref), &waiters);
     }
@@ -360,18 +350,6 @@ fn print_question(i: usize, r: &Row, twin: Option<&Row>, waiters: &BTreeMap<Stri
             cut(twin.decision.as_deref().unwrap_or_default(), 70)
         );
     }
-}
-
-fn theme_note(project: &Value, theme: Option<&str>) -> Option<String> {
-    let theme = theme?;
-    project["themes"]
-        .as_array()?
-        .iter()
-        .rev()
-        .find(|t| t["name"] == theme)?["note"]
-        .as_str()
-        .filter(|n| !n.is_empty())
-        .map(str::to_string)
 }
 
 /// # Errors
@@ -502,8 +480,8 @@ pub fn search(
     state: &str,
     n: i64,
     raw: bool,
-    theme: Option<&String>,
-    without_theme: Option<&String>,
+    label: Option<&String>,
+    without_label: Option<&String>,
 ) -> Result<i32> {
     let rows = ctx.read(
         "/search",
@@ -513,10 +491,10 @@ pub fn search(
             ("state", Some(state.to_string())),
             ("n", Some(n.to_string())),
             ("raw", raw.then(|| "true".to_string())),
-            ("theme", theme.cloned().filter(|t| !t.is_empty())),
+            ("label", label.cloned().filter(|t| !t.is_empty())),
             (
-                "without_theme",
-                without_theme.cloned().filter(|t| !t.is_empty()),
+                "without_label",
+                without_label.cloned().filter(|t| !t.is_empty()),
             ),
         ],
     )?;

@@ -59,30 +59,6 @@ fn test_ancestors_run_nearest_first_and_stop_at_a_cycle() {
 }
 
 #[test]
-fn test_members_of_reads_plain_ties_both_ways_and_the_children_below() {
-    // 10 is a concept; 1 relates to it, 2 is a child of 1, 3 was spawned by the concept, 11 is another
-    // concept, 5 a child of 3.
-    let ties = [
-        related(1, 10),
-        parent(2, 1),
-        origin(3, 10),
-        related(11, 10),
-        parent(5, 3),
-    ];
-    let standing = set(&[10, 11]);
-    assert_eq!(members_of(&ties, &standing, 10), set(&[1, 2, 3, 5]));
-    assert_eq!(members_of(&ties, &standing, 11), set(&[]));
-}
-
-#[test]
-fn test_members_of_survives_a_parent_cycle_and_an_empty_graph() {
-    let ties = [parent(1, 2), parent(2, 1), related(1, 9)];
-    let standing = set(&[9]);
-    assert_eq!(members_of(&ties, &standing, 9), set(&[1, 2]));
-    assert_eq!(members_of(&[], &standing, 9), set(&[]));
-}
-
-#[test]
 fn test_an_item_under_a_labelled_plan_carries_the_label() {
     // 1 is a plan over 2, which is a plan over 3; 4 sits under no plan and 5 is only related to 1.
     let ties = [parent(2, 1), parent(3, 2), related(5, 1)];

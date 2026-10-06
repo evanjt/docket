@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 use crate::member::Edge;
@@ -220,4 +220,29 @@ fn test_carrying_a_plan_earlier_moves_its_child_with_it() {
         order::carry(&held, &rank, 1, 0),
         BTreeMap::from([(1, 0), (2, 0)])
     );
+}
+
+#[test]
+fn test_a_wait_is_the_oldest_dependency_still_held_by_what_holds_it() {
+    let targets = BTreeMap::from([
+        (1, Target::Done),
+        (2, Target::Dropped(Some(3))),
+        (3, Target::Open),
+        (4, Target::Open),
+        (5, Target::Decided),
+    ]);
+    let ids: BTreeMap<i64, String> = (1..=5).map(|r| (r, format!("T{r}"))).collect();
+    let deps =
+        |on: &[i64]| -> Vec<(i64, String)> { on.iter().map(|r| (*r, format!("t{r}"))).collect() };
+    let none = BTreeSet::new();
+    assert_eq!(wait(&deps(&[1, 5]), &targets, &ids, &none), None);
+    let w = wait(&deps(&[1, 2, 4]), &targets, &ids, &none).unwrap();
+    assert_eq!(
+        (w.on, w.item, w.id.as_str(), w.since.as_str()),
+        ("item", 3, "T3", "t2")
+    );
+    let owner = BTreeSet::from([4]);
+    let w = wait(&deps(&[5, 4]), &targets, &ids, &owner).unwrap();
+    assert_eq!((w.on, w.item), ("condition", 4));
+    assert!(w.is_condition());
 }

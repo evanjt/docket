@@ -24,3 +24,14 @@ async fn test_stop_signal_resolves_on_sigterm() {
     let waited = tokio::time::timeout(std::time::Duration::from_secs(2), stop).await;
     assert!(waited.is_ok(), "SIGTERM did not stop the server");
 }
+
+#[test]
+fn test_the_server_takes_no_subcommand() {
+    assert!(Args::try_parse_from(["docket-server"]).is_ok());
+    for args in [
+        ["docket-server", "import", "--from", "copy.db"].as_slice(),
+        ["docket-server", "simplify", "--write"].as_slice(),
+    ] {
+        assert!(Args::try_parse_from(args).is_err(), "{args:?} parsed");
+    }
+}

@@ -12,7 +12,7 @@ one place a claim is decided, so two machines never take the same item.
 |---|---|
 | `docket-core` | the rules: status words, claims, refusals, the queue order and the API types |
 | `docket-migration` | the schema as migrations, applied by the server before it listens |
-| `docket-server` | axum and sea-orm over the database: read routes, the write verbs under `/do`, key auth, the import from SQLite and the move onto plans |
+| `docket-server` | axum and sea-orm over the database: read routes, the write verbs under `/do` and key auth |
 | `docket` | the command line: every verb as a request to the server, printed as the text an agent reads |
 | `docket-dump` | the database written one way into a git checkout, and rebuilt from one |
 
@@ -46,7 +46,7 @@ cargo run -p docket -- status
 A command works out its project from `-p SLUG`, then `DOCKET_PROJECT`, then the directories bound
 on this machine (`~/.config/docket/roots`, written by `docket bind` and by the first command run in
 a checkout), then the outermost git repository, matched to a project by its remote's slug, a shared
-remote or its directory name, or created with the default keys.
+remote or its directory name, or created.
 
 ## Web
 
@@ -199,7 +199,9 @@ A refused write answers `409` with the reason, and nothing is written.
 ## Dump
 
 `docket-dump` writes the database into a git checkout, one way: a file per item, and an event log
-and a project file per project. It reads the server and key from `DOCKET_SERVER` and `DOCKET_KEY`,
+and a project file per project. An item's file carries its release, area, type, priority, labels,
+parent, origins, dependencies and every assignment row beside its title, state and body, so a
+restore rebuilds each of them from the file. It reads the server and key from `DOCKET_SERVER` and `DOCKET_KEY`,
 or `~/.config/docket/client`.
 
 ```bash
@@ -210,38 +212,17 @@ docket-dump --repo ~/dump --restore --database-url postgres://...   # an empty d
 ```
 
 The checkout keeps its cursor (the last event it holds) in its own git config as
-`docket.dumpcursor`, never committed. A push that fails leaves its commits for the next pass.
+`docket.dumpedseq`, never committed. A push that fails leaves its commits for the next pass. A
+checkout written before item files carried the assignment rows keeps its cursor under the earlier
+`docket.dumpcursor`, so its next pass is a full one, and a restore refuses its older files until
+then.
 
-## Import
-
-`docket-server import --from FILE` copies a SQLite docket database into an empty Postgres one, after
-applying the migrations. Every row keeps its rid, event `seq` and link id, so a dump checkout's cursor
-still holds. The counts of every table are compared per project before the copy commits; a database
-that already holds rows is refused. Copy the SQLite file with `.backup` first, never the file itself:
-
-```bash
-sqlite3 docket.db ".backup docket-copy.db"
-DATABASE_URL=postgres://... docket-server import --from docket-copy.db
-```
-
-Data from before plans were the one grouping is moved onto that model with `docket-server simplify`.
-Each package key holds plans from then on, ids unchanged, and every open plan waits on what it opened.
-A review claim on a package is given back, and a plan that already held its audit round is closed.
-The inbox and later fold into priority: normal work there goes to low. The release fact becomes the
-`releases` fact: the release, then every theme named as a version (`1.1`, `v2.0`) in version
-order, and release work keeps its priority. `docket next` orders by release, then priority, then
-age: an item's theme names its release, and no theme or a theme the list leaves out is the current
-release's. Every change writes an event saying why. Without `--write` it prints what each
-project changes and writes nothing; a second run changes nothing.
-
-```bash
-DATABASE_URL=postgres://... docket-server simplify
-DATABASE_URL=postgres://... docket-server simplify --write
-```
+## The move onto the core
 
 The move onto the core (releases as rows, dependencies, one parent plan, an origin link, areas,
 labels, a priority column and assignment rows) is planned by one function, `docket_core::migrate::plan`, over
-the rows the full dump carries. `docket admin migrate --dry-run` prints every change it makes to the
+the rows as they stood before the drop below; `docket admin migrate` reads the full dump in that
+shape, each claim and turn from the item's open assignment. `docket admin migrate --dry-run` prints every change it makes to the
 bound project (`--all` for every project), then each risky case and what is done about it: a plan
 held by work in a later release, the edge that closes a cycle (kept as `related`), an item under two
 plans (the earliest open one is its parent), a dependency in a later release (pulled into its
@@ -263,12 +244,15 @@ docket admin migrate --dry-run --all --themes backlog
 
 The parent slice is applied when the server migrates: each item's `opened` links split as the plan
 splits them, into one parent plan (`items.parent_rid`, set with `docket parent T1 A3`) and `origin`
-links (`docket link T1 origin Q2`), which record what spawned an item and add no structure. A dump
-checkout or SQLite store written before then splits the same way on restore or import.
+links (`docket link T1 origin Q2`), which record what spawned an item and add no structure.
 
 The area slice is applied the same way: each concept item becomes an `areas` row and is dropped
 with "became area NAME", and each item the plan places takes it in `items.area_id`, unless it carries
 an area already. An item neither its plan nor a concept places keeps no area.
+
+Once every slice is applied, one migration drops the columns the core replaced: an item's claim
+and turn, wait, scope, group, theme, rank, tags and sync conflict mark, and a project's key list and
+themes. It refuses while an item still carries a sync conflict, naming each.
 
 ## Docker
 
@@ -295,21 +279,6 @@ DOCKET_GID=1000
 
 Then `docker compose up -d --build`. The server waits for Postgres to be healthy and migrates it on
 its first start.
-
-To move a SQLite docket database in, import a copy before the server first takes writes. The copy is
-mounted read-only and must be readable by `DOCKET_UID`:
-
-```bash
-sqlite3 /path/to/docket.db ".backup $PWD/docket-copy.db"
-docker compose build docket-server
-docker compose up -d postgres
-docker compose run --rm -v "$PWD/docket-copy.db:/import/docket.db:ro" docket-server import --from /import/docket.db
-docker compose run --rm docket-server simplify --write
-docker compose up -d
-```
-
-The import prints the rows of every table by project and ends with `every count matches`. Run against
-a database that already holds rows, it changes nothing and says so.
 
 ## Tests
 

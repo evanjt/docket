@@ -1,12 +1,9 @@
 //! A project's lead claim: at most one session leads a project, renewing its claim while it runs. A
 //! claim not renewed within the lapse is free to take over.
 
-use std::collections::BTreeMap;
-
 use serde::{Deserialize, Serialize};
 
 use crate::clock;
-use crate::fact;
 use crate::item::Refused;
 use crate::pace::epoch;
 
@@ -76,44 +73,6 @@ impl Outcome {
 #[must_use]
 pub fn lapsed(lead: &Lead, now: i64, lapse_minutes: i64) -> bool {
     epoch(&lead.renewed_at).is_none_or(|t| now >= t + lapse_minutes * 60)
-}
-
-/// The minutes a lead claim holds, from the project's `lead_lapse`.
-fn lapse_of(skills: &BTreeMap<String, String>) -> i64 {
-    fact::effective(skills, "lead_lapse")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(LAPSE)
-}
-
-/// Whether a lead may be started now, or why not, a phrase per reason: a claim still held, then the
-/// reasons `fact::gaps` gives. The claim is free when none is held or it went unrenewed for the lapse.
-/// `skills` are the facts already merged with the owner level (`fact::merged`). The built-in `models`
-/// does not count: starting a lead unasked spends on every project, so it waits for a set value.
-///
-/// # Errors
-/// The reasons no lead starts.
-pub fn should_start(
-    claim: Option<&Lead>,
-    skills: &BTreeMap<String, String>,
-    now: i64,
-) -> Result<(), Vec<String>> {
-    let mut why = Vec::new();
-    if let Some(lead) = claim.filter(|l| !lapsed(l, now, lapse_of(skills))) {
-        why.push(format!("{} on {} holds the lead", lead.session, lead.host));
-    }
-    why.extend(fact::gaps(skills, &BTreeMap::new()));
-    let models = fact::layered(skills, &BTreeMap::new(), "models");
-    if models.is_none_or(|(_, layer)| layer == fact::Layer::Default) {
-        why.push("no models".to_string());
-    }
-    if why.is_empty() { Ok(()) } else { Err(why) }
-}
-
-/// Whether the last start attempt, made at `last`, is older than the lapse. A start that failed
-/// counts, so a broken launch is tried once a window and not on every refresh.
-#[must_use]
-pub fn attempt_due(last: Option<i64>, now: i64, skills: &BTreeMap<String, String>) -> bool {
-    last.is_none_or(|t| now >= t + lapse_of(skills) * 60)
 }
 
 /// When the claim lapses unless renewed.

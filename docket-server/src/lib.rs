@@ -4,14 +4,12 @@ pub mod auth;
 pub mod changes;
 pub mod entities;
 mod facts;
-pub mod import;
 mod lead;
 mod machines;
 mod private;
 mod publications;
 pub mod reads;
 pub mod show;
-pub mod simplify;
 mod store;
 mod verbs;
 

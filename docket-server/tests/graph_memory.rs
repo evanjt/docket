@@ -51,11 +51,10 @@ unsafe impl GlobalAlloc for Counting {
 #[global_allocator]
 static ALLOC: Counting = Counting;
 
-const SEED: &str = r#"
-INSERT INTO projects (slug, keys, created_at, updated_at) VALUES ('o/p',
-  '[{"key":"T","kind":"work"},{"key":"PK","kind":"package"}]', 'c', 'u');
-INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, opened_at, updated_at)
-  SELECT n, 'o/p', 'T', n, 'Item number ' || n, 'open', 'agent', '[]', repeat('body ', 400), 'o', 'u'
+const SEED: &str = r"
+INSERT INTO projects (slug, created_at, updated_at) VALUES ('o/p', 'c', 'u');
+INSERT INTO items (rid, project, key, num, title, state, body, opened_at, updated_at)
+  SELECT n, 'o/p', 'T', n, 'Item number ' || n, 'open', repeat('body ', 400), 'o', 'u'
   FROM generate_series(1, 2000) AS n;
 INSERT INTO links (rid, kind, to_path, to_line)
   SELECT n, 'cites_file', 'src/module_' || n || '/file_' || f || '.rs', f
@@ -63,7 +62,7 @@ INSERT INTO links (rid, kind, to_path, to_line)
 INSERT INTO links (rid, kind, to_rid)
   SELECT n, 'related', (n + d - 1) % 2000 + 1
   FROM generate_series(1, 2000) AS n, generate_series(1, 2) AS d;
-"#;
+";
 
 #[tokio::test]
 async fn test_graph_peak_memory_is_a_few_times_its_response() {

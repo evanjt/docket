@@ -88,8 +88,6 @@ export function staleClaims(claims: Claim[] | undefined): Map<string, string> {
 }
 
 const PHRASES: Record<string, [string, string]> = {
-  conflict: ['sync conflict', 'sync conflicts'],
-  undefined_key: ['undefined key', 'undefined keys'],
   integrity: ['integrity failure', 'integrity failures'],
   foreign_keys: ['foreign key violation', 'foreign key violations'],
   cycle: ['cycle', 'cycles'],

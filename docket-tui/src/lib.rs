@@ -10,7 +10,6 @@ pub mod page;
 pub mod palette;
 pub mod run;
 pub mod source;
-pub mod starter;
 pub mod style;
 pub mod view;
 pub mod write;

@@ -61,21 +61,20 @@ pub struct ItemView {
     pub decision: Option<String>,
     pub decided_at: Option<String>,
     pub resolution: Option<String>,
-    pub scope: Option<String>,
     pub complexity: Option<String>,
-    pub theme: Option<String>,
     /// The release it is in by name; none is the backlog.
     #[serde(default)]
     pub release: Option<String>,
     /// The area it is in by name.
     #[serde(default)]
     pub area: Option<String>,
-    pub rank: Option<i64>,
-    pub tags: Vec<String>,
     /// The labels it carries: its own, then those of each plan above it.
     #[serde(default)]
     pub labels: Vec<String>,
     pub body: String,
+    /// Always 0: items no longer carry a sync conflict mark. Sent so a client built before reads the
+    /// view.
+    #[serde(default)]
     pub conflict: i64,
     pub opened_at: String,
     pub updated_at: String,

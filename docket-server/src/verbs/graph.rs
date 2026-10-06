@@ -4,18 +4,19 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::LazyLock;
 
 use regex::Regex;
-use sea_orm::{ConnectionTrait, DbErr};
+use sea_orm::{ConnectionTrait, DbErr, QueryResult};
+use serde_json::json;
 
 use docket_core::api::Progress;
-use docket_core::item::{Field, Item};
+use docket_core::item::Item;
 use docket_core::member::{Edge, Tie, descendants};
 use docket_core::release::Listed;
-use docket_core::stall::Target;
+use docket_core::stall::{Target, Wait};
 use docket_core::text::split_id;
 use docket_core::touch::{declared_files, fold_paths, same_file};
 use docket_core::word::ItemType;
 
-use crate::store::{ProjectRow, STATE_COLUMNS, Tx, column, items, sql};
+use crate::store::{ASKED, ProjectRow, STATE_COLUMNS, Tx, column, items, sql};
 use crate::verbs::Failure;
 
 pub use crate::reads::public::member_count;
@@ -60,7 +61,7 @@ pub async fn package_progress<C: ConnectionTrait>(c: &C, prid: i64) -> Result<Pr
     Ok(Progress {
         done: ms.iter().filter(|m| m.state != "open").count(),
         total: ms.len(),
-        live: ms.iter().filter(|m| m.claim_branch.is_some()).count(),
+        live: ms.iter().filter(|m| m.claim().is_some()).count(),
     })
 }
 
@@ -88,13 +89,44 @@ pub async fn open_under<C: ConnectionTrait>(
     .collect())
 }
 
-/// How each item of a project stands as something depended on, and its id.
+/// How each item of a project stands as something depended on, its id, and which items are
+/// conditions: on the owner's turn and not questions.
 pub struct Standing {
     pub targets: BTreeMap<i64, Target>,
     pub ids: BTreeMap<i64, String>,
+    pub conditions: BTreeSet<i64>,
 }
 
+/// The columns a standing reads of an item, in the order `Standing::add` takes them. An item is on
+/// the owner's turn while an ask of theirs is open on it.
+static STANDING: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "rid, id, state, decision IS NOT NULL, superseded_by, \
+         COALESCE(state='open' AND type<>'question' AND {ASKED}, false)"
+    )
+});
+
 impl Standing {
+    fn empty() -> Self {
+        Standing {
+            targets: BTreeMap::new(),
+            ids: BTreeMap::new(),
+            conditions: BTreeSet::new(),
+        }
+    }
+
+    fn add(&mut self, r: &QueryResult) -> Result<(), DbErr> {
+        let rid: i64 = r.try_get_by_index(0)?;
+        let state: String = r.try_get_by_index(2)?;
+        let target = Target::of(&state, r.try_get_by_index(3)?, r.try_get_by_index(4)?);
+        self.targets.insert(rid, target);
+        self.ids.insert(rid, r.try_get_by_index(1)?);
+        if r.try_get_by_index::<bool>(5)? {
+            self.conditions.insert(rid);
+        }
+        Ok(())
+    }
+
     pub fn id(&self, rid: i64) -> String {
         self.ids.get(&rid).cloned().unwrap_or_default()
     }
@@ -105,37 +137,121 @@ impl Standing {
         ids.extend(path.first().map(|r| self.id(*r)));
         ids.join(" -> ")
     }
+
+    /// What an item with these dependencies, `(on, created_at)` oldest first, waits on.
+    pub fn wait(&self, deps: &[(i64, String)]) -> Option<Wait> {
+        docket_core::stall::wait(deps, &self.targets, &self.ids, &self.conditions)
+    }
 }
 
 pub async fn standing<C: ConnectionTrait>(c: &C, slug: &str) -> Result<Standing, DbErr> {
     let rows = c
         .query_all_raw(sql(
-            "SELECT rid, id, state, decision IS NOT NULL, superseded_by FROM items WHERE project=?",
+            &format!("SELECT {} FROM items WHERE project=?", *STANDING),
             vec![slug.into()],
         ))
         .await?;
-    let mut out = Standing {
-        targets: BTreeMap::new(),
-        ids: BTreeMap::new(),
-    };
+    let mut out = Standing::empty();
     for r in rows {
-        let rid: i64 = r.try_get_by_index(0)?;
-        let state: String = r.try_get_by_index(2)?;
-        let target = Target::of(&state, r.try_get_by_index(3)?, r.try_get_by_index(4)?);
-        out.targets.insert(rid, target);
-        out.ids.insert(rid, r.try_get_by_index(1)?);
+        out.add(&r)?;
     }
     Ok(out)
 }
 
+/// The order of one item's dependencies, `d`, on the items `o`: oldest first, and those made in the
+/// same second by the id of what they depend on, which a restore keeps.
+const OLDEST: &str = "d.created_at, o.key, o.num";
+
 /// What rid depends on, oldest first.
 pub async fn depends_on<C: ConnectionTrait>(c: &C, rid: i64) -> Result<Vec<i64>, DbErr> {
-    column(
-        c,
-        "SELECT on_rid FROM dependencies WHERE rid=? ORDER BY created_at, on_rid",
-        vec![rid.into()],
-    )
-    .await
+    Ok(dependencies_of(c, rid)
+        .await?
+        .into_iter()
+        .map(|(on, _)| on)
+        .collect())
+}
+
+/// What rid depends on, each with when the dependency was made, oldest first.
+pub async fn dependencies_of<C: ConnectionTrait>(
+    c: &C,
+    rid: i64,
+) -> Result<Vec<(i64, String)>, DbErr> {
+    let rows = c
+        .query_all_raw(sql(
+            &format!(
+                "SELECT d.on_rid, d.created_at FROM dependencies d JOIN items o ON o.rid=d.on_rid \
+                 WHERE d.rid=? ORDER BY {OLDEST}"
+            ),
+            vec![rid.into()],
+        ))
+        .await?;
+    let mut out = Vec::with_capacity(rows.len());
+    for r in rows {
+        out.push((r.try_get_by_index(0)?, r.try_get_by_index(1)?));
+    }
+    Ok(out)
+}
+
+/// The waits of the open items whose dependencies match `filter`, a condition on `d`, the dependency,
+/// and `i`, the item that depends: each read from its dependencies alone, and the items that hold
+/// them followed through their successors. The one reader of what an item waits on.
+pub async fn waits_where<C: ConnectionTrait>(
+    c: &C,
+    filter: &str,
+    values: Vec<sea_orm::Value>,
+) -> Result<BTreeMap<i64, Wait>, DbErr> {
+    let rows = c
+        .query_all_raw(sql(
+            &format!(
+                "SELECT d.rid, d.on_rid, d.created_at FROM dependencies d JOIN items i ON i.rid=d.rid \
+                 JOIN items o ON o.rid=d.on_rid WHERE i.state='open' AND {filter} ORDER BY d.rid, {OLDEST}"
+            ),
+            values.clone(),
+        ))
+        .await?;
+    let mut deps: BTreeMap<i64, Vec<(i64, String)>> = BTreeMap::new();
+    for r in rows {
+        deps.entry(r.try_get_by_index(0)?)
+            .or_default()
+            .push((r.try_get_by_index(1)?, r.try_get_by_index(2)?));
+    }
+    if deps.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let held = c
+        .query_all_raw(sql(
+            &format!(
+                "WITH RECURSIVE chain(rid) AS ( \
+                   SELECT d.on_rid FROM dependencies d JOIN items i ON i.rid=d.rid \
+                   WHERE i.state='open' AND {filter} \
+                   UNION SELECT s.superseded_by FROM items s JOIN chain ON s.rid=chain.rid \
+                   WHERE s.state='dropped' AND s.superseded_by IS NOT NULL) \
+                 SELECT {standing} FROM items JOIN chain USING (rid)",
+                standing = *STANDING
+            ),
+            values,
+        ))
+        .await?;
+    let mut st = Standing::empty();
+    for r in held {
+        st.add(&r)?;
+    }
+    Ok(deps
+        .into_iter()
+        .filter_map(|(rid, d)| st.wait(&d).map(|w| (rid, w)))
+        .collect())
+}
+
+/// What each open item of a project waits on, by rid; an item not waiting is absent.
+pub async fn waits<C: ConnectionTrait>(c: &C, slug: &str) -> Result<BTreeMap<i64, Wait>, DbErr> {
+    waits_where(c, "i.project=?", vec![slug.into()]).await
+}
+
+/// What one item waits on, or none when it is closed or nothing holds it.
+pub async fn wait_of<C: ConnectionTrait>(c: &C, rid: i64) -> Result<Option<Wait>, DbErr> {
+    Ok(waits_where(c, "d.rid=?", vec![rid.into()])
+        .await?
+        .remove(&rid))
 }
 
 /// Every open item's dependencies, as `(rid, on_rid)`, by item.
@@ -145,8 +261,11 @@ pub async fn open_dependencies<C: ConnectionTrait>(
 ) -> Result<Vec<(i64, i64)>, DbErr> {
     let rows = c
         .query_all_raw(sql(
-            "SELECT d.rid, d.on_rid FROM dependencies d JOIN items i ON i.rid=d.rid \
-             WHERE i.project=? AND i.state='open' ORDER BY d.rid, d.created_at, d.on_rid",
+            &format!(
+                "SELECT d.rid, d.on_rid FROM dependencies d JOIN items i ON i.rid=d.rid \
+                 JOIN items o ON o.rid=d.on_rid WHERE i.project=? AND i.state='open' \
+                 ORDER BY d.rid, {OLDEST}"
+            ),
             vec![slug.into()],
         ))
         .await?;
@@ -185,36 +304,7 @@ pub async fn holds_of<C: ConnectionTrait>(
     Ok(out)
 }
 
-/// The refusal for any cycle of holds in the project, naming one.
-pub async fn held_wait<C: ConnectionTrait>(
-    c: &C,
-    p: &ProjectRow,
-) -> Result<Option<Failure>, DbErr> {
-    let st = standing(c, &p.rules.slug).await?;
-    let holds = holds_of(c, p, &st).await?;
-    let Some(&first) = docket_core::stall::cycles(&holds).iter().next() else {
-        return Ok(None);
-    };
-    let around = holds[&first]
-        .iter()
-        .find_map(|n| docket_core::stall::path(&holds, *n, first))
-        .map_or_else(
-            || vec![first],
-            |mut path| {
-                path.pop();
-                path.insert(0, first);
-                path
-            },
-        );
-    Ok(Some(Failure::Refused(format!(
-        "{} is held in a cycle: {}, so {} would wait forever. Remove a dependency on it, or unlink it, first.",
-        st.id(first),
-        st.cycle(&around),
-        st.id(first)
-    ))))
-}
-
-/// How a rewait moved an item.
+/// How a change to what an item depends on moved it.
 pub enum Rewait {
     Same,
     /// It waits now, and did not before.
@@ -224,66 +314,43 @@ pub enum Rewait {
     Resumed(Box<Item>),
 }
 
-/// An item's wait set from what still holds it: the item it waits on while that still holds it, else
-/// the first of its dependencies not yet satisfied, or none. A wait on a condition, a plan's gate
-/// among them, is left as it is. An item that begins to wait gives up its claim. One that resumes
-/// goes to the agents, unless the owner was asked something during the wait, which still stands.
+/// What follows from an item's wait moving from `before` to what its dependencies hold it on now.
+/// An item that begins to wait gives up its claim with the `waited` event its caller writes; one held
+/// by another item than before records it; one that resumes goes to the agents, unless the owner was
+/// asked something during the wait, which still stands.
 pub async fn rewait(
     tx: &mut Tx,
     slug: &str,
     r: &Item,
-    st: &Standing,
+    before: Option<&Wait>,
     why: &str,
 ) -> Result<Rewait, Failure> {
-    if r.state != "open" || r.wait_on.as_deref() == Some("condition") {
+    if r.state != "open" {
         return Ok(Rewait::Same);
     }
-    let on = depends_on(&tx.conn, r.rid).await?;
-    let holders = docket_core::stall::holders(&on, &st.targets);
-    match holders.first() {
-        Some(_) if r.wait_on.is_some() && r.wait_item.is_some_and(|w| holders.contains(&w)) => {
-            Ok(Rewait::Same)
-        }
-        Some(&h) => {
-            let mut cols = vec![
-                Field::WaitOn(Some("item".into())),
-                Field::WaitItem(Some(h)),
-                Field::WaitRef(Some(st.id(h))),
-                Field::WaitSince(Some(r.wait_since.clone().unwrap_or_else(|| tx.now.clone()))),
-            ];
-            if r.wait_on.is_some() {
-                tx.update(r.rid, &cols).await?;
-                let note = if why.is_empty() {
-                    format!("on {}", st.id(h))
-                } else {
-                    format!("on {} ({why})", st.id(h))
-                };
-                tx.event(slug, Some(r.rid), "waited", Some(&note), None, None)
-                    .await?;
-                return Ok(Rewait::Switched);
-            }
-            cols.extend(docket_core::rules::unclaimed());
-            tx.update(r.rid, &cols).await?;
-            Ok(Rewait::Began)
-        }
-        None if r.wait_on.is_some() => {
-            let mut cols = vec![
-                Field::WaitOn(None),
-                Field::WaitItem(None),
-                Field::WaitRef(None),
-                Field::WaitSince(None),
-            ];
-            let asked_since = r.turn.as_deref() == Some("user")
-                && r.asked_at.as_deref() > r.wait_since.as_deref();
-            if !asked_since {
-                cols.push(Field::Turn(Some("agent".into())));
-            }
-            let row = tx.update(r.rid, &cols).await?;
-            tx.event(slug, Some(r.rid), "resumed", Some(why), None, None)
+    let now = wait_of(&tx.conn, r.rid).await?;
+    match (before, now) {
+        (Some(b), Some(n)) if b.item == n.item => Ok(Rewait::Same),
+        (Some(_), Some(n)) => {
+            let note = if why.is_empty() {
+                format!("on {}", n.id)
+            } else {
+                format!("on {} ({why})", n.id)
+            };
+            tx.event(slug, Some(r.rid), "waited", Some(&note), None, None)
                 .await?;
-            Ok(Rewait::Resumed(Box::new(row)))
+            Ok(Rewait::Switched)
         }
-        None => Ok(Rewait::Same),
+        (None, Some(_)) => Ok(Rewait::Began),
+        (Some(b), None) => {
+            let asked_since = r.ask().is_some_and(|a| a.since > b.since);
+            let data = asked_since.then(|| json!({ "ask": docket_core::assignment::KEPT }));
+            tx.update(r.rid, &[]).await?;
+            tx.event(slug, Some(r.rid), "resumed", Some(why), None, data.as_ref())
+                .await?;
+            Ok(Rewait::Resumed(Box::new(tx.fresh(r.rid).await?)))
+        }
+        (None, None) => Ok(Rewait::Same),
     }
 }
 
@@ -294,82 +361,94 @@ async fn dependants_of<C: ConnectionTrait>(
     target: i64,
     st: &Standing,
 ) -> Result<Vec<i64>, DbErr> {
-    let mut out: BTreeSet<i64> = open_dependencies(c, slug)
+    let out: BTreeSet<i64> = open_dependencies(c, slug)
         .await?
         .into_iter()
         .filter(|(_, on)| docket_core::stall::passes(*on, target, &st.targets))
         .map(|(rid, _)| rid)
         .collect();
-    let mirrored: Vec<i64> = column(
-        c,
-        "SELECT rid FROM items WHERE wait_item=? AND state='open'",
-        vec![target.into()],
-    )
-    .await?;
-    out.extend(mirrored);
     Ok(out.into_iter().collect())
 }
 
+/// The standing as it was before `was` became `target`: the same, with the target as it stood.
+fn standing_before(st: &Standing, was: &Item) -> Standing {
+    let mut targets = st.targets.clone();
+    targets.insert(
+        was.rid,
+        Target::of(&was.state, was.decision.is_some(), was.superseded_by),
+    );
+    Standing {
+        targets,
+        ids: st.ids.clone(),
+        conditions: st.conditions.clone(),
+    }
+}
+
 /// Every item with a dependency on target is waited again from what still holds it, and resumes when
-/// nothing does. `how` is what happened to target: closed, decided or dropped. A drop that names no
-/// successor leaves the dependency abandoned, so each such item goes to the owner to ask whether it
-/// is still wanted.
+/// nothing does. `was` is target as it stood before, and `how` what happened to it: closed, decided or
+/// dropped. A drop that names no successor leaves the dependency abandoned, so each such item goes to
+/// the owner to ask whether it is still wanted.
 pub async fn release_waiters(
     tx: &mut Tx,
     p: &ProjectRow,
+    was: &Item,
     target: &Item,
     how: &str,
 ) -> Result<Vec<Item>, Failure> {
     let slug = p.rules.slug.clone();
     let st = standing(&tx.conn, &slug).await?;
+    let before = standing_before(&st, was);
     let abandoned = how == "dropped" && target.superseded_by.is_none();
     let why = format!("{} {how}", target.id);
     let mut out = Vec::new();
     for rid in dependants_of(&tx.conn, &slug, target.rid, &st).await? {
         let w = tx.fresh(rid).await?;
-        if let Rewait::Resumed(row) = rewait(tx, &slug, &w, &st, &why).await? {
-            out.push(*row);
+        let held = before.wait(&dependencies_of(&tx.conn, rid).await?);
+        match rewait(tx, &slug, &w, held.as_ref(), &why).await? {
+            Rewait::Resumed(row) => out.push(*row),
+            Rewait::Began => {
+                let on = wait_of(&tx.conn, rid).await?.map(|n| n.id);
+                let note = format!("on {} ({why})", on.unwrap_or_default());
+                tx.event(&slug, Some(rid), "waited", Some(&note), None, None)
+                    .await?;
+            }
+            Rewait::Same | Rewait::Switched => {}
         }
         if abandoned {
             let note = format!(
                 "{}, which this waited on, was dropped. Still wanted?",
                 target.id
             );
-            let mut cols = vec![
-                Field::Turn(Some("user".into())),
-                Field::TurnNote(Some(note.clone())),
-                Field::AskedAt(Some(tx.now.clone())),
-            ];
-            cols.extend(docket_core::rules::unclaimed());
-            let row = tx.update(rid, &cols).await?;
+            tx.update(rid, &[]).await?;
             tx.event(&slug, Some(rid), "asked", Some(&note), None, None)
                 .await?;
+            let row = tx.fresh(rid).await?;
             if let Some(o) = out.iter_mut().find(|o| o.rid == rid) {
                 *o = row;
             }
         }
     }
-    let rids: Vec<i64> = out.iter().map(|r| r.rid).collect();
-    let mut free = Vec::with_capacity(rids.len());
-    for rid in rids {
-        let row = tx.fresh(rid).await?;
-        if row.wait_on.is_none() {
-            free.push(row);
-        }
-    }
-    Ok(free)
+    Ok(out)
 }
 
 /// Every open, unclaimed item with a dependency on target waits on it again, once it is open again.
-pub async fn hold_waiters(tx: &mut Tx, p: &ProjectRow, target: &Item) -> Result<(), Failure> {
+/// `was` is target as it stood before it reopened.
+pub async fn hold_waiters(
+    tx: &mut Tx,
+    p: &ProjectRow,
+    was: &Item,
+    target: &Item,
+) -> Result<(), Failure> {
     let slug = p.rules.slug.clone();
     let st = standing(&tx.conn, &slug).await?;
+    let before = standing_before(&st, was);
     for rid in dependants_of(&tx.conn, &slug, target.rid, &st).await? {
         let w = tx.fresh(rid).await?;
-        if w.claim_branch.is_some() {
+        if w.claim().is_some() {
             continue;
         }
-        if let Rewait::Began = rewait(tx, &slug, &w, &st, "reopened").await? {
+        let held = before.wait(&dependencies_of(&tx.conn, rid).await?);
+        if let Rewait::Began = rewait(tx, &slug, &w, held.as_ref(), "reopened").await? {
             let note = format!("on {} (reopened)", target.id);
             tx.event(&slug, Some(rid), "waited", Some(&note), None, None)
                 .await?;
@@ -434,13 +513,10 @@ pub async fn live_overlaps<C: ConnectionTrait>(
         return Ok(Vec::new());
     }
     let mut out = Vec::new();
-    let others = items(
-        c,
-        "SELECT * FROM items WHERE project=? AND state='open' AND claim_branch IS NOT NULL \
-         AND rid<>? ORDER BY claim_since",
-        vec![slug.into(), r.rid.into()],
-    )
-    .await?;
+    let others = crate::store::claimed(c, slug, None)
+        .await?
+        .into_iter()
+        .filter(|o| o.rid != r.rid);
     for other in others {
         let theirs = work_paths(c, &other).await?;
         let shared: Vec<String> = mine

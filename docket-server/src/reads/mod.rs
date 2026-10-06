@@ -47,6 +47,7 @@ pub fn router() -> Router<DatabaseConnection> {
         .route("/check", get(board::check))
         .route("/graph", get(board::graph))
         .route("/shares", get(board::shares))
+        .route("/held", get(board::held))
         .route("/log/{id}", get(detail::log))
         .route("/deps/{id}", get(detail::deps))
         .route("/context/{id}", get(detail::context))

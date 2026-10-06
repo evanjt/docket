@@ -1,6 +1,6 @@
 //! One write's transaction: the rows, their events and links, the index and the dump mark.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 
@@ -11,26 +11,26 @@ use sea_orm::{
 use serde_json::Value as Json;
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
-use docket_core::item::{Field, Item, KeySpec, Project, Refused};
+use docket_core::assignment::{self, Ask, Claim, Held};
+use docket_core::clock;
+use docket_core::item::{Field, Item, Project, Refused};
 use docket_core::pyjson;
 use docket_core::text::{citations, split_id};
 use docket_core::word::ItemType;
-use docket_core::{assignment, clock};
 use docket_migration::assignments;
 
 use crate::changes::CHANNEL;
 use crate::entities::{item, project};
 use crate::verbs::Failure;
 
-/// A project row, with the keys parsed and the raw columns a verb reads.
+/// A project row, with the columns a verb reads.
 #[derive(Clone, Debug)]
 pub struct ProjectRow {
     pub rules: Project,
-    pub keys: Vec<Json>,
     pub worktree_hint: Option<String>,
 }
 
-/// The item as stored, tags decoded.
+/// The item as stored, its open assignment not yet read.
 pub fn to_item(m: item::Model) -> Item {
     Item {
         rid: m.rid,
@@ -40,54 +40,27 @@ pub fn to_item(m: item::Model) -> Item {
         id: m.id,
         title: m.title,
         state: m.state,
-        turn: m.turn,
-        turn_note: m.turn_note,
-        asked_at: m.asked_at,
-        claim_branch: m.claim_branch,
-        claim_host: m.claim_host,
-        claim_since: m.claim_since,
-        claim_runner: m.claim_runner,
-        claim_job: m.claim_job,
-        claim_on: m.claim_on,
-        wait_on: m.wait_on,
-        wait_item: m.wait_item,
-        wait_ref: m.wait_ref,
-        wait_since: m.wait_since,
+        held: None,
         decision: m.decision,
         decided_at: m.decided_at,
         resolution: m.resolution,
         superseded_by: m.superseded_by,
         parent_rid: m.parent_rid,
-        scope: m.scope,
         complexity: m.complexity,
-        group_name: m.group_name,
-        theme: m.theme,
         release_id: m.release_id,
         area_id: m.area_id,
-        rank: m.rank,
         item_type: ItemType::parse(&m.item_type).unwrap_or_default(),
         priority: m.priority,
-        tags: serde_json::from_value(m.tags).unwrap_or_default(),
         body: m.body,
-        conflict: m.conflict,
         opened_at: m.opened_at,
         updated_at: m.updated_at,
     }
 }
 
-/// A project's keys from its stored JSON, skipping a spec the rules cannot read.
+/// The project as a verb reads it.
 pub fn project_row(m: project::Model) -> ProjectRow {
-    let keys: Vec<Json> = serde_json::from_value(m.keys).unwrap_or_default();
-    let specs = keys
-        .iter()
-        .filter_map(|k| serde_json::from_value::<KeySpec>(k.clone()).ok())
-        .collect();
     ProjectRow {
-        rules: Project {
-            slug: m.slug,
-            keys: specs,
-        },
-        keys,
+        rules: Project { slug: m.slug },
         worktree_hint: m.worktree_hint,
     }
 }
@@ -111,16 +84,142 @@ pub fn json(value: Json) -> Value {
     Value::Json(Some(Box::new(value)))
 }
 
-/// Item rows for a query, each as the rules read it.
+/// The open assignment rows: who holds each item now. Every read of a claim or of the owner's turn
+/// goes through it.
+const HELD: &str = "SELECT rid, kind, branch, host, started_at, runner, job, machine, note \
+                    FROM assignments WHERE ended_at IS NULL";
+
+/// A condition on `items.rid`: an open claim holds the item.
+pub const CLAIMED: &str =
+    "rid IN (SELECT rid FROM assignments WHERE ended_at IS NULL AND kind='claim')";
+
+/// A condition on `items.rid`: an open ask holds the item, so it is the owner's turn.
+pub const ASKED: &str =
+    "rid IN (SELECT rid FROM assignments WHERE ended_at IS NULL AND kind='ask')";
+
+/// A condition on `items.rid`: an open claim made on the host bound to it holds the item.
+pub const CLAIMED_ON: &str =
+    "rid IN (SELECT rid FROM assignments WHERE ended_at IS NULL AND kind='claim' AND host=?)";
+
+/// When the item's open assignment began, to order a query of `items` by.
+pub const HELD_SINCE: &str =
+    "(SELECT a.started_at FROM assignments a WHERE a.rid=items.rid AND a.ended_at IS NULL)";
+
+/// The open items of a project that a claim holds, on one host when one is named, oldest claim first.
+pub async fn claimed<C: ConnectionTrait>(
+    c: &C,
+    slug: &str,
+    host: Option<&str>,
+) -> Result<Vec<Item>, DbErr> {
+    let mut values: Vec<Value> = vec![slug.into()];
+    let on = match host {
+        Some(host) => {
+            values.push(host.into());
+            format!(" AND {CLAIMED_ON}")
+        }
+        None => String::new(),
+    };
+    let text = format!(
+        "SELECT * FROM items WHERE project=? AND state='open' AND {CLAIMED}{on} \
+         ORDER BY {HELD_SINCE}, rid"
+    );
+    items(c, &text, values).await
+}
+
+/// How many rids one read of the open rows names.
+const HELD_PAGE: usize = 1000;
+
+#[derive(FromQueryResult)]
+struct HeldRow {
+    rid: i64,
+    kind: String,
+    branch: Option<String>,
+    host: String,
+    started_at: String,
+    runner: Option<String>,
+    job: Option<String>,
+    machine: Option<String>,
+    note: Option<String>,
+}
+
+impl HeldRow {
+    fn held(self) -> Option<(i64, Held)> {
+        let held = match assignment::Kind::parse(&self.kind)? {
+            assignment::Kind::Claim => Held::Claim(Claim {
+                branch: self.branch.unwrap_or_default(),
+                host: self.host,
+                since: self.started_at,
+                runner: self.runner,
+                job: self.job,
+                on: self.machine,
+            }),
+            assignment::Kind::Ask => Held::Ask(Ask {
+                since: self.started_at,
+                note: self.note,
+            }),
+        };
+        Some((self.rid, held))
+    }
+}
+
+async fn held_where<C: ConnectionTrait>(
+    c: &C,
+    tail: &str,
+    values: Vec<Value>,
+) -> Result<HashMap<i64, Held>, DbErr> {
+    Ok(
+        HeldRow::find_by_statement(sql(&format!("{HELD} {tail}"), values))
+            .all(c)
+            .await?
+            .into_iter()
+            .filter_map(HeldRow::held)
+            .collect(),
+    )
+}
+
+/// The open assignment of each of the rids that has one.
+pub async fn held<C: ConnectionTrait>(c: &C, rids: &[i64]) -> Result<HashMap<i64, Held>, DbErr> {
+    let mut out = HashMap::new();
+    for page in rids.chunks(HELD_PAGE) {
+        let marks = vec!["?"; page.len()].join(", ");
+        let values = page.iter().map(|r| (*r).into()).collect();
+        out.extend(held_where(c, &format!("AND rid IN ({marks})"), values).await?);
+    }
+    Ok(out)
+}
+
+/// The open assignment of each item of a project that has one.
+pub async fn held_in<C: ConnectionTrait>(c: &C, slug: &str) -> Result<HashMap<i64, Held>, DbErr> {
+    held_where(
+        c,
+        "AND rid IN (SELECT rid FROM items WHERE project=?)",
+        vec![slug.into()],
+    )
+    .await
+}
+
+/// The open assignment of one item.
+pub async fn held_of<C: ConnectionTrait>(c: &C, rid: i64) -> Result<Option<Held>, DbErr> {
+    Ok(held(c, &[rid]).await?.remove(&rid))
+}
+
+/// Item rows for a query, each as the rules read it, with its open assignment.
 pub async fn items<C: ConnectionTrait>(
     c: &C,
     text: &str,
     values: Vec<Value>,
 ) -> Result<Vec<Item>, DbErr> {
     let rows = c.query_all_raw(sql(text, values)).await?;
-    rows.iter()
+    let mut out = rows
+        .iter()
         .map(|r| item::Model::from_query_result(r, "").map(to_item))
-        .collect()
+        .collect::<Result<Vec<Item>, DbErr>>()?;
+    let rids: Vec<i64> = out.iter().map(|i| i.rid).collect();
+    let mut held = held(c, &rids).await?;
+    for i in &mut out {
+        i.held = held.remove(&i.rid);
+    }
+    Ok(out)
 }
 
 /// One item row for a query, or none.
@@ -173,10 +272,9 @@ pub async fn by_rid<C: ConnectionTrait>(c: &C, rid: i64) -> Result<Option<Item>,
 
 /// Every column of `items` but the body, which comes back empty. For reads that only derive an
 /// item's state, so a table of large bodies is never loaded to compute it.
-pub const STATE_COLUMNS: &str = "rid, project, key, num, id, title, state, turn, turn_note, asked_at, \
-    claim_branch, claim_host, claim_since, claim_runner, claim_job, claim_on, wait_on, wait_item, \
-    wait_ref, wait_since, decision, decided_at, resolution, superseded_by, parent_rid, scope, complexity, \
-    group_name, theme, release_id, area_id, rank, type, priority, tags, '' AS body, conflict, opened_at, updated_at";
+pub const STATE_COLUMNS: &str = "rid, project, key, num, id, title, state, decision, decided_at, \
+    resolution, superseded_by, parent_rid, complexity, release_id, area_id, type, priority, '' AS body, \
+    opened_at, updated_at";
 
 pub async fn id_of<C: ConnectionTrait>(c: &C, rid: i64) -> Result<Option<String>, DbErr> {
     scalar(c, "SELECT id FROM items WHERE rid=?", vec![rid.into()]).await
@@ -210,35 +308,16 @@ fn column_of(f: &Field) -> (&'static str, Value) {
     match f.clone() {
         Field::Title(v) => ("title", v.into()),
         Field::State(v) => ("state", v.into()),
-        Field::Turn(v) => ("turn", v.into()),
-        Field::TurnNote(v) => ("turn_note", v.into()),
-        Field::AskedAt(v) => ("asked_at", v.into()),
-        Field::ClaimBranch(v) => ("claim_branch", v.into()),
-        Field::ClaimHost(v) => ("claim_host", v.into()),
-        Field::ClaimSince(v) => ("claim_since", v.into()),
-        Field::ClaimRunner(v) => ("claim_runner", v.into()),
-        Field::ClaimJob(v) => ("claim_job", v.into()),
-        Field::ClaimOn(v) => ("claim_on", v.into()),
-        Field::WaitOn(v) => ("wait_on", v.into()),
-        Field::WaitItem(v) => ("wait_item", v.into()),
-        Field::WaitRef(v) => ("wait_ref", v.into()),
-        Field::WaitSince(v) => ("wait_since", v.into()),
         Field::Decision(v) => ("decision", v.into()),
         Field::DecidedAt(v) => ("decided_at", v.into()),
         Field::Resolution(v) => ("resolution", v.into()),
         Field::SupersededBy(v) => ("superseded_by", v.into()),
         Field::ParentRid(v) => ("parent_rid", v.into()),
-        Field::Scope(v) => ("scope", v.into()),
         Field::Complexity(v) => ("complexity", v.into()),
-        Field::GroupName(v) => ("group_name", v.into()),
-        Field::Theme(v) => ("theme", v.into()),
         Field::ReleaseId(v) => ("release_id", v.into()),
         Field::AreaId(v) => ("area_id", v.into()),
-        Field::Rank(v) => ("rank", v.into()),
         Field::Priority(v) => ("priority", v.into()),
-        Field::Tags(v) => ("tags", json(serde_json::json!(v))),
         Field::Body(v) => ("body", v.into()),
-        Field::Conflict(v) => ("conflict", v.into()),
     }
 }
 
@@ -249,17 +328,14 @@ pub struct NewItem {
     pub key: String,
     pub num: i64,
     pub title: String,
-    pub turn: String,
     pub body: String,
     pub complexity: Option<String>,
-    pub theme: Option<String>,
     pub release_id: Option<i64>,
     pub area_id: Option<i64>,
-    pub group_name: Option<String>,
-    pub scope: Option<String>,
     pub item_type: ItemType,
     pub priority: String,
-    pub tags: Vec<String>,
+    /// The labels it is given, by name.
+    pub labels: Vec<String>,
 }
 
 /// One command's transaction: the write lock, the writes, the dump marks, the change notice, COMMIT.
@@ -322,10 +398,6 @@ impl Tx {
             .ok_or_else(|| Failure::NotFound(format!("no item with rid {rid}")))
     }
 
-    pub async fn items(&self, text: &str, values: Vec<Value>) -> Result<Vec<Item>, DbErr> {
-        items(&self.conn, text, values).await
-    }
-
     pub async fn execute(&self, text: &str, values: Vec<Value>) -> Result<u64, DbErr> {
         Ok(self
             .conn
@@ -366,31 +438,30 @@ impl Tx {
     }
 
     pub async fn insert(&mut self, cols: NewItem) -> Result<Item, Failure> {
-        let text = "INSERT INTO items (project, key, num, title, state, turn, body, complexity, theme, \
-                    release_id, area_id, group_name, scope, type, priority, tags, opened_at, updated_at) \
-                    VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *";
+        let text = "INSERT INTO items (project, key, num, title, state, body, complexity, \
+                    release_id, area_id, type, priority, opened_at, updated_at) \
+                    VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *";
+        let slug = cols.project.clone();
         let values: Vec<Value> = vec![
             cols.project.into(),
             cols.key.into(),
             cols.num.into(),
             cols.title.into(),
-            cols.turn.into(),
             cols.body.into(),
             cols.complexity.into(),
-            cols.theme.into(),
             cols.release_id.into(),
             cols.area_id.into(),
-            cols.group_name.into(),
-            cols.scope.into(),
             cols.item_type.as_str().into(),
             cols.priority.into(),
-            json(serde_json::json!(cols.tags)),
             self.now.clone().into(),
             self.now.clone().into(),
         ];
         let row = item_row(&self.conn, text, values)
             .await?
             .ok_or_else(|| Failure::Db(DbErr::RecordNotInserted))?;
+        for name in &cols.labels {
+            crate::verbs::labels::give(&self.conn, &slug, row.rid, name).await?;
+        }
         self.touch(row.rid);
         self.index(row.rid).await?;
         Ok(row)
@@ -498,6 +569,25 @@ impl Tx {
             };
             self.assign(rid, &e).await?;
         }
+        Ok(())
+    }
+
+    /// The note of the item's open ask set, what it needs of the owner; refused when the owner
+    /// holds no ask on it.
+    pub async fn note_ask(&mut self, rid: i64, note: Option<&str>) -> Result<(), Failure> {
+        let set = self
+            .execute(
+                "UPDATE assignments SET note=? WHERE rid=? AND ended_at IS NULL AND kind='ask'",
+                vec![note.map(str::to_string).into(), rid.into()],
+            )
+            .await?;
+        if set == 0 {
+            let id = id_of(&self.conn, rid).await?.unwrap_or_default();
+            return Err(Failure::Refused(format!(
+                "{id} is not the owner's turn, so it has no note for the owner: ask it to hand it over."
+            )));
+        }
+        self.touch(rid);
         Ok(())
     }
 

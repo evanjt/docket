@@ -152,6 +152,53 @@ pub fn holders(on: &[i64], targets: &BTreeMap<i64, Target>) -> Vec<i64> {
     out
 }
 
+/// What an open item waits on, read from its dependencies alone: the item that holds the oldest of
+/// them not yet satisfied, and since when.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Wait {
+    /// `condition` when what holds it is on the owner's turn and not a question, else `item`.
+    pub on: &'static str,
+    /// The item that holds it.
+    pub item: i64,
+    /// That item's id.
+    pub id: String,
+    /// When the dependency it waits through was made.
+    pub since: String,
+}
+
+impl Wait {
+    /// Whether what holds it is a condition: on the owner's turn and not a question.
+    #[must_use]
+    pub fn is_condition(&self) -> bool {
+        self.on == "condition"
+    }
+}
+
+/// The wait of an item from its dependencies, each `(on, created_at)`, oldest first: the first not yet
+/// satisfied, by the item that holds it. `ids` names the items and `conditions` are those on the
+/// owner's turn that are not questions. None when nothing holds it.
+#[must_use]
+pub fn wait(
+    deps: &[(i64, String)],
+    targets: &BTreeMap<i64, Target>,
+    ids: &BTreeMap<i64, String>,
+    conditions: &BTreeSet<i64>,
+) -> Option<Wait> {
+    deps.iter().find_map(|(on, since)| {
+        let h = holder(*on, targets)?;
+        Some(Wait {
+            on: if conditions.contains(&h) {
+                "condition"
+            } else {
+                "item"
+            },
+            item: h,
+            id: ids.get(&h).cloned().unwrap_or_default(),
+            since: since.clone(),
+        })
+    })
+}
+
 /// The holds of each plan: an edge from the plan to every open item it opened, at any depth,
 /// through items already closed. `ties` are the opened and related ties, `open` the open items.
 #[must_use]

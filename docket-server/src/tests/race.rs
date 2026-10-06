@@ -21,11 +21,8 @@ const RACERS: usize = 64;
 /// A server over a database of its own, with as many connections as the server opens.
 async fn served() -> (Router, Scratch) {
     let s = Scratch::new(CONNECTIONS).await;
-    s.seed(
-        r#"INSERT INTO projects (slug, keys, created_at, updated_at) VALUES ('o/p',
-           '[{"key": "T", "kind": "work", "meaning": "tasks", "turn": "agent"}]', 'c', 'u')"#,
-    )
-    .await;
+    s.seed(r"INSERT INTO projects (slug, created_at, updated_at) VALUES ('o/p', 'c', 'u')")
+        .await;
     s.seed("INSERT INTO areas (project, name, description, position, priority) VALUES ('o/p', 'general', '', 1, NULL)")
         .await;
     (

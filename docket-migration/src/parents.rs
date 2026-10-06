@@ -6,8 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use docket_core::dump::{ItemDump, ProjectDump};
-use docket_core::migrate::{Change, Rows, Rules, plan};
+use docket_core::migrate::{Change, OldItem, OldProject, Rows, Rules, plan};
 use sea_orm::{ConnectionTrait, DbErr};
 
 use crate::statement;
@@ -31,13 +30,13 @@ const LINKS: &str = "SELECT l.rid, l.kind, t.id FROM links l JOIN items i ON i.r
 async fn rows_of<C: ConnectionTrait>(
     c: &C,
     slug: &str,
-) -> Result<(Vec<ItemDump>, BTreeMap<String, i64>), DbErr> {
-    let mut items: BTreeMap<i64, ItemDump> = BTreeMap::new();
+) -> Result<(Vec<OldItem>, BTreeMap<String, i64>), DbErr> {
+    let mut items: BTreeMap<i64, OldItem> = BTreeMap::new();
     let mut rids = BTreeMap::new();
     for r in c.query_all_raw(statement(ITEMS, vec![slug.into()])).await? {
         let rid: i64 = r.try_get_by_index(0)?;
         let tags: serde_json::Value = r.try_get_by_index(9)?;
-        let item = ItemDump {
+        let item = OldItem {
             project: slug.to_string(),
             id: r.try_get_by_index(1)?,
             title: r.try_get_by_index(2)?,
@@ -50,7 +49,7 @@ async fn rows_of<C: ConnectionTrait>(
             tags: serde_json::from_value(tags).unwrap_or_default(),
             opened_at: r.try_get_by_index(10)?,
             updated_at: r.try_get_by_index(11)?,
-            ..ItemDump::default()
+            ..OldItem::default()
         };
         rids.insert(item.id.clone(), rid);
         items.insert(rid, item);
@@ -112,12 +111,12 @@ pub async fn admit_opened<C: ConnectionTrait>(c: &C) -> Result<(), DbErr> {
 /// The database refuses.
 pub async fn split<C: ConnectionTrait>(c: &C) -> Result<(), DbErr> {
     for p in c.query_all_raw(statement(PROJECTS, vec![])).await? {
-        let project = ProjectDump {
+        let project = OldProject {
             slug: p.try_get_by_index(0)?,
             keys: p.try_get_by_index(1)?,
             themes: p.try_get_by_index(2)?,
             skills: p.try_get_by_index(3)?,
-            ..ProjectDump::default()
+            ..OldProject::default()
         };
         let slug = project.slug.clone();
         let (items, rids) = rows_of(c, &slug).await?;

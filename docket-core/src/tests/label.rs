@@ -32,3 +32,11 @@ fn test_a_label_line_carries_its_description_when_it_has_one() {
     assert_eq!(line(&label("goal:kites", Some("  "))), "goal:kites");
     assert_eq!(line(&label("goal:kites", None)), "goal:kites");
 }
+
+#[test]
+fn test_a_group_is_the_label_named_for_it() {
+    assert_eq!(of_group(" sweep "), "group:sweep");
+    assert_eq!(group_of(&["ci", "group:sweep"]), Some("sweep"));
+    assert_eq!(group_of(&["ci", "group:"]), None);
+    assert_eq!(group_of::<&str>(&[]), None);
+}

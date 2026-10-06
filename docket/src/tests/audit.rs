@@ -88,6 +88,16 @@ fn test_closed_work_is_sorted_by_its_best_sha() {
 }
 
 #[test]
+fn test_a_stored_row_is_work_by_its_type_whatever_its_key() {
+    let kind = |t: &str, key: &str| closed_kind(&json!({"key": key, "item_type": t}));
+    assert_eq!(kind("task", "T"), "work");
+    assert_eq!(kind("bug", "ZQ"), "work");
+    assert_eq!(kind("question", "Q"), "other");
+    assert_eq!(kind("plan", "T"), "other");
+    assert_eq!(kind("investigation", "I"), "other");
+}
+
+#[test]
 fn test_breakdown_lines_for_a_package() {
     let pkg =
         json!({"progress": {"done": 1, "total": 3, "live": 1}, "touches": ["a.rs", "b/c.rs"]});

@@ -12,8 +12,6 @@ use docket_server::auth::Keys;
 
 use super::*;
 
-const KEYS: &str = r#"[{"key": "B", "kind": "work", "meaning": "bugs", "turn": "agent"}, {"key": "Q", "kind": "decision", "meaning": "questions", "turn": "user"}, {"key": "A", "kind": "audit", "meaning": "plans", "turn": "agent"}]"#;
-
 async fn call(
     app: &Router,
     method: Method,
@@ -43,10 +41,10 @@ async fn full_page(app: &Router) -> DumpPage {
 /// A database with waits, links, a replacement, citations, event data and non-ASCII text.
 async fn seeded() -> (Router, Scratch) {
     let db = Scratch::new(2).await;
-    db.seed(&format!(
-        "INSERT INTO projects (slug, keys, skills, remotes, created_at, updated_at) VALUES \
-         ('o/p', '{KEYS}', '{{\"merge\": \"r\u{e9}base\"}}', '[\"git@example.com:o/p.git\"]', 'c', 'u')"
-    ))
+    db.seed(
+        "INSERT INTO projects (slug, skills, remotes, created_at, updated_at) VALUES \
+         ('o/p', '{\"merge\": \"r\u{e9}base\"}', '[\"git@example.com:o/p.git\"]', 'c', 'u')",
+    )
     .await;
     let app = app(&db.db, Keys::parse("box owner k").unwrap());
     let steps = [
@@ -114,31 +112,34 @@ fn as_map(page: &DumpPage) -> BTreeMap<String, String> {
     files(page, |_| None).into_iter().collect()
 }
 
-/// Each assignment row but its actor, which only a live write knows.
+/// Each assignment row, every column but its id.
 async fn attempts(db: &Scratch) -> Vec<serde_json::Value> {
     let rows = db
         .db
         .query_all_raw(docket_migration::statement(
-            "SELECT i.id, a.kind, a.assignee, a.started_at, a.ended_at, a.outcome, a.branch, a.host \
+            "SELECT to_jsonb(a) - 'id' - 'rid' || jsonb_build_object('item', i.id) \
              FROM assignments a JOIN items i USING (rid) ORDER BY i.id, a.id",
             vec![],
         ))
         .await
         .unwrap();
     rows.iter()
-        .map(|r| {
-            let text = |n| r.try_get_by_index::<Option<String>>(n).unwrap();
-            json!([
-                text(0),
-                text(1),
-                text(2),
-                text(3),
-                text(4),
-                text(5),
-                text(6),
-                text(7)
-            ])
-        })
+        .map(|r| r.try_get_by_index::<serde_json::Value>(0).unwrap())
+        .collect()
+}
+
+/// Each dependency as `(item, item depended on, when it was added)`.
+async fn dependencies(db: &Scratch) -> Vec<serde_json::Value> {
+    db.db
+        .query_all_raw(docket_migration::statement(
+            "SELECT jsonb_build_array(w.id, o.id, d.created_at) FROM dependencies d \
+             JOIN items w ON w.rid = d.rid JOIN items o ON o.rid = d.on_rid ORDER BY 1",
+            vec![],
+        ))
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| r.try_get_by_index::<serde_json::Value>(0).unwrap())
         .collect()
 }
 
@@ -178,39 +179,46 @@ async fn test_restore_round_trips_a_full_dump() {
     .unwrap();
     assert_eq!(cites, 3);
     let restored = attempts(&db).await;
-    assert!(!restored.is_empty());
+    assert!(restored.iter().any(|a| a["actor"] == "owner"));
     assert_eq!(attempts(&seeded_db).await, restored);
-    let depends: i64 = scalar(&db.db, "SELECT COUNT(*) FROM dependencies", vec![])
-        .await
-        .unwrap();
-    assert_eq!(depends, 3);
+    for text in as_map(&after).values() {
+        for old in [
+            "\nturn:",
+            "\nclaim_branch:",
+            "\nwait_on:",
+            "\ntheme:",
+            "\ntags:",
+            "\nrank:",
+        ] {
+            assert!(!text.contains(old), "{old} in {text}");
+        }
+    }
+    assert!(as_map(&after)["o/p/items/Q1.md"].contains("\nassignments: [{"));
+    assert!(!as_map(&after)["o/p/project.json"].contains("\"keys\""));
+    let restored = dependencies(&db).await;
+    assert_eq!(restored.len(), 3);
+    assert_eq!(dependencies(&seeded_db).await, restored);
 }
 
 #[tokio::test]
-async fn test_an_older_dumps_opened_links_restore_as_a_parent_and_an_origin() {
-    let mut page = full_page(&seeded().await.0).await;
-    for i in &mut page.items {
-        let mut opened: Vec<String> = i.parent.take().into_iter().collect();
-        opened.extend(i.origin.take().unwrap_or_default());
-        if !opened.is_empty() {
-            i.opened = opened;
-        }
-    }
+async fn test_restore_refuses_an_item_file_written_before_the_drop_and_writes_nothing() {
+    let page = full_page(&seeded().await.0).await;
     let dir = tempfile::tempdir().unwrap();
     write_all(dir.path(), &page);
-    for i in page.items.iter().filter(|i| !i.opened.is_empty()) {
-        let line = format!("\nopened: {}\nopened_at: ", json!(i.opened));
-        let text = docket_core::dump::render_item(i).replacen("\nopened_at: ", &line, 1);
-        tree::write(dir.path(), &item_path(&i.project, &i.id), &text).unwrap();
-    }
+    let path = item_path("o/p", "B3");
+    let text = tree::read(dir.path(), &path).unwrap();
+    let older = text.replacen("\ndecision: ", "\nturn: \"agent\"\ndecision: ", 1);
+    tree::write(dir.path(), &path, &older).unwrap();
     let db = Scratch::bare(2).await;
-    restore(dir.path(), &db.url()).await.unwrap();
-    let after = app(&db.db, Keys::parse("box owner k").unwrap());
-    let b1 = call(&after, Method::GET, "/show/B1?project=o/p", None).await;
-    assert_eq!(b1["parent"], "A1");
-    let b2 = call(&after, Method::GET, "/show/B2?project=o/p", None).await;
-    assert_eq!(b2["origin"], json!(["Q1"]));
-    assert_eq!(b2["parent"], serde_json::Value::Null);
+    let refused = restore(dir.path(), &db.url()).await.unwrap_err();
+    assert_eq!(
+        refused,
+        "o/p/items/B3.md: unknown field \"turn\" in item file: rewrite the checkout with a full dump pass"
+    );
+    let held = scalar(&db.db, "SELECT COUNT(*) FROM items", vec![])
+        .await
+        .unwrap();
+    assert_eq!(held, 0);
 }
 
 #[tokio::test]

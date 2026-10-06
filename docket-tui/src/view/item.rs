@@ -88,8 +88,8 @@ fn facts(out: &mut Doc, board: Option<&Board>, r: &Row, now: i64, width: usize) 
         ));
     }
     match (r.wait_on.as_deref(), r.wait_ref.as_deref()) {
-        (Some("item"), Some(on)) => lines.push(format!("waits on {on}")),
-        (Some(_), Some(until)) => lines.push(format!("waits until: {until}")),
+        (Some("condition"), Some(on)) => lines.push(format!("waits on {on}, a task for the owner")),
+        (Some(_), Some(on)) => lines.push(format!("waits on {on}")),
         _ => {}
     }
     if r.turn.as_deref() == Some("user")
@@ -112,8 +112,8 @@ fn facts(out: &mut Doc, board: Option<&Board>, r: &Row, now: i64, width: usize) 
     }
     lines.push(format!("opened {}{}", r.opened_at, ago(&r.opened_at)));
     lines.push(format!("updated {}{}", r.updated_at, ago(&r.updated_at)));
-    if let Some(t) = &r.theme {
-        lines.push(format!("theme {t}"));
+    if !r.labels.is_empty() {
+        lines.push(format!("labels {}", r.labels.join(", ")));
     }
     for line in lines {
         for part in wrap(&line, width.saturating_sub(8)) {

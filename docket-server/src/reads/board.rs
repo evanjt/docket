@@ -13,17 +13,19 @@ use serde_json::{Map, Value, json};
 
 use docket_core::board::Board;
 use docket_core::clock::stamp;
+use docket_core::item::Item;
 use docket_core::member::{Edge, Tie};
 use docket_core::pace::epoch;
-use docket_core::rows::{ItemRow, Progress, ProjectRow};
+use docket_core::rows::{HeldRow, ItemRow, Progress, ProjectRow};
+use docket_core::stall::Wait;
 use docket_core::word::Kind;
 
 use crate::auth::Caller;
 use crate::reads::public::{member_counts, sql, word_of};
 use crate::reads::rows::{project_model, rows};
-use crate::store::{self, STATE_COLUMNS, column, to_item};
+use crate::store::{self, STATE_COLUMNS, column};
 use crate::verbs::Failure;
-use crate::verbs::graph::{live_overlaps, open_dependencies, standing};
+use crate::verbs::graph::{live_overlaps, open_dependencies, standing, waits};
 use docket_core::word::kind_of_type;
 
 #[derive(Deserialize)]
@@ -87,7 +89,7 @@ fn problem(kind: &str, fields: Value) -> Value {
     Value::Object(p)
 }
 
-/// `docket check`: conflicts, undefined keys, the database's own checks, wait cycles, an item in two
+/// `docket check`: the database's own checks, wait cycles, an item in two
 /// packages, audits held or released wrongly, waits gone stale and bodies never written.
 ///
 /// # Errors
@@ -110,44 +112,30 @@ pub async fn problems<C: ConnectionTrait>(
     slug: &str,
     board: &Board,
 ) -> Result<Vec<Value>, Failure> {
-    let project = store::project(db, slug).await?;
     let mut out = Vec::new();
-    let conflicts: Vec<String> = column(
-        db,
-        "SELECT id FROM items WHERE project=? AND conflict=1 ORDER BY state, rid",
-        vec![slug.into()],
-    )
-    .await?;
-    out.extend(
-        conflicts
-            .into_iter()
-            .map(|id| problem("conflict", json!({ "id": id }))),
-    );
-    out.extend(undefined_keys(db, slug, &project).await?);
     out.extend(database_checks(db).await?);
     out.extend(stalls(db, slug, board).await?);
     let cutoff = stamp(now_secs().saturating_sub(30 * 86_400));
-    let waiting = rows(
-        db,
-        &format!(
-            "SELECT {STATE_COLUMNS} FROM items WHERE project=? AND state='open' AND wait_on='condition' \
-             AND wait_since < ? ORDER BY rid"
-        ),
-        vec![slug.into(), cutoff.clone().into()],
-    )
-    .await?;
+    let waiting: Vec<(i64, Wait)> = waits(db, slug)
+        .await?
+        .into_iter()
+        .filter(|(_, w)| w.is_condition() && w.since < cutoff)
+        .collect();
     let last = last_forward(db, slug).await?;
     let limit = i64::try_from(now_secs().saturating_sub(30 * 86_400)).unwrap_or(0);
-    let stale: Vec<_> = waiting
-        .into_iter()
-        .filter(|r| last.get(&r.rid).is_none_or(|t| *t < limit))
-        .collect();
-    out.extend(stale.into_iter().map(|r| {
-        problem(
-            "stale_wait",
-            json!({ "id": r.id, "since": r.wait_since, "until": r.wait_ref }),
-        )
-    }));
+    out.extend(
+        waiting
+            .into_iter()
+            .filter(|(rid, _)| last.get(rid).is_none_or(|t| *t < limit))
+            .map(|(rid, w)| {
+                let id = board.by_rid(rid).map(|r| r.id.as_str());
+                let until = board.by_rid(w.item).map(|r| r.title.as_str());
+                problem(
+                    "stale_wait",
+                    json!({ "id": id, "since": w.since, "until": until }),
+                )
+            }),
+    );
     let bare: Vec<String> = column(
         db,
         "SELECT id FROM items WHERE project=? AND state='open' AND body='' AND opened_at < ? ORDER BY rid",
@@ -165,41 +153,6 @@ fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
-}
-
-#[derive(FromQueryResult)]
-struct KeyCount {
-    key: String,
-    n: i64,
-}
-
-async fn undefined_keys<C: ConnectionTrait>(
-    db: &C,
-    slug: &str,
-    project: &store::ProjectRow,
-) -> Result<Vec<Value>, Failure> {
-    let known: Vec<sea_orm::Value> = project
-        .keys
-        .iter()
-        .filter_map(|k| k["key"].as_str().map(|s| s.to_string().into()))
-        .collect();
-    let text = format!(
-        "SELECT key, COUNT(*) AS n FROM items WHERE project=? AND key NOT IN ({}) GROUP BY key ORDER BY key",
-        if known.is_empty() {
-            "''".to_string()
-        } else {
-            vec!["?"; known.len()].join(", ")
-        }
-    );
-    let mut values: Vec<sea_orm::Value> = vec![slug.into()];
-    values.extend(known);
-    let found = KeyCount::find_by_statement(sql(&text, values))
-        .all(db)
-        .await?;
-    Ok(found
-        .into_iter()
-        .map(|r| problem("undefined_key", json!({ "key": r.key, "n": r.n })))
-        .collect())
 }
 
 /// The indexes Postgres cannot use and the check constraints it has not validated, by name; then the
@@ -347,7 +300,6 @@ struct Node<'a> {
     kind: &'static str,
     state: &'a str,
     word: &'a str,
-    theme: Option<&'a str>,
     release: Option<&'a str>,
     area: Option<&'a str>,
     title: &'a str,
@@ -391,6 +343,7 @@ pub async fn graph(
     let model = project_model(&db, &q.project).await?;
     let board = core_board(&db, &model).await?;
     let open = member_counts(&db, &q.project).await?;
+    let held_by = crate::store::held_in(&db, &q.project).await?;
     let mut items: Vec<&ItemRow> = board.items.iter().collect();
     items.sort_by(|a, b| (&a.state, a.rid).cmp(&(&b.state, b.rid)));
     let ids: HashMap<i64, &str> = items.iter().map(|r| (r.rid, r.id.as_str())).collect();
@@ -411,13 +364,11 @@ pub async fn graph(
             state: &r.state,
             word: word_of(
                 &r.state,
-                r.claim_branch.as_deref(),
-                r.wait_on.as_deref(),
-                r.turn.as_deref(),
+                held_by.get(&r.rid),
+                r.wait_on.is_some(),
                 kind,
                 open.get(&r.rid).copied().unwrap_or_default(),
             ),
-            theme: r.theme.as_deref(),
             release: listed.name(r.release_id),
             area: areas.name(r.area_id),
             title: &r.title,
@@ -503,6 +454,7 @@ where
         slug: model.slug.clone(),
         ..ProjectRow::default()
     };
+    let waiting = waits(db, &model.slug).await?;
     let mut items: Vec<ItemRow> = Vec::new();
     let mut stream = crate::entities::item::Model::find_by_statement(sql(
         &format!("SELECT {STATE_COLUMNS} FROM items WHERE project=? ORDER BY rid"),
@@ -511,9 +463,15 @@ where
     .stream(db)
     .await?;
     while let Some(m) = stream.next().await {
-        items.push(item_row(m?));
+        let m = m?;
+        let wait = waiting.get(&m.rid);
+        items.push(item_row(m, wait));
     }
     drop(stream);
+    let held = crate::store::held_in(db, &model.slug).await?;
+    for i in &mut items {
+        i.hold(held.get(&i.rid));
+    }
     let ties = TieRow::find_by_statement(sql(
         "SELECT l.rid, l.kind, l.to_rid FROM links l JOIN items i ON i.rid=l.rid \
          WHERE i.project=? AND l.to_rid IS NOT NULL AND l.kind='origin' ORDER BY l.id",
@@ -540,9 +498,9 @@ struct TieRow {
     to_rid: i64,
 }
 
-fn item_row(m: crate::entities::item::Model) -> ItemRow {
+/// A stored row as the board reads it, with what its dependencies hold it on.
+fn item_row(m: crate::entities::item::Model, wait: Option<&Wait>) -> ItemRow {
     ItemRow {
-        tags: serde_json::from_value(m.tags).unwrap_or_default(),
         item_type: m.item_type,
         rid: m.rid,
         project: m.project,
@@ -551,27 +509,16 @@ fn item_row(m: crate::entities::item::Model) -> ItemRow {
         id: m.id,
         title: m.title,
         state: m.state,
-        turn: m.turn,
-        turn_note: m.turn_note,
-        claim_branch: m.claim_branch,
-        claim_host: m.claim_host,
-        claim_since: m.claim_since,
-        claim_job: m.claim_job,
-        claim_on: m.claim_on,
-        wait_on: m.wait_on,
-        wait_item: m.wait_item,
-        wait_ref: m.wait_ref,
+        wait_on: wait.map(|w| w.on.to_string()),
+        wait_ref: wait.map(|w| w.id.clone()),
         parent_rid: m.parent_rid,
         decision: m.decision,
         resolution: m.resolution,
-        scope: m.scope,
-        group_name: m.group_name,
-        theme: m.theme,
         release_id: m.release_id,
         area_id: m.area_id,
-        rank: m.rank,
         opened_at: m.opened_at,
         updated_at: m.updated_at,
+        ..ItemRow::default()
     }
 }
 
@@ -579,6 +526,24 @@ fn item_row(m: crate::entities::item::Model) -> ItemRow {
 pub struct ByHost {
     project: String,
     host: Option<String>,
+}
+
+/// `/held`: each item of the project an open assignment holds, with its claim or the owner's ask.
+///
+/// # Errors
+/// 404 for an unknown project.
+pub async fn held(
+    State(db): State<DatabaseConnection>,
+    Query(q): Query<InProject>,
+) -> Result<Json<Vec<HeldRow>>, Failure> {
+    project_model(&db, &q.project).await?;
+    let mut rows: Vec<HeldRow> = store::held_in(&db, &q.project)
+        .await?
+        .into_iter()
+        .map(|(rid, held)| HeldRow { rid, held })
+        .collect();
+    rows.sort_by_key(|r| r.rid);
+    Ok(Json(rows))
 }
 
 /// `docket wip` beside its rows: each claim's flag when it looks abandoned, and the files it shares
@@ -591,25 +556,19 @@ pub async fn shares(
     Query(q): Query<ByHost>,
 ) -> Result<Json<Value>, Failure> {
     let model = project_model(&db, &q.project).await?;
-    let (mut text, mut values) = (
-        "SELECT * FROM items WHERE project=? AND claim_branch IS NOT NULL".to_string(),
-        vec![sea_orm::Value::from(q.project.clone())],
-    );
-    if let Some(host) = q.host {
-        text.push_str(" AND claim_host=?");
-        values.push(host.into());
-    }
-    text.push_str(" ORDER BY claim_since, rid");
-    let claimed = rows(&db, &text, values).await?;
+    let claimed = crate::store::claimed(&db, &q.project, q.host.as_deref()).await?;
     let flags = idle_flags(&db, &q.project, &model, &claimed).await?;
     let mut out = Vec::new();
-    for r in claimed {
-        let item = to_item(r);
+    for item in claimed {
         let overlaps: Vec<Value> = live_overlaps(&db, &q.project, &item)
             .await?
             .into_iter()
             .map(|(h, paths)| {
-                json!({ "holder": h.id, "branch": h.claim_branch, "host": h.claim_host, "paths": paths })
+                let claim = h.claim();
+                json!({
+                    "holder": h.id, "branch": claim.map(|c| &c.branch),
+                    "host": claim.map(|c| &c.host), "paths": paths,
+                })
             })
             .collect();
         out.push(json!({ "id": item.id, "flag": flags.get(&item.rid), "shares": overlaps }));
@@ -655,7 +614,7 @@ async fn idle_flags<C: ConnectionTrait>(
     db: &C,
     slug: &str,
     model: &crate::entities::project::Model,
-    claimed: &[crate::entities::item::Model],
+    claimed: &[Item],
 ) -> Result<HashMap<i64, String>, Failure> {
     let limit = fact_int(db, model, "stale_claim", 120).await?;
     let last = last_forward(db, slug).await?;
@@ -738,20 +697,18 @@ async fn claims<C: ConnectionTrait>(
     slug: &str,
     model: &crate::entities::project::Model,
 ) -> Result<Value, Failure> {
-    let text = "SELECT * FROM items WHERE project=? AND state='open' AND claim_branch IS NOT NULL \
-                ORDER BY claim_since, rid";
-    let claimed = rows(db, text, vec![slug.into()]).await?;
+    let claimed = crate::store::claimed(db, slug, None).await?;
     let flags = idle_flags(db, slug, model, &claimed).await?;
     Ok(json!(
         claimed
             .iter()
-            .map(|c| {
-                let host = c.claim_host.as_deref().unwrap_or_default();
+            .filter_map(|i| Some((i, i.claim()?)))
+            .map(|(i, c)| {
                 json!({
-                    "id": c.id, "title": c.title, "branch": c.claim_branch,
-                    "host": host.split('.').next().unwrap_or_default(),
-                    "since": c.claim_since.as_deref().and_then(epoch),
-                    "flag": flags.get(&c.rid),
+                    "id": i.id, "title": i.title, "branch": c.branch,
+                    "host": c.host.split('.').next().unwrap_or_default(),
+                    "since": epoch(&c.since),
+                    "flag": flags.get(&i.rid),
                 })
             })
             .collect::<Vec<_>>()

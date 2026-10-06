@@ -63,6 +63,17 @@ pub async fn add(
     open_item(call, as_new, req.from).await.map(Json)
 }
 
+/// The labels `--theme NAME` and `--group NAME` give a new item: the theme as it is named, the group
+/// as its group label. A blank name gives none.
+fn given_labels(theme: Option<&str>, group: Option<&str>) -> Vec<String> {
+    fn named(v: Option<&str>) -> Option<&str> {
+        v.map(str::trim).filter(|v| !v.is_empty())
+    }
+    let theme = named(theme).map(str::to_string);
+    let group = named(group).map(docket_core::label::of_group);
+    theme.into_iter().chain(group).collect()
+}
+
 /// The plan a new item is filed under, which must be open.
 async fn parent_plan(call: &Call, given: Option<&str>) -> Result<Option<Item>, Failure> {
     let Some(id) = given.map(str::trim).filter(|p| !p.is_empty()) else {
@@ -165,6 +176,7 @@ async fn open_item(
     };
     let area_id = filed_area(&call, req.area.as_deref(), plan.as_ref()).await?;
     let title = req.title.trim().to_string();
+    let labels = given_labels(req.theme.as_deref(), req.group.as_deref());
     let num = call.tx.next_num(&call.slug, &key).await?;
     let r = call
         .tx
@@ -173,17 +185,13 @@ async fn open_item(
             key: key.clone(),
             num,
             title: title.clone(),
-            turn: turn.clone(),
             body: body.trim_end_matches('\n').to_string(),
             complexity: req.complexity,
-            theme: req.theme,
             release_id,
             area_id: Some(area_id),
-            group_name: req.group,
-            scope: None,
             item_type,
             priority: priority.to_string(),
-            tags: Vec::new(),
+            labels,
         })
         .await?;
     let mut data = serde_json::Map::new();
@@ -204,11 +212,6 @@ async fn open_item(
             data.as_ref(),
         )
         .await?;
-    if turn == "user" {
-        call.tx
-            .update(r.rid, &[Field::AskedAt(Some(call.ctx.now.clone()))])
-            .await?;
-    }
     let mut r = call.tx.fresh(r.rid).await?;
     if let Some(plan) = &plan {
         r = file_under(&mut call, plan, &r).await?;

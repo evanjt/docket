@@ -12,7 +12,7 @@ crudcrate = { workspace = true }
 futures-util = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }
-sea-orm = { workspace = true, features = ["sqlx-sqlite"] }
+sea-orm = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 subtle = { workspace = true }

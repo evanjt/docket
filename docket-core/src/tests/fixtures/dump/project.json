@@ -3,14 +3,6 @@
   "created_at": "2026-01-01T00:00:00Z",
   "fleet_repo": null,
   "integration_ref": "main",
-  "keys": [
-    {
-      "key": "T",
-      "kind": "work",
-      "meaning": "tâches",
-      "turn": "agent"
-    }
-  ],
   "remotes": [
     "git@example.com:org/proj.git"
   ],
@@ -21,7 +13,6 @@
   },
   "slug": "org/proj",
   "test_hint": null,
-  "themes": [],
   "updated_at": "2026-01-04T00:00:00Z",
   "worktree_hint": "git worktree add"
 }

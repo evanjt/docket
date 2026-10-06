@@ -1,8 +1,9 @@
 //! `docket admin migrate`: what moving each project's rows onto the core changes, read from the full
-//! dump the server serves and planned by `docket_core::migrate`, with every risky case.
+//! dump the server serves in the shape the plan reads (`OldPage`) and planned by
+//! `docket_core::migrate`, with every risky case.
 
 use docket_core::dump::DumpPage;
-use docket_core::migrate::{Changes, Rows, Rules, Themes, plan};
+use docket_core::migrate::{Changes, OldPage, Rows, Rules, Themes, plan};
 
 use crate::args::AdminCmd;
 use crate::ctx::Ctx;
@@ -37,6 +38,7 @@ fn migrate(ctx: &mut Ctx, dry_run: bool, all: bool, rules: Rules) -> Result<i32>
     let v = ctx.api.get("/dump", &[("since", "0".to_string())])?;
     let page: DumpPage =
         serde_json::from_value(v).map_err(|e| Fail::refused(format!("/dump: {e}")))?;
+    let page = OldPage::of(&page);
     let planned: Vec<Changes> = Rows::of(&page)
         .iter()
         .filter(|r| only.as_ref().is_none_or(|s| *s == r.project.slug))

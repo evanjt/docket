@@ -9,14 +9,11 @@ use docket_server::auth::Keys;
 use super::*;
 
 const SEED: &str = r#"
-INSERT INTO projects (slug, keys, themes, skills, created_at, updated_at) VALUES ('o/p',
-  '[{"key":"T","kind":"work","meaning":"tasks","turn":"agent"},{"key":"Q","kind":"decision"},
-    {"key":"PK","kind":"package"}]',
-  '[{"name":"sync","note":""}]', '{"mode":"run","land":"make land"}', 'c', 'u');
-INSERT INTO items (rid, project, key, num, title, state, turn, tags, body, opened_at, updated_at) VALUES
-  (1, 'o/p', 'T', 1, 'Fix the sync', 'open', 'agent', '["single"]', 'Body naming PK1', '2026-01-01T00:00:00Z', 'u1'),
-  (2, 'o/p', 'PK', 1, 'Sync package', 'open', 'agent', '[]', '', '2026-01-01T00:00:00Z', 'u2'),
-  (3, 'o/p', 'Q', 1, 'Which way', 'open', 'user', '[]', 'Two ways', '2026-01-01T00:00:00Z', 'u3');
+INSERT INTO projects (slug, skills, created_at, updated_at) VALUES ('o/p', '{"mode":"run","land":"make land"}', 'c', 'u');
+INSERT INTO items (rid, project, key, num, title, state, body, opened_at, updated_at) VALUES
+  (1, 'o/p', 'T', 1, 'Fix the sync', 'open', 'Body naming PK1', '2026-01-01T00:00:00Z', 'u1'),
+  (2, 'o/p', 'PK', 1, 'Sync package', 'open', '', '2026-01-01T00:00:00Z', 'u2'),
+  (3, 'o/p', 'Q', 1, 'Which way', 'open', 'Two ways', '2026-01-01T00:00:00Z', 'u3');
 UPDATE items SET parent_rid=2, priority='high' WHERE rid=1;
 UPDATE items SET type='plan' WHERE key='PK';
 UPDATE items SET type='question' WHERE key='Q';
@@ -26,6 +23,8 @@ INSERT INTO events (uid, project, rid, at, host, kind, note) VALUES
   ('e1', 'o/p', 1, '2026-01-01T00:00:00Z', 'devbox', 'opened', NULL),
   ('e2', 'o/p', 1, '2026-01-01T00:01:00Z', 'devbox', 'edited', 'title'),
   ('e3', 'o/p', 3, '2026-01-01T00:02:00Z', 'devbox', 'asked', 'pick one');
+INSERT INTO assignments (rid, assignee, kind, started_at, host, note) VALUES
+  (3, 'owner', 'ask', '2026-01-01T00:02:00Z', 'devbox', 'pick one');
 INSERT INTO search (rid, id, title, body, files) VALUES (1, 'T1', 'Fix the sync', 'Body naming PK1', '');
 "#;
 
@@ -119,8 +118,12 @@ fn test_stored_lists_read_items_links_and_events() {
     let api = served();
     let items = api.items("o/p").unwrap();
     assert_eq!(items.len(), 3);
-    assert_eq!(items[0].tags, ["single"]);
     assert_eq!(items[0].parent_rid, Some(2));
+    assert_eq!(
+        (items[2].turn.as_deref(), items[2].turn_note.as_deref()),
+        (Some("user"), Some("pick one"))
+    );
+    assert_eq!(items[0].turn.as_deref(), Some("agent"));
     let origin = api.links_from(&[1, 2, 3], "origin").unwrap();
     assert_eq!((origin[0].rid, origin[0].to_rid), (1, Some(3)));
     assert_eq!(api.links_to(&[3], "origin").unwrap().len(), 1);

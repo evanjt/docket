@@ -9,7 +9,7 @@ use docket_core::api::{AddRequest, Decided, NewRequest, Opened};
 use docket_core::item::{Field, Item};
 use docket_core::project::require_fileable;
 use docket_core::rules::{COMPLEXITIES, default_turn};
-use docket_core::word::{ItemType, PRIORITIES};
+use docket_core::word::{ItemType, Kind, PRIORITIES};
 
 use crate::auth::Caller;
 use crate::store::NewItem;
@@ -20,28 +20,29 @@ use crate::verbs::view::item_view;
 use crate::verbs::{Call, Failure, TURNS, chars, choice, require_owner};
 
 /// # Errors
-/// 403 on an agent's key, 409 on an unknown key or a tier outside the four.
+/// 403 on an agent's key whose branch holds no plan, investigation or question, 409 on an unknown
+/// key or a tier outside the four.
 pub async fn new(
     State(db): State<DatabaseConnection>,
     Extension(caller): Extension<Caller>,
     Json(req): Json<NewRequest>,
 ) -> Result<Json<Opened>, Failure> {
-    require_owner(&caller, "new")?;
     let call = Call::begin(&db, &caller, &req.common).await?;
-    open_item(call, req, None).await.map(Json)
+    let from = filing_from(&call, &caller).await?;
+    open_item(call, req, None, from).await.map(Json)
 }
 
 /// A side finding filed as a low-priority ticket.
 ///
 /// # Errors
-/// 403 on an agent's key.
+/// 403 on an agent's key whose branch holds no plan, investigation or question.
 pub async fn add(
     State(db): State<DatabaseConnection>,
     Extension(caller): Extension<Caller>,
     Json(req): Json<AddRequest>,
 ) -> Result<Json<Opened>, Failure> {
-    require_owner(&caller, "new")?;
     let call = Call::begin(&db, &caller, &req.common).await?;
+    let from = filing_from(&call, &caller).await?;
     let key = match req.key {
         Some(k) => k,
         None => ItemType::Bug.key().to_string(),
@@ -60,7 +61,35 @@ pub async fn add(
         area: req.area,
         parent: req.parent,
     };
-    open_item(call, as_new, req.from).await.map(Json)
+    open_item(call, as_new, req.from, from).await.map(Json)
+}
+
+/// What a job's filing springs from: the plan, investigation or question its branch holds a claim
+/// on. A job building a ticket files nothing and reports what it saw instead, and the owner files
+/// from nothing.
+async fn filing_from(call: &Call, caller: &Caller) -> Result<Option<Item>, Failure> {
+    if caller.owner {
+        return Ok(None);
+    }
+    let held = crate::store::items(
+        &call.tx.conn,
+        "SELECT * FROM items WHERE project=? AND state='open' AND rid IN \
+         (SELECT rid FROM assignments WHERE ended_at IS NULL AND kind='claim' AND branch=?)",
+        vec![call.slug.clone().into(), call.branch().into()],
+    )
+    .await?;
+    match held
+        .into_iter()
+        .find(|r| files_findings(r.item_type.kind()))
+    {
+        Some(r) => Ok(Some(r)),
+        None => require_owner(caller, "new").map(|()| None),
+    }
+}
+
+/// A kind whose work is finding what to do: a plan, an audit of one, an investigation or a question.
+fn files_findings(kind: Kind) -> bool {
+    !matches!(kind, Kind::Work | Kind::Concept | Kind::Idea)
 }
 
 /// The labels `--theme NAME` and `--group NAME` give a new item: the theme as it is named, the group
@@ -153,6 +182,7 @@ async fn open_item(
     mut call: Call,
     req: NewRequest,
     seen_by: Option<String>,
+    from: Option<Item>,
 ) -> Result<Opened, Failure> {
     let key = req.key.to_uppercase();
     let item_type = require_fileable(&key)?;
@@ -215,6 +245,10 @@ async fn open_item(
     let mut r = call.tx.fresh(r.rid).await?;
     if let Some(plan) = &plan {
         r = file_under(&mut call, plan, &r).await?;
+    }
+    if let Some(from) = &from {
+        call.tx.set_link(r.rid, "origin", from.rid, false).await?;
+        r = call.tx.fresh(r.rid).await?;
     }
     let decided = decided_like(&call.tx.conn, &call.project, &r).await?;
     let out = Opened {

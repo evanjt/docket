@@ -1463,6 +1463,113 @@ async fn test_a_fleet_job_files_nothing() {
     assert_eq!(claimed["host"], "devbox");
 }
 
+/// A job's key, posting on the branch its claim was made on.
+async fn job_files(s: &Scratch, verb: &str, branch: &str, body: Value) -> (StatusCode, Value) {
+    let mut body = body;
+    body["branch"] = json!(branch);
+    s.post_as("agentkey", verb, body).await
+}
+
+#[tokio::test]
+async fn test_a_job_files_its_findings_from_the_research_it_holds() {
+    let s = Scratch::new().await;
+    s.open("I", "Measure the store against the fetch").await;
+    s.ok("start", json!({ "id": "I1", "branch": "lead/i1-1" }))
+        .await;
+    for (verb, key) in [("new", "B"), ("add", "T")] {
+        let (status, out) = job_files(
+            &s,
+            verb,
+            "lead/i1-1",
+            json!({ "key": key, "title": "Bound the results waiting to be stored" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{verb}: {out}");
+    }
+    assert_eq!(s.item("B1").await["origin"], json!(["I1"]));
+    assert_eq!(s.item("T1").await["origin"], json!(["I1"]));
+}
+
+#[tokio::test]
+async fn test_a_job_files_under_the_plan_and_from_the_question_it_holds() {
+    let s = Scratch::new().await;
+    s.open("A", "Hill strength bests").await;
+    s.ok("start", json!({ "id": "A1", "branch": "lead/a1-1" }))
+        .await;
+    let (status, out) = job_files(
+        &s,
+        "new",
+        "lead/a1-1",
+        json!({ "key": "B", "title": "Rank climbs by vertical power", "parent": "A1" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(s.item("B1").await["parent"], "A1");
+    assert_eq!(s.item("B1").await["origin"], json!(["A1"]));
+
+    s.open("Q", "One cache or two").await;
+    s.ok("answer", json!({ "id": "Q1", "decision": "Two" }))
+        .await;
+    s.ok("start", json!({ "id": "Q1", "branch": "lead/q1-1" }))
+        .await;
+    let (status, out) = job_files(
+        &s,
+        "new",
+        "lead/q1-1",
+        json!({ "key": "T", "title": "Split the tile cache from the route cache" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(s.item("T1").await["origin"], json!(["Q1"]));
+}
+
+#[tokio::test]
+async fn test_a_job_building_a_ticket_still_files_nothing() {
+    let s = Scratch::new().await;
+    s.open("B", "Fix the timeout").await;
+    s.ok("start", json!({ "id": "B1", "branch": "lead/b1-1" }))
+        .await;
+    s.open("I", "Measure the store").await;
+    s.ok("start", json!({ "id": "I1", "branch": "lead/i1-1" }))
+        .await;
+    for branch in ["lead/b1-1", "lead/none-1"] {
+        let (status, out) = job_files(
+            &s,
+            "new",
+            branch,
+            json!({ "key": "B", "title": "something I noticed" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{branch}: {out}");
+        assert!(
+            out["error"].as_str().unwrap().contains("Observations"),
+            "{branch}: {out}"
+        );
+    }
+    s.ok(
+        "release",
+        json!({ "id": "I1", "branch": "lead/i1-1", "outcome": "ended" }),
+    )
+    .await;
+    let (status, _) = job_files(
+        &s,
+        "new",
+        "lead/i1-1",
+        json!({ "key": "B", "title": "filed after the claim ended" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = s
+        .send(
+            Method::GET,
+            &format!("/show/B2?project={SLUG}"),
+            "ownerkey",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
 #[tokio::test]
 async fn test_a_refusal_writes_nothing() {
     let s = Scratch::new().await;

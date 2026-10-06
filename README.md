@@ -152,7 +152,9 @@ for a history rewrite's replace file kept outside the repository.
 
 The keys file has one line per key, `host role key`, where role is `owner` or `agent`. The host is
 what the server records on every event made with that key, so a client cannot claim to be another
-machine. An agent key cannot open items with `new` or `add`.
+machine. An agent key opens items with `new` or `add` only while its branch holds a claim on a plan,
+an investigation or a question, and each item it opens records that one as its origin. A job
+building a ticket files nothing and reports what it saw under Observations.
 
 A machine that runs jobs names an agent key as `job_key = KEY` in its client file. `docket job run`
 hands that key to the job and refuses to start one without it, or with an owner key, so no job can

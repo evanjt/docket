@@ -12,9 +12,9 @@ describe('areaCounts', () => {
     const nodes = [
       node('T1', 'lanterns', 'ready'),
       node('T2', 'lanterns', 'done'),
-      node('T3', 'kites', 'building'),
+      node('T3', 'kites', 'under way'),
       node('T4', 'kites', 'dropped'),
-      node('A1', 'kites', 'building', 'audit'),
+      node('A1', 'kites', 'under way', 'audit'),
     ];
     expect(areaCounts([area('lanterns', 2, 'high'), area('kites', 1)], nodes)).toEqual([
       { area: area('kites', 1), open: 1, done: 0 },

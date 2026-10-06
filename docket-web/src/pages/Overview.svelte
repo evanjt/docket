@@ -58,7 +58,7 @@
   const stale = $derived(staleClaims(summary.data?.claims));
   const problems = $derived(checkByRelease(summary.data?.problems ?? [], ctx.releases));
   const counts = $derived(checkCounts(summary.data?.problems ?? [], ctx.slug));
-  const OPEN_WORDS = ['ready', 'building', 'waiting on owner', 'blocked', 'held later'];
+  const OPEN_WORDS = ['ready', 'in progress', 'plans under way', 'waiting on owner', 'blocked', 'held later'];
   const host = (h: string | null | undefined) => (h ?? '').split('.')[0];
   const use = $derived(machines.data && wip.data ? machineUse(machines.data, wip.data, session.me?.host ?? '', now) : []);
   const COUNTED = ['claimed', 'released'];
@@ -376,7 +376,7 @@
 
   .branch {
     font-weight: 500;
-    color: var(--w-building);
+    color: var(--w-under-way);
   }
 
   .release {
@@ -467,7 +467,7 @@
   }
 
   .slots i.busy {
-    background: var(--w-building);
+    background: var(--w-under-way);
   }
 
   .count {

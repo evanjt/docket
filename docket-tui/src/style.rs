@@ -9,7 +9,7 @@ pub fn word(w: &str) -> Style {
     let s = Style::default();
     match w {
         "ready" => s.fg(Color::Green),
-        "in progress" | "building" => s.fg(Color::Yellow),
+        "in progress" | "under way" => s.fg(Color::Yellow),
         "audit due" => s.fg(Color::Cyan),
         "waiting on owner" => s.fg(Color::Magenta),
         "blocked" => s.fg(Color::Blue),

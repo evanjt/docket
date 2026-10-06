@@ -17,7 +17,13 @@ use crate::local::{self, expand};
 use crate::py::{Py, cut, or_none};
 
 const SECTIONS: [&str; 7] = [
-    "ready", "building", "checking", "blocked", "parked", "done", "dropped",
+    "ready",
+    "under way",
+    "checking",
+    "blocked",
+    "parked",
+    "done",
+    "dropped",
 ];
 
 /// The words that are not open.
@@ -487,7 +493,9 @@ impl Report<'_> {
             }
             for r in items {
                 let extra = match *k {
-                    "building" | "checking" => format!("  {}", or_none(r["claim_branch"].as_str())),
+                    "under way" | "checking" => {
+                        format!("  {}", or_none(r["claim_branch"].as_str()))
+                    }
                     "blocked" => format!("  on {}", cut(or_none(r["wait_ref"].as_str()), 50)),
                     _ => String::new(),
                 };

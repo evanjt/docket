@@ -20,7 +20,7 @@ const WIDE: usize = 120;
 const SIDE: usize = 44;
 const GAP: usize = 2;
 /// The flow counts the sidebar always shows; the rest only when something carries them.
-const FLOW: [&str; 3] = ["ready", "in progress", "building"];
+const FLOW: [&str; 3] = ["ready", "in progress", "under way"];
 const ASIDE: [&str; 4] = ["audit due", "blocked", "waiting on owner", "parked"];
 /// Rows each sidebar block shows before it says how many more.
 const ROWS: usize = 5;
@@ -177,7 +177,8 @@ fn releases(d: &mut Doc, data: &ProjectData, width: usize) {
         let total = r.closed + r.open;
         let counts = [
             ("ready", r.ready),
-            ("building", r.building),
+            ("in progress", r.in_progress),
+            ("plans under way", r.under_way),
             ("owner", r.waiting_owner),
             ("blocked", r.blocked),
             ("held later", r.held_later),

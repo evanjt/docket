@@ -139,7 +139,7 @@
   }
 
   .pri {
-    color: var(--w-building);
+    color: var(--w-under-way);
     font-weight: 600;
     font-size: 12px;
   }

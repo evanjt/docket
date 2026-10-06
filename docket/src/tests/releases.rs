@@ -12,7 +12,7 @@ fn release(name: &str, shipped: Option<&str>) -> Release {
 
 fn rows() -> Vec<ReleaseRow> {
     serde_json::from_value::<Value>(json!({"releases": [{
-        "name": "2.0", "open": 5, "ready": 1, "building": 2, "waiting_owner": 1,
+        "name": "2.0", "open": 5, "ready": 1, "in_progress": 1, "under_way": 2, "waiting_owner": 1,
         "blocked": 1, "closed": 3, "held_later": 1, "pace": 0.5,
         "forecast": {"open": 5, "burn": 0.5, "converging": true,
             "p50": null, "p85": null, "target": null, "late": null}
@@ -31,7 +31,7 @@ fn test_releases_text_prints_each_unshipped_release_s_counts_from_the_route_body
     assert_eq!(text[0], "1.0  shipped 2026-01-01");
     assert_eq!(
         text[1],
-        "2.0  current\n    5 open (ready 1, building 2, owner 1, blocked 1), 3 closed, 1 held later, pace +0.5/day"
+        "2.0  current\n    5 open (ready 1, in progress 1, plans under way 2, owner 1, blocked 1), 3 closed, 1 held later, pace +0.5/day"
     );
 }
 

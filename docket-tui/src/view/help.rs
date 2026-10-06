@@ -41,7 +41,7 @@ State words, each in its colour
 
   ready            waiting for someone to take it
   in progress      someone is working on it now
-  building         a plan whose tickets are open
+  under way        a plan whose tickets are open
   audit due        a plan whose tickets are all closed
   blocked          held by a dependency that is not yet satisfied
   waiting on owner waiting on you: something only you can do
@@ -113,7 +113,7 @@ pub fn doc() -> Doc {
             "ready",
             "waiting on owner",
             "in progress",
-            "building",
+            "under way",
             "audit due",
             "done",
             "blocked",

@@ -16,9 +16,9 @@ fn test_word_follows_the_server_rule() {
     assert_eq!(word("T2"), "in progress");
     assert_eq!(word("T3"), "ready");
     // A package with an open member is building.
-    assert_eq!(word("PK1"), "building");
+    assert_eq!(word("PK1"), "under way");
     // A plan with open tickets reads building, never blocked.
-    assert_eq!(word("A1"), "building");
+    assert_eq!(word("A1"), "under way");
     assert_eq!(word("Q1"), "waiting on owner");
     assert_eq!(word("CON1"), "dropped");
     assert_eq!(word("B1"), "blocked");

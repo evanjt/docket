@@ -42,7 +42,7 @@
   }
 
   .live {
-    background: var(--w-building);
+    background: var(--w-under-way);
     border-radius: 3px;
   }
 

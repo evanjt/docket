@@ -16,7 +16,7 @@
   --danger: #c8433a;
 
   --w-ready: #2f8f5b;
-  --w-building: #b87700;
+  --w-under-way: #b87700;
   --w-in-progress: #b87700;
   --w-audit-due: #2a7bc0;
   --w-blocked: #c8433a;
@@ -48,7 +48,7 @@
     --focus: #7d9bff;
     --danger: #e2665c;
     --w-ready: #3a9e66;
-    --w-building: #c08a1e;
+    --w-under-way: #c08a1e;
     --w-in-progress: #c08a1e;
     --w-audit-due: #3d8bd0;
     --w-blocked: #d45a4e;
@@ -75,7 +75,7 @@
   --focus: #7d9bff;
   --danger: #e2665c;
   --w-ready: #3a9e66;
-  --w-building: #c08a1e;
+  --w-under-way: #c08a1e;
   --w-in-progress: #c08a1e;
   --w-audit-due: #3d8bd0;
   --w-blocked: #d45a4e;

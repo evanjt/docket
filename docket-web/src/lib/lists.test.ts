@@ -34,7 +34,7 @@ describe('pageSize', () => {
 
 describe('wordList', () => {
   it('sends a word to the list route that carries its reasons and priorities', () => {
-    expect(wordList('building')).toBeNull();
+    expect(wordList('under way')).toBeNull();
     expect(wordList('ready')).toBe('next');
     expect(wordList('blocked')).toBe('waiting');
     expect(wordList('waiting on owner')).toBe('todo');
@@ -54,7 +54,7 @@ describe('queueNodes', () => {
   it('counts a claimed ticket and leaves out a package whose tickets are open', () => {
     const b = board({
       project: 'o/p',
-      nodes: [node('T1', 'work', 'in progress'), node('P1', 'package', 'building'), node('A1', 'audit', 'building'), node('ID1', 'idea', 'building')],
+      nodes: [node('T1', 'work', 'in progress'), node('P1', 'package', 'under way'), node('A1', 'audit', 'under way'), node('ID1', 'idea', 'under way')],
       edges: [],
     });
     expect(queueNodes(b, 'in progress').map((n) => n.id)).toEqual(['T1']);

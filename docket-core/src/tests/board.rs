@@ -125,11 +125,11 @@ fn test_area_progress_counts_open_and_closed_items_per_area_in_position_order() 
 }
 
 #[test]
-fn test_a_plan_with_open_members_reads_building_without_a_wait() {
+fn test_a_plan_with_open_members_reads_under_way_without_a_wait() {
     let b = plan_with_grandchild("open");
     let a1 = b.get("A1").unwrap();
     assert!(a1.wait_on.is_none());
-    assert_eq!(b.word(a1), "building");
+    assert_eq!(b.word(a1), "under way");
     let done = plan_with_grandchild("done");
     assert_eq!(done.word(done.get("A1").unwrap()), "audit due");
 }

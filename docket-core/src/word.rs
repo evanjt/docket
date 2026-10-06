@@ -128,7 +128,7 @@ pub enum Word {
     Blocked,
     WaitingOnOwner,
     Parked,
-    Building,
+    UnderWay,
     AuditDue,
     Ready,
 }
@@ -143,7 +143,7 @@ impl Word {
             Word::Blocked => "blocked",
             Word::WaitingOnOwner => "waiting on owner",
             Word::Parked => "parked",
-            Word::Building => "building",
+            Word::UnderWay => "under way",
             Word::AuditDue => "audit due",
             Word::Ready => "ready",
         }
@@ -223,7 +223,7 @@ pub fn status(item: &Standing<'_>) -> Word {
     } else if !item.released {
         Word::Parked
     } else if item.open_members > 0 {
-        Word::Building
+        Word::UnderWay
     } else if item.closed_members > 0 {
         Word::AuditDue
     } else {

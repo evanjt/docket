@@ -123,7 +123,7 @@
   }
 
   .pri-high {
-    color: var(--w-building);
+    color: var(--w-under-way);
   }
 
   @media (max-width: 640px) {

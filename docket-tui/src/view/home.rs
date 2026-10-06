@@ -8,7 +8,7 @@ use crate::style;
 pub const WORDS: [&str; 6] = [
     "ready",
     "in progress",
-    "building",
+    "under way",
     "audit due",
     "blocked",
     "done",

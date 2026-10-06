@@ -98,7 +98,7 @@ async fn test_show_matches_the_json_of_docket_show() {
 #[tokio::test]
 async fn test_show_derives_word_from_kind_and_open_members() {
     let (_, package) = get("/show/PK1?project=o/p").await;
-    assert_eq!(package["word"], "building");
+    assert_eq!(package["word"], "under way");
     assert_eq!(get("/show/CON1?project=o/p").await.1["word"], "ready");
     let (_, dropped) = get("/show/T2?project=o/p").await;
     assert_eq!(dropped["word"], "dropped");

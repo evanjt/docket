@@ -9,10 +9,10 @@ const node = (id: string, kind: GraphNode['kind'], word: string, rid = 0): Graph
 const GRAPH: Graph = {
   project: 'o/p',
   nodes: [
-    { ...node('A1', 'audit', 'building', 1), progress: { done: 1, total: 2, live: 1 }, due: false },
+    { ...node('A1', 'audit', 'under way', 1), progress: { done: 1, total: 2, live: 1 }, due: false },
     { ...node('A2', 'audit', 'ready', 2), progress: { done: 1, total: 1, live: 0 }, due: true },
     node('T1', 'work', 'done', 3),
-    node('T2', 'work', 'building', 4),
+    node('T2', 'work', 'under way', 4),
     node('T3', 'work', 'done', 5),
   ],
   edges: [
@@ -67,7 +67,7 @@ describe('plans', () => {
   const deep: Graph = {
     project: 'o/p',
     nodes: [
-      { ...node('A1', 'audit', 'building', 1), progress: { done: 2, total: 3, live: 0 }, due: false },
+      { ...node('A1', 'audit', 'under way', 1), progress: { done: 2, total: 3, live: 0 }, due: false },
       node('T1', 'work', 'done', 2),
       node('A2', 'audit', 'done', 3),
       node('T3', 'work', 'ready', 4),
@@ -90,7 +90,7 @@ describe('planWord', () => {
   it('draws a plan with open tickets as its tally, with no word beside it', () => {
     const b = board(GRAPH);
     const a1 = b.nodes.get('A1')!;
-    expect(a1.word).toBe('building');
+    expect(a1.word).toBe('under way');
     expect(planWord({ node: a1, tally: tally(b, 'A1'), due: false })).toBeNull();
   });
 

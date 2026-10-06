@@ -306,7 +306,7 @@ fn test_prune_removes_stale_job_branches_without_unique_commits_and_names_the_re
     let dirs = [dir.to_path_buf()];
     let state = |item: &str| match item {
         "A1" | "A2" => Some("done".to_string()),
-        _ => Some("building".to_string()),
+        _ => Some("under way".to_string()),
     };
     // A4 is claimed by a live job; A3 is open and named by nothing.
     let named: HashSet<String> = ["lead/a4-400".to_string()].into();

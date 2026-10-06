@@ -71,7 +71,7 @@ fn test_home_lists_every_project_with_its_owner_queue() {
     }
     let s = screen(&mut app(), 160);
     assert!(
-        s.contains("ready") && s.contains("building") && s.contains("done"),
+        s.contains("ready") && s.contains("under way") && s.contains("done"),
         "{s}"
     );
 }
@@ -172,7 +172,7 @@ fn test_project_page_shows_progress_next_plans_and_moves() {
         project(&mut a, "o/p");
         let s = tall(&mut a, w, 80);
         assert!(s.contains("2 of 9 closed"), "{s}");
-        assert!(s.contains("ready 1  in progress 1  building 2"), "{s}");
+        assert!(s.contains("ready 1  in progress 1  under way 2"), "{s}");
         assert!(s.contains(" T3 "), "{s}");
         assert!(s.contains("PLANS  3 under way"), "{s}");
         assert!(s.contains("A2     ##########    1/1"), "{s}");
@@ -275,7 +275,7 @@ fn test_words_and_verbs_take_their_colours() {
     let mut a = app();
     project(&mut a, "o/p");
     assert_eq!(colour_of(&mut a, 160, "ready 1"), Some(Color::Green));
-    assert_eq!(colour_of(&mut a, 160, "building 2"), Some(Color::Yellow));
+    assert_eq!(colour_of(&mut a, 160, "under way 2"), Some(Color::Yellow));
     // claimed leads to in progress, so it takes in progress's yellow.
     assert_eq!(colour_of(&mut a, 160, "claimed:"), Some(Color::Yellow));
 }

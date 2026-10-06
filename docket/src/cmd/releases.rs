@@ -45,7 +45,8 @@ pub fn line(r: &Release, current: bool) -> String {
 pub fn counts(r: &ReleaseRow) -> String {
     let words: Vec<String> = [
         ("ready", r.ready),
-        ("building", r.building),
+        ("in progress", r.in_progress),
+        ("plans under way", r.under_way),
         ("owner", r.waiting_owner),
         ("blocked", r.blocked),
     ]

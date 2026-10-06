@@ -37,7 +37,7 @@ fn test_word_plan_reads_its_members() {
     let row = |open_members, closed_members| {
         open(false, false, Some("agent")).holding(Kind::Audit, open_members, closed_members)
     };
-    assert_eq!(row(2, 1).word(), "building");
+    assert_eq!(row(2, 1).word(), "under way");
     assert_eq!(row(0, 3).word(), "audit due");
     assert_eq!(row(0, 0).word(), "ready");
 }
@@ -47,7 +47,7 @@ fn test_word_package_reads_open_members_only() {
     let row = |open_members, closed_members| {
         open(false, false, Some("agent")).holding(Kind::Package, open_members, closed_members)
     };
-    assert_eq!(row(2, 1).word(), "building");
+    assert_eq!(row(2, 1).word(), "under way");
     assert_eq!(row(0, 3).word(), "ready");
 }
 
@@ -122,7 +122,7 @@ fn test_status_each_rule_in_order() {
                 closed_members: 1,
                 ..live()
             },
-            Word::Building,
+            Word::UnderWay,
         ),
         (
             Standing {
@@ -140,16 +140,16 @@ fn test_status_each_rule_in_order() {
 
 #[test]
 fn test_status_plan_reads_audit_due_when_its_last_member_closes() {
-    let building = Standing {
+    let under_way = Standing {
         open_members: 1,
         closed_members: 2,
         ..live()
     };
-    assert_eq!(status(&building), Word::Building);
+    assert_eq!(status(&under_way), Word::UnderWay);
     let closed = Standing {
         open_members: 0,
         closed_members: 3,
-        ..building
+        ..under_way
     };
     assert_eq!(status(&closed).as_str(), "audit due");
 }

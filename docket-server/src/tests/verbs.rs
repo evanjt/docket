@@ -1069,7 +1069,7 @@ async fn test_a_plan_stores_no_wait_and_closes_once_everything_under_it_is_close
     s.open("Q", "Which scale does the mixer read").await;
     s.ok("parent", json!({ "a": ["B1", "Q1"], "plan": "A1" }))
         .await;
-    assert_eq!(s.word("A1").await, "building");
+    assert_eq!(s.word("A1").await, "under way");
     assert_eq!(s.item("A1").await["wait_on"], Value::Null);
     assert_eq!(s.item("A1").await["wait_ref"], Value::Null);
     assert_eq!(
@@ -1094,7 +1094,7 @@ async fn test_a_plan_stores_no_wait_and_closes_once_everything_under_it_is_close
         .await;
     s.ok("close", json!({ "id": "B1", "resolution": "abc1234" }))
         .await;
-    assert_eq!(s.word("A1").await, "building");
+    assert_eq!(s.word("A1").await, "under way");
     let out = s
         .ok("drop", json!({ "id": "B2", "why": "not needed" }))
         .await;
@@ -1126,7 +1126,7 @@ async fn test_a_reopened_item_holds_its_audit_again() {
         json!({ "id": "B1", "why": "the port reads the wrong constant" }),
     )
     .await;
-    assert_eq!(s.word("A1").await, "building");
+    assert_eq!(s.word("A1").await, "under way");
 }
 
 #[tokio::test]
@@ -1141,7 +1141,7 @@ async fn test_a_plans_ticket_is_claimed_and_closed_on_its_own_branch() {
         .await;
     s.ok("start", json!({ "id": "B2", "branch": "audit/b2-1" }))
         .await;
-    assert_eq!(s.word("A1").await, "building");
+    assert_eq!(s.word("A1").await, "under way");
     assert_eq!(
         s.refused(
             "close",
@@ -1170,7 +1170,7 @@ async fn test_a_held_plan_closes_with_work_open_under_it_and_an_unheld_one_does_
     s.ok("parent", json!({ "a": ["B1"], "plan": "A1" })).await;
     assert_eq!(s.word("A1").await, "in progress");
     s.ok("release", json!({ "id": "A1" })).await;
-    assert_eq!(s.word("A1").await, "building");
+    assert_eq!(s.word("A1").await, "under way");
     assert_eq!(
         s.refused("close", json!({ "id": "A1", "resolution": "clean" }))
             .await,
@@ -1265,7 +1265,7 @@ async fn test_an_empty_plan_is_ready_and_unlinking_the_last_open_item_makes_it_r
     assert_eq!(s.word("A1").await, "ready");
     s.open("B", "Unrelated after all").await;
     s.ok("parent", json!({ "a": ["B1"], "plan": "A1" })).await;
-    assert_eq!(s.word("A1").await, "building");
+    assert_eq!(s.word("A1").await, "under way");
     s.ok("parent", json!({ "a": ["B1"] })).await;
     assert_eq!(s.word("A1").await, "ready");
 }

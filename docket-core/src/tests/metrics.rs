@@ -309,10 +309,10 @@ fn test_release_rows_count_each_word_apart_with_held_later_and_pace() {
         subject("T1", "done", 90, Some(91), Some(95)),
         subject("T2", "ready", 98, None, None),
         subject("T3", "blocked", 99, None, None),
-        subject("T4", "building", 99, Some(99), None),
+        subject("T4", "in progress", 99, Some(99), None),
         subject("T5", "parked", 99, None, None),
         subject("T6", "dropped", 97, None, Some(98)),
-        subject("A1", "building", 99, None, None),
+        subject("A1", "under way", 99, None, None),
         in_release(subject("T7", "ready", 99, None, None), 1),
     ];
     let held = HashSet::from(["T2".to_string()]);
@@ -325,12 +325,13 @@ fn test_release_rows_count_each_word_apart_with_held_later_and_pace() {
             first.closed,
             first.open,
             first.ready,
-            first.building,
+            first.in_progress,
+            first.under_way,
             first.waiting_owner,
             first.blocked,
             first.held_later
         ),
-        (1, 5, 1, 2, 1, 1, 1)
+        (1, 5, 1, 1, 1, 1, 1, 1)
     );
     assert!((first.forecast.burn - first.pace).abs() < f64::EPSILON);
     assert_eq!(first.forecast.target.as_deref(), Some("2030-01-01"));

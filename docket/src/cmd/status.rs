@@ -12,7 +12,7 @@ use crate::ctx::Ctx;
 use crate::fail::{Fail, Result};
 use crate::py::{Py, cut, or_none};
 
-const FLOW: [&str; 3] = ["ready", "building", "done"];
+const FLOW: [&str; 4] = ["ready", "in progress", "under way", "done"];
 const ASIDE: [&str; 3] = ["checking", "blocked", "parked"];
 const WIDTH: usize = 160;
 /// Rows each block shows before it says how many more.
@@ -149,7 +149,7 @@ pub fn render(slug: &str, r: &Read) -> Vec<String> {
     out
 }
 
-/// `ready 212 > building 18 > done 141    blocked 3  parked 9`.
+/// `ready 212 > in progress 17 > under way 18 > done 141    blocked 3  parked 9`.
 #[must_use]
 pub fn flow_line(total: &[(String, u64)]) -> String {
     let head: Vec<String> = FLOW

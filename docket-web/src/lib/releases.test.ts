@@ -23,7 +23,7 @@ describe('releaseOf', () => {
 });
 
 const counts = (over: Partial<ReleaseCounts> = {}): ReleaseCounts => ({
-  name: '1.0', open: 5, ready: 2, building: 1, waiting_owner: 1, blocked: 1, closed: 3, held_later: 1, pace: 0.5,
+  name: '1.0', open: 5, ready: 2, in_progress: 1, under_way: 3, waiting_owner: 1, blocked: 1, closed: 3, held_later: 1, pace: 0.5,
   forecast: { open: 5, burn: 0.5, converging: true, p50: null, p85: null, target: null, late: null },
   ...over,
 });
@@ -32,7 +32,7 @@ describe('releaseTally', () => {
   it('prints the row of a release: closed of open and closed, live, and each word apart with held later', () => {
     expect(releaseTally(counts(), true)).toEqual({
       name: '1.0', current: true, done: 3, total: 8, live: 1,
-      words: { ready: 2, building: 1, 'waiting on owner': 1, blocked: 1, 'held later': 1 },
+      words: { ready: 2, 'in progress': 1, 'plans under way': 3, 'waiting on owner': 1, blocked: 1, 'held later': 1 },
     });
   });
 });

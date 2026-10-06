@@ -247,8 +247,8 @@
   }
 
   .pri-high {
-    border-color: var(--w-building);
-    color: var(--w-building);
+    border-color: var(--w-under-way);
+    color: var(--w-under-way);
   }
 
   .x {

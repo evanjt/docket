@@ -2,7 +2,7 @@ import type { EventRow, Graph, GraphNode, Kind, Progress } from './types';
 import { day, epoch } from './time';
 
 /** The flow read left to right, then the words that sit beside it. */
-export const FLOW = ['ready', 'in progress', 'building', 'audit due'] as const;
+export const FLOW = ['ready', 'in progress', 'under way', 'audit due'] as const;
 export const ASIDE = ['blocked', 'waiting on owner', 'parked'] as const;
 export const CLOSED = ['done', 'dropped'];
 
@@ -10,7 +10,7 @@ export const CLOSED = ['done', 'dropped'];
 export const MEANING: Record<string, string> = {
   ready: 'waiting for an agent to take it',
   'in progress': 'a job or a person is working on it now',
-  building: 'a plan whose tickets are open',
+  'under way': 'a plan whose tickets are open: not running work itself',
   'audit due': 'a plan whose tickets are all closed, waiting for its audit',
   blocked: 'held by a dependency that is not yet satisfied',
   'waiting on owner': 'waiting on you: something only you can do',
@@ -97,9 +97,9 @@ export interface PlanRow {
   due: boolean;
 }
 
-/** The word drawn beside a plan: none while it is building, where its tally is the whole state. */
+/** The word drawn beside a plan: none while it is under way, where its tally is the whole state. */
 export function planWord(row: PlanRow): string | null {
-  return row.node.word === 'building' ? null : row.node.word;
+  return row.node.word === 'under way' ? null : row.node.word;
 }
 
 /** The open items of one kind with their progress, the due ones first, then the nearest done. */

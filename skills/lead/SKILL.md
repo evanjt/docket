@@ -60,9 +60,9 @@ running jobs.
 ### 3. Dispatch until the slots are full
 
 Land before you dispatch. Every job that reported DONE is merged and on your
-branch (step 4) before any new job starts, so a claim shown as building is
+branch (step 4) before any new job starts, so a claim shown as in progress is
 always a job that is running. No finished build waits for another to land
-first: a build waiting to land still reads as building, hides how far the
+first: a build waiting to land still reads as in progress, hides how far the
 queue really is, and goes stale as the branch moves under it. When several end
 together, land them as one batch with one gate run rather than one gate run
 each.

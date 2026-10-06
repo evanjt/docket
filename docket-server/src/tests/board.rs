@@ -203,7 +203,7 @@ async fn test_deps_words_another_projects_row_by_its_type() {
         .iter()
         .find(|r| r["id"] == "P1")
         .unwrap();
-    assert_eq!(other["word"], "building");
+    assert_eq!(other["word"], "under way");
 }
 
 #[tokio::test]
@@ -659,7 +659,7 @@ async fn test_a_project_with_an_empty_key_list_reads_every_item_by_its_type() {
          UPDATE items SET parent_rid=200 WHERE rid=201;",
     )
     .await;
-    assert_eq!(s.ok("/show/A1?project=o/e").await["word"], "building");
+    assert_eq!(s.ok("/show/A1?project=o/e").await["word"], "under way");
     assert_eq!(
         s.ok("/show/Q1?project=o/e").await["word"],
         "waiting on owner"

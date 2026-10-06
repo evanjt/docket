@@ -6,7 +6,7 @@ use crate::py::dumps_line;
 fn row() -> Row {
     Row {
         id: "B14".into(),
-        word: "building".into(),
+        word: "under way".into(),
         priority: "high".into(),
         complexity: Some("low".into()),
         title: "Fix the thing".into(),
@@ -24,7 +24,7 @@ fn row() -> Row {
 fn test_fmt_row_head_and_tail() {
     assert_eq!(
         fmt_row(&row(), Some("no event for 3h")),
-        "B14    building high [low] Fix the thing\n       held by audit/b14-1 on box since \
+        "B14    under way high [low] Fix the thing\n       held by audit/b14-1 on box since \
          2026-01-01T00:00:00Z, run by codex  [no event for 3h]\n       group g"
     );
 }

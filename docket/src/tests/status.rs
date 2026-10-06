@@ -11,7 +11,7 @@ fn test_flow_line_reads_the_flow_then_what_is_aside() {
     ];
     assert_eq!(
         flow_line(&total),
-        "ready 2 > building 0 > done 4    parked 1"
+        "ready 2 > in progress 0 > under way 0 > done 4    parked 1"
     );
 }
 
@@ -42,7 +42,7 @@ fn read() -> Read {
     Read {
         total: vec![
             ("ready".to_string(), 3),
-            ("building".to_string(), 1),
+            ("under way".to_string(), 1),
             ("done".to_string(), 4),
             ("parked".to_string(), 1),
         ],

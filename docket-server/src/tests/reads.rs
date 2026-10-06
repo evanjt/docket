@@ -347,10 +347,13 @@ async fn test_status_counts_tickets_in_total_and_every_key() {
     assert_eq!(body["total"], 17);
     assert_eq!(
         body["by_word"],
-        json!({"ready": 8, "done": 2, "waiting on owner": 1, "blocked": 1, "building": 2,
+        json!({"ready": 8, "done": 2, "waiting on owner": 1, "blocked": 1, "under way": 2,
                "in progress": 1, "dropped": 1, "audit due": 1})
     );
-    assert_eq!(body["by_key"]["PK"], json!({"audit due": 1, "building": 1}));
+    assert_eq!(
+        body["by_key"]["PK"],
+        json!({"audit due": 1, "under way": 1})
+    );
     assert_eq!(body["by_key"]["CON"], json!({"ready": 1}));
 }
 
@@ -494,7 +497,10 @@ async fn test_metrics_of_a_release_counts_its_items_and_forecasts_from_the_burn(
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["progress"]["done"], 1);
     assert_eq!(body["progress"]["total"], 3);
-    assert_eq!(body["progress"]["open"], json!({"building": 1, "ready": 1}));
+    assert_eq!(
+        body["progress"]["open"],
+        json!({"under way": 1, "ready": 1})
+    );
     assert_eq!(body["lead_time"]["median"], 2 * 86_400);
     assert_eq!(body["cycle_time"]["median"], 86_400);
     assert_eq!(body["time_spent"]["agent"], 3600);

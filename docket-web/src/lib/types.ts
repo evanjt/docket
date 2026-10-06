@@ -106,7 +106,8 @@ export interface ReleaseCounts {
   name: string;
   open: number;
   ready: number;
-  building: number;
+  in_progress: number;
+  under_way: number;
   waiting_owner: number;
   blocked: number;
   closed: number;

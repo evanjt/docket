@@ -31,8 +31,8 @@ export function releaseTally(m: ReleaseCounts, current: boolean): ReleaseRow {
     current,
     done: m.closed,
     total: m.closed + m.open,
-    live: m.building,
-    words: { ready: m.ready, building: m.building, 'waiting on owner': m.waiting_owner, blocked: m.blocked, 'held later': m.held_later },
+    live: m.in_progress,
+    words: { ready: m.ready, 'in progress': m.in_progress, 'plans under way': m.under_way, 'waiting on owner': m.waiting_owner, blocked: m.blocked, 'held later': m.held_later },
   };
 }
 

@@ -8,6 +8,7 @@ pub mod labels;
 pub mod open;
 pub mod project;
 pub mod releases;
+pub mod remap;
 pub mod turn;
 pub mod view;
 
@@ -174,6 +175,7 @@ pub fn router() -> Router<DatabaseConnection> {
         .route("/parent", post(fields::parent))
         .route("/project", post(project::project))
         .route("/reindex", post(project::reindex))
+        .route("/remap", post(remap::remap))
 }
 
 #[cfg(test)]

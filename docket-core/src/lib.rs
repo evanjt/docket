@@ -27,6 +27,7 @@ pub mod publication;
 pub mod pyjson;
 pub mod queue;
 pub mod release;
+pub mod remap;
 pub mod rows;
 pub mod rules;
 pub mod search;

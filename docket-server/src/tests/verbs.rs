@@ -2753,3 +2753,60 @@ async fn test_a_wait_until_a_condition_lists_as_a_condition_and_goes_stale_from_
     assert_eq!(s.word("T1").await, "ready");
     assert_eq!(waiting_ids(&s, "").await, vec!["T2"]);
 }
+
+#[tokio::test]
+async fn test_remap_carries_closing_shas_through_a_map_and_records_each() {
+    let s = Scratch::new().await;
+    for t in ["First", "Second", "Third", "Fourth"] {
+        s.open("B", t).await;
+    }
+    let (old_a, old_b) = (
+        "aaaaaaaaa1111111111111111111111111111111",
+        "bbbbbbbbb2222222222222222222222222222222",
+    );
+    let (new_a, new_b) = (
+        "1234567890abcdef1234567890abcdef12345678",
+        "fedcba0987654321fedcba0987654321fedcba09",
+    );
+    s.ok(
+        "close",
+        json!({ "id": "B1", "resolution": "aaaaaaaaa11 first words" }),
+    )
+    .await;
+    s.ok(
+        "close",
+        json!({ "id": "B2", "resolution": format!("{old_b} second") }),
+    )
+    .await;
+    s.ok(
+        "drop",
+        json!({ "id": "B3", "why": "bbbbbbbbb22 not needed" }),
+    )
+    .await;
+    let map = json!([[old_a, new_a], [old_b, new_b]]);
+    let dry = s.ok("remap", json!({ "map": map, "dry_run": true })).await;
+    assert_eq!(dry["rows"].as_array().unwrap().len(), 3);
+    assert_eq!(s.item("B1").await["resolution"], "aaaaaaaaa11 first words");
+    let out = s.ok("remap", json!({ "map": map })).await;
+    assert_eq!(
+        out["rows"][0],
+        json!({ "id": "B1", "old": "aaaaaaaaa11", "new": "1234567890a" })
+    );
+    assert_eq!(s.item("B1").await["resolution"], "1234567890a first words");
+    assert_eq!(s.item("B2").await["resolution"], format!("{new_b} second"));
+    assert_eq!(s.item("B3").await["resolution"], "fedcba09876 not needed");
+    assert_eq!(s.item("B4").await["state"], "open");
+    let kinds = |e: Vec<Value>| e.iter().filter(|e| e["kind"] == "remapped").count();
+    assert_eq!(kinds(s.events("B1").await), 1);
+    assert_eq!(kinds(s.events("B4").await), 0);
+    let again = s.ok("remap", json!({ "map": map })).await;
+    assert!(again["rows"].as_array().unwrap().is_empty());
+    assert_eq!(kinds(s.events("B1").await), 1);
+}
+
+#[tokio::test]
+async fn test_remap_is_the_owners() {
+    let s = Scratch::new().await;
+    let (status, _) = s.post_as("agentkey", "remap", json!({ "map": [] })).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}

@@ -707,6 +707,15 @@ pub enum AdminCmd {
         #[arg(long, value_parser = ["plan", "backlog"])]
         themes: Option<String>,
     },
+    /// carry done and dropped items' leading shas onto rewritten commits through a map of
+    /// `old new` full shas, one remapped event each; refused when a new sha is no commit here
+    Remap {
+        /// the map file, the layout of a filter-repo commit-map
+        mapfile: String,
+        /// print the count and the first rows and write nothing
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 /// `docket private`: the owner's private names kept out of a public repository.

@@ -720,3 +720,28 @@ pub struct LeadState {
 
 /// A stored JSON column, passed through as it is.
 pub type Json = Value;
+
+/// `remap`: done and dropped items' leading shas carried through an old-to-new commit map.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct RemapRequest {
+    #[serde(flatten)]
+    pub common: Common,
+    /// `[old, new]` full shas.
+    pub map: Vec<(String, String)>,
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+/// One resolution the map rewrites.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemapRow {
+    pub id: String,
+    pub old: String,
+    pub new: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Remapped {
+    pub dry_run: bool,
+    pub rows: Vec<RemapRow>,
+}

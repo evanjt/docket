@@ -2,7 +2,7 @@ use super::*;
 
 use crate::scratch::Scratch;
 
-const MIGRATIONS: [&str; 24] = [
+const MIGRATIONS: [&str; 25] = [
     "m20261001_000001_schema",
     "m20261002_000001_machines_and_leads",
     "m20261005_000001_owner_facts",
@@ -27,6 +27,7 @@ const MIGRATIONS: [&str; 24] = [
     "m20261006_202103_column_labels",
     "m20261006_210713_open_assignments",
     "m20261006_213453_drop_old_columns",
+    "m20261006_220000_remapped_events",
 ];
 
 /// The migrations to apply to stand just before the one named.

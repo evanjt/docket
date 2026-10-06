@@ -40,3 +40,12 @@ fn test_a_write_is_refused_naming_each_project_whose_cases_wait() {
     assert!(!text.contains("cellar"), "{text}");
     assert!(refusal(&[waiting("cellar", None)]).contains("--dry-run"));
 }
+
+#[test]
+fn test_only_a_commit_answer_resolves_a_new_sha() {
+    let answer = "aaaaaaaaa commit 231\nbbbbbbbbb missing\nccccccccc blob 4\nddddddddd tree 9\n";
+    assert_eq!(
+        not_commits(answer),
+        vec!["bbbbbbbbb", "ccccccccc", "ddddddddd"]
+    );
+}

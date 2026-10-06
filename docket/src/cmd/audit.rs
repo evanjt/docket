@@ -13,8 +13,8 @@ use docket_core::word::{Kind, kind_of_type};
 use crate::cmd::show::progress_line;
 use crate::ctx::{Ctx, id};
 use crate::fail::{Fail, Result};
+use crate::jsonout::{Json, cut, or_none};
 use crate::local::{self, expand};
-use crate::py::{Py, cut, or_none};
 
 const SECTIONS: [&str; 7] = [
     "ready",
@@ -362,8 +362,8 @@ struct Report<'a> {
     breakdown: &'a [String],
 }
 
-fn ids_of(rows: &[&Value]) -> Py {
-    Py::List(rows.iter().map(|r| Py::from_value(&r["id"])).collect())
+fn ids_of(rows: &[&Value]) -> Json {
+    Json::List(rows.iter().map(|r| Json::from_value(&r["id"])).collect())
 }
 
 impl Report<'_> {
@@ -383,7 +383,7 @@ impl Report<'_> {
             .unwrap_or_default()
     }
 
-    fn json(&self) -> Py {
+    fn json(&self) -> Json {
         let target = &self.a["target"];
         let blocked = section(self.sections, "blocked");
         let principles = self
@@ -393,13 +393,13 @@ impl Report<'_> {
                 let by = self
                     .served(n)
                     .iter()
-                    .map(|x| Py::from_value(&x["id"]))
+                    .map(|x| Json::from_value(&x["id"]))
                     .collect();
                 (
                     n.to_string(),
-                    Py::Dict(vec![
-                        ("text".into(), Py::str(text)),
-                        ("served_by".into(), Py::List(by)),
+                    Json::Dict(vec![
+                        ("text".into(), Json::str(text)),
+                        ("served_by".into(), Json::List(by)),
                     ]),
                 )
             })
@@ -413,18 +413,18 @@ impl Report<'_> {
                     .as_array()
                     .into_iter()
                     .flatten()
-                    .map(|x| Py::from_value(&x["id"]));
+                    .map(|x| Json::from_value(&x["id"]));
                 (
                     b[0].as_str().unwrap_or_default().to_string(),
-                    Py::List(ids.collect()),
+                    Json::List(ids.collect()),
                 )
             })
             .collect();
-        Py::Dict(vec![
-            ("target".into(), Py::from_value(&target["id"])),
+        Json::Dict(vec![
+            ("target".into(), Json::from_value(&target["id"])),
             (
                 "sections".into(),
-                Py::Dict(
+                Json::Dict(
                     self.sections
                         .iter()
                         .map(|(k, v)| ((*k).to_string(), ids_of(v)))
@@ -433,34 +433,34 @@ impl Report<'_> {
             ),
             (
                 "blocked_on".into(),
-                Py::Dict(
+                Json::Dict(
                     blocked
                         .iter()
                         .map(|r| {
                             (
                                 r["id"].as_str().unwrap_or_default().to_string(),
-                                Py::from_value(&r["wait_ref"]),
+                                Json::from_value(&r["wait_ref"]),
                             )
                         })
                         .collect(),
                 ),
             ),
-            ("closed_off_head".into(), Py::strs(self.off_head)),
-            ("closed_on_no_commit".into(), Py::strs(self.nowhere)),
+            ("closed_off_head".into(), Json::strs(self.off_head)),
+            ("closed_on_no_commit".into(), Json::strs(self.nowhere)),
             (
                 "closed_on_another_items_close".into(),
-                Py::List(
+                Json::List(
                     self.wrong_close
                         .iter()
-                        .map(|(id, other)| Py::str(format!("{id} closes {other}")))
+                        .map(|(id, other)| Json::str(format!("{id} closes {other}")))
                         .collect(),
                 ),
             ),
-            ("principles".into(), Py::Dict(principles)),
-            ("labels".into(), Py::strs(&self.labels())),
-            ("bound".into(), Py::Dict(bound)),
-            ("breakdown".into(), Py::strs(self.breakdown)),
-            ("area".into(), Py::from_value(&self.a["area"]["name"])),
+            ("principles".into(), Json::Dict(principles)),
+            ("labels".into(), Json::strs(&self.labels())),
+            ("bound".into(), Json::Dict(bound)),
+            ("breakdown".into(), Json::strs(self.breakdown)),
+            ("area".into(), Json::from_value(&self.a["area"]["name"])),
         ])
     }
 
@@ -1144,20 +1144,20 @@ fn print_stale(ctx: &Ctx, found: &[Finding], gone: &[(String, String)], roots: u
                     Reason::PastEnd(..) => "past_end",
                     Reason::Benches => "benches",
                 };
-                Py::Dict(vec![
-                    ("id".into(), Py::str(&f.id)),
-                    ("path".into(), Py::str(&f.path)),
-                    ("reason".into(), Py::str(reason)),
+                Json::Dict(vec![
+                    ("id".into(), Json::str(&f.id)),
+                    ("path".into(), Json::str(&f.path)),
+                    ("reason".into(), Json::str(reason)),
                 ])
             })
             .chain(gone.iter().map(|(i, b)| {
-                Py::Dict(vec![
-                    ("id".into(), Py::str(i)),
-                    ("branch".into(), Py::str(b)),
+                Json::Dict(vec![
+                    ("id".into(), Json::str(i)),
+                    ("branch".into(), Json::str(b)),
                 ])
             }))
             .collect();
-        ctx.emit(&Py::List(rows));
+        ctx.emit(&Json::List(rows));
         return;
     }
     if found.is_empty() && gone.is_empty() {

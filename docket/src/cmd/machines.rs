@@ -9,7 +9,7 @@ use docket_core::machine::{self, Machine};
 
 use crate::ctx::Ctx;
 use crate::fail::Result;
-use crate::py::Py;
+use crate::jsonout::Json;
 
 /// Every machine, by name. The one whose name is this key's host is marked.
 ///
@@ -18,7 +18,7 @@ use crate::py::Py;
 pub fn machines(ctx: &Ctx) -> Result<i32> {
     let v = ctx.api.get("/machines", &[])?;
     if ctx.json {
-        ctx.emit(&Py::from_value(&v));
+        ctx.emit(&Json::from_value(&v));
         return Ok(0);
     }
     let listed: Machines = serde_json::from_value(v).unwrap_or_default();
@@ -37,7 +37,7 @@ pub fn machine(ctx: &Ctx, req: &MachineRequest) -> Result<i32> {
     let out: Machines = ctx.api.post("machine", req)?;
     if ctx.json {
         let v = serde_json::to_value(&out).unwrap_or_default();
-        ctx.emit(&Py::from_value(&v));
+        ctx.emit(&Json::from_value(&v));
         return Ok(0);
     }
     print!(

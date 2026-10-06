@@ -1,10 +1,10 @@
-//! JSON as Python's `json.dumps` writes it, so a stored value reads the same from either writer.
+//! JSON in the text style stored values and event data are written in: `, ` and `: ` separators, ASCII escapes, optional indent and key order.
 
 use std::fmt::Write;
 
 use serde_json::{Map, Value};
 
-/// The `json.dumps` arguments that change the text: `sort_keys`, `ensure_ascii` and `indent`.
+/// The arguments that change the text: `sort_keys`, `ensure_ascii` and `indent`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Style {
     pub sort_keys: bool,
@@ -34,7 +34,7 @@ pub fn dumps(value: &Value, sort_keys: bool) -> String {
     )
 }
 
-/// The value as `json.dumps` writes it with the given arguments.
+/// The value in the given style.
 #[must_use]
 pub fn dumps_styled(value: &Value, style: Style) -> String {
     let mut out = String::new();
@@ -125,5 +125,5 @@ fn write_str(s: &str, ascii: bool, out: &mut String) {
 }
 
 #[cfg(test)]
-#[path = "tests/pyjson.rs"]
+#[path = "tests/jsontext.rs"]
 mod tests;

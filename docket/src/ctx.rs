@@ -14,8 +14,8 @@ use docket_core::text::split_id;
 
 use crate::fail::{Fail, Result};
 use crate::http::Api;
+use crate::jsonout::{Json, dumps_indent};
 use crate::local;
-use crate::py::{Py, dumps_indent};
 
 pub struct Ctx {
     pub api: Api,
@@ -131,7 +131,7 @@ impl Ctx {
 
     /// `--json` output, as `json.dumps(indent=2)` prints it.
     #[allow(clippy::unused_self)]
-    pub fn emit(&self, v: &Py) {
+    pub fn emit(&self, v: &Json) {
         println!("{}", dumps_indent(v));
     }
 

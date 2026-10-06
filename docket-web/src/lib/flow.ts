@@ -2,7 +2,7 @@ import type { EventRow, Graph, GraphNode, Kind, Progress } from './types';
 import { day, epoch } from './time';
 
 /** The flow read left to right, then the words that sit beside it. */
-export const FLOW = ['ready', 'in progress', 'under way', 'audit due'] as const;
+export const FLOW = ['ready', 'in progress'] as const;
 export const ASIDE = ['blocked', 'waiting on owner', 'parked'] as const;
 export const CLOSED = ['done', 'dropped'];
 
@@ -100,6 +100,18 @@ export interface PlanRow {
 /** The word drawn beside a plan: none while it is under way, where its tally is the whole state. */
 export function planWord(row: PlanRow): string | null {
   return row.node.word === 'under way' ? null : row.node.word;
+}
+
+/** The plans whose word is under way and those whose word is audit due, as the server words them. */
+export function planCount(b: Board): { open: number; auditDue: number } {
+  let open = 0;
+  let auditDue = 0;
+  for (const n of b.nodes.values()) {
+    if (n.kind !== 'audit') continue;
+    if (n.word === 'under way') open++;
+    else if (n.word === 'audit due') auditDue++;
+  }
+  return { open, auditDue };
 }
 
 /** The open items of one kind with their progress, the due ones first, then the nearest done. */

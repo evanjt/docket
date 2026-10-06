@@ -133,6 +133,7 @@ export interface EventRow {
   branch?: string | null;
   kind: string;
   note?: string | null;
+  data?: { end?: string } & Record<string, unknown> | null;
 }
 
 export interface Derived {

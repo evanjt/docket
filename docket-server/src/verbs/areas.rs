@@ -221,7 +221,7 @@ pub async fn areas(
         other => {
             return Err(Failure::Invalid(format!(
                 "action is one of add, edit, move, rm, not {}",
-                docket_core::text::py_repr(other)
+                docket_core::text::quoted(other)
             )));
         }
     }

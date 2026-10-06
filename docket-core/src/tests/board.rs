@@ -1,4 +1,4 @@
-use super::Board;
+use super::{Board, PlanCount};
 use crate::member::{Edge, Tie};
 use crate::rows::{ItemRow, Progress, ProjectRow};
 use crate::word::ItemType;
@@ -132,4 +132,32 @@ fn test_a_plan_with_open_members_reads_under_way_without_a_wait() {
     assert_eq!(b.word(a1), "under way");
     let done = plan_with_grandchild("done");
     assert_eq!(done.word(done.get("A1").unwrap()), "audit due");
+}
+
+#[test]
+fn test_the_plan_count_takes_open_and_audit_due_from_the_word() {
+    let open = plan_with_grandchild("open");
+    assert_eq!(
+        open.plan_count(),
+        PlanCount {
+            open: 1,
+            audit_due: 0
+        }
+    );
+    let closed = plan_with_grandchild("done");
+    assert_eq!(
+        closed.plan_count(),
+        PlanCount {
+            open: 0,
+            audit_due: 1
+        }
+    );
+}
+
+#[test]
+fn test_a_plan_whose_tickets_are_all_closed_is_not_listed_as_under_way() {
+    let closed = plan_with_grandchild("done");
+    assert!(closed.plans_under_way().is_empty());
+    let open = plan_with_grandchild("open");
+    assert_eq!(open.plans_under_way().len(), 1);
 }

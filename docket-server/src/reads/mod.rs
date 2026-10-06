@@ -1,4 +1,4 @@
-//! The lists whose order or content is a rule, each in the shape its Python command's `--json` prints.
+//! The lists whose order or content is a rule, each in the shape the matching command's `--json` prints.
 
 pub mod audit;
 pub mod board;

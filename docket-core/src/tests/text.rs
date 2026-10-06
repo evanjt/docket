@@ -121,12 +121,12 @@ fn test_split_id_accepts_any_case_and_three_capitals() {
 }
 
 #[test]
-fn test_py_repr_quotes_like_python() {
-    assert_eq!(py_repr("x"), "'x'");
-    assert_eq!(py_repr("it's"), "\"it's\"");
-    assert_eq!(py_repr("a'b\"c"), "'a\\'b\"c'");
-    assert_eq!(py_repr("a\\b\n"), "'a\\\\b\\n'");
-    assert_eq!(py_repr("\u{1}"), "'\\x01'");
+fn test_quoted_picks_quote_and_escapes() {
+    assert_eq!(quoted("x"), "'x'");
+    assert_eq!(quoted("it's"), "\"it's\"");
+    assert_eq!(quoted("a'b\"c"), "'a\\'b\"c'");
+    assert_eq!(quoted("a\\b\n"), "'a\\\\b\\n'");
+    assert_eq!(quoted("\u{1}"), "'\\x01'");
 }
 
 #[test]

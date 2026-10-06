@@ -58,7 +58,7 @@ pub fn require_open(row: &Item, verb: &str) -> Result<(), Refused> {
     )))
 }
 
-/// An optional column as Python prints it.
+/// An optional column printed as its value or `None`.
 fn opt(v: Option<&String>) -> &str {
     v.map_or("None", String::as_str)
 }
@@ -178,7 +178,7 @@ pub fn prioritise(tier: &str) -> Result<Vec<Field>, Refused> {
         return Err(Refused(format!(
             "priority is one of {}, not {}",
             PRIORITIES.join(", "),
-            crate::text::py_repr(tier)
+            crate::text::quoted(tier)
         )));
     }
     Ok(vec![Field::Priority(tier.to_string())])
@@ -353,7 +353,7 @@ pub fn rate(level: &str) -> Result<Vec<Field>, Refused> {
         return Err(Refused(format!(
             "complexity is one of {}, not {}",
             COMPLEXITIES.join(", "),
-            crate::text::py_repr(level)
+            crate::text::quoted(level)
         )));
     }
     Ok(vec![Field::Complexity(Some(level.to_string()))])

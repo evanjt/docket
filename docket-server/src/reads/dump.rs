@@ -16,7 +16,7 @@ use sea_orm::{
 use serde::Deserialize;
 
 use docket_core::dump::{Dependency, DumpPage, EventDump, ItemDump, ProjectDump};
-use docket_core::pyjson;
+use docket_core::jsontext;
 
 use crate::entities::{item, project};
 use crate::reads::public::{Failure, internal, sql};
@@ -285,7 +285,7 @@ async fn events(tx: &DatabaseTransaction, scope: &Scope) -> Result<Vec<EventDump
             kind: e.kind,
             note: e.note,
             item: e.item,
-            data: e.data.map(|d| pyjson::dumps(&d, true)),
+            data: e.data.map(|d| jsontext::dumps(&d, true)),
         })
         .collect())
 }

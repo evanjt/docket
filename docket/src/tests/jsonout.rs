@@ -14,10 +14,10 @@ fn test_float_repr_fixed_and_exponent() {
 
 #[test]
 fn test_dumps_indent_nests_and_keeps_order() {
-    let v = Py::Dict(vec![
-        ("b".into(), Py::List(vec![Py::Int(1), Py::Null])),
-        ("a".into(), Py::Dict(vec![])),
-        ("c".into(), Py::List(vec![])),
+    let v = Json::Dict(vec![
+        ("b".into(), Json::List(vec![Json::Int(1), Json::Null])),
+        ("a".into(), Json::Dict(vec![])),
+        ("c".into(), Json::List(vec![])),
     ]);
     assert_eq!(
         dumps_indent(&v),
@@ -28,7 +28,7 @@ fn test_dumps_indent_nests_and_keeps_order() {
 
 #[test]
 fn test_dumps_escapes_controls_and_keeps_unicode() {
-    let v = Py::str("é\"\\\n\u{1}\u{7f}");
+    let v = Json::str("é\"\\\n\u{1}\u{7f}");
     assert_eq!(dumps_line(&v), "\"é\\\"\\\\\\n\\u0001\u{7f}\"");
 }
 

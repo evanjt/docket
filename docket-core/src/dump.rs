@@ -1,5 +1,5 @@
 //! The text the dump repository carries: one file per item, and an event log and a project file per
-//! project, each written in the JSON style the Python dump wrote.
+//! project, each written in the JSON style of `jsontext`.
 
 use std::collections::BTreeMap;
 use std::fmt::Write;
@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::assignment::Assignment;
-use crate::pyjson::{Style, data_of, dumps_styled};
+use crate::jsontext::{Style, data_of, dumps_styled};
 
 /// A frontmatter value: one line, non-ASCII kept.
 const LINE: Style = Style {

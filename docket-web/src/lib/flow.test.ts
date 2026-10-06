@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { board, byId, daily, moves, planWord, plans, tally, wordVar } from './flow';
+import { FLOW, board, byId, daily, moves, planCount, planWord, plans, tally, wordVar } from './flow';
 import type { EventRow, Graph, GraphNode } from './types';
 
 const node = (id: string, kind: GraphNode['kind'], word: string, rid = 0): GraphNode => ({
@@ -170,5 +170,18 @@ describe('moves', () => {
 
   it('skips an event of an item the board does not hold', () => {
     expect(moves([event('2026-10-02T09:00:00Z', 'closed', 9)], (rid) => ids[rid])).toEqual([]);
+  });
+});
+
+describe('FLOW', () => {
+  it('holds item words only, with no plan word', () => {
+    expect([...FLOW]).not.toContain('under way');
+    expect([...FLOW]).not.toContain('audit due');
+  });
+});
+
+describe('planCount', () => {
+  it('counts plans under way and plans due apart from ready ones', () => {
+    expect(planCount(board(GRAPH))).toEqual({ open: 1, auditDue: 0 });
   });
 });

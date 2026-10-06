@@ -13,7 +13,7 @@ use docket_core::word::ItemType;
 use crate::args::{OwnerQueue, Queue, Recent};
 use crate::ctx::{Ctx, id};
 use crate::fail::Result;
-use crate::py::{Py, cut, or_none};
+use crate::jsonout::{Json, cut, or_none};
 
 use crate::row::{fmt_row, items_json, row_of, rows_of};
 
@@ -367,7 +367,9 @@ pub fn derived(ctx: &mut Ctx, n: Option<i64>) -> Result<i32> {
     let list = rows.as_array().cloned().unwrap_or_default();
     if ctx.json {
         let keys = ["id", "state", "at", "title", "chose", "basis"];
-        ctx.emit(&Py::List(list.iter().map(|d| Py::pick(d, &keys)).collect()));
+        ctx.emit(&Json::List(
+            list.iter().map(|d| Json::pick(d, &keys)).collect(),
+        ));
         return Ok(0);
     }
     if list.is_empty() {

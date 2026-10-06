@@ -65,7 +65,7 @@ pub fn pass(source: &impl Source, repo: &Path, full: bool, host: &str) -> Result
     })
 }
 
-/// The paths of every project a page names, staged by project as the Python stages them.
+/// The paths of every project a page names, staged by project, one batch each.
 fn paths(repo: &Path, page: &DumpPage) -> Vec<String> {
     let mut slugs: Vec<&str> = page.projects.iter().map(|p| p.slug.as_str()).collect();
     slugs.extend(page.items.iter().map(|i| i.project.as_str()));

@@ -187,7 +187,7 @@ fn test_render_item_leaves_out_optional_fields_unset_and_an_empty_body() {
 }
 
 #[test]
-fn test_event_line_matches_python_sorted_with_data_only_when_set() {
+fn test_event_line_is_sorted_with_data_only_when_set() {
     let mut events = fixture_events();
     events.sort_by(|a, b| (&a.at, &a.uid).cmp(&(&b.at, &b.uid)));
     let lines: String = events.iter().map(|e| event_line(e) + "\n").collect();
@@ -195,7 +195,7 @@ fn test_event_line_matches_python_sorted_with_data_only_when_set() {
 }
 
 #[test]
-fn test_project_text_matches_python() {
+fn test_project_text_is_stable() {
     assert_eq!(project_text(&fixture_project()), PROJECT);
 }
 

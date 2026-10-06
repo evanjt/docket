@@ -7,7 +7,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 
 use crate::item::Refused;
-use crate::text::py_repr;
+use crate::text::quoted;
 
 /// The one alias a write may give for a release: the first not shipped.
 pub const CURRENT: &str = "current";
@@ -88,7 +88,7 @@ pub fn check_name(name: &str) -> Result<(), Refused> {
     if name.is_empty() || name.chars().any(char::is_whitespace) {
         return Err(Refused(format!(
             "{} is not a release name: one word, no spaces",
-            py_repr(name)
+            quoted(name)
         )));
     }
     if name == CURRENT {

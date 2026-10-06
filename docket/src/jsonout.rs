@@ -1,4 +1,4 @@
-//! Output as Python prints it: JSON from `json.dumps`, floats from `repr`, strings cut by character.
+//! Output text: JSON with insertion-ordered objects, floats as the shortest digits that read back, strings cut by character.
 
 use std::fmt::Write;
 
@@ -6,32 +6,32 @@ use serde_json::Value;
 
 /// A JSON value whose objects keep the order they were built in.
 #[derive(Clone, Debug, PartialEq)]
-pub enum Py {
+pub enum Json {
     Null,
     Bool(bool),
     Int(i64),
     Float(f64),
     Str(String),
-    List(Vec<Py>),
-    Dict(Vec<(String, Py)>),
+    List(Vec<Json>),
+    Dict(Vec<(String, Json)>),
 }
 
-impl Py {
+impl Json {
     /// A server value, its objects in the order serde gives them.
     #[must_use]
     pub fn from_value(v: &Value) -> Self {
         match v {
-            Value::Null => Py::Null,
-            Value::Bool(b) => Py::Bool(*b),
+            Value::Null => Json::Null,
+            Value::Bool(b) => Json::Bool(*b),
             Value::Number(n) => match n.as_i64() {
-                Some(i) => Py::Int(i),
-                None => Py::Float(n.as_f64().unwrap_or(0.0)),
+                Some(i) => Json::Int(i),
+                None => Json::Float(n.as_f64().unwrap_or(0.0)),
             },
-            Value::String(s) => Py::Str(s.clone()),
-            Value::Array(a) => Py::List(a.iter().map(Py::from_value).collect()),
-            Value::Object(o) => Py::Dict(
+            Value::String(s) => Json::Str(s.clone()),
+            Value::Array(a) => Json::List(a.iter().map(Json::from_value).collect()),
+            Value::Object(o) => Json::Dict(
                 o.iter()
-                    .map(|(k, v)| (k.clone(), Py::from_value(v)))
+                    .map(|(k, v)| (k.clone(), Json::from_value(v)))
                     .collect(),
             ),
         }
@@ -40,27 +40,27 @@ impl Py {
     /// An object with the named fields of `v`, in that order, a missing one as null.
     #[must_use]
     pub fn pick(v: &Value, keys: &[&str]) -> Self {
-        Py::Dict(
+        Json::Dict(
             keys.iter()
-                .map(|k| ((*k).to_string(), Py::from_value(&v[*k])))
+                .map(|k| ((*k).to_string(), Json::from_value(&v[*k])))
                 .collect(),
         )
     }
 
     pub fn str(s: impl Into<String>) -> Self {
-        Py::Str(s.into())
+        Json::Str(s.into())
     }
 
     /// A list of strings.
     #[must_use]
     pub fn strs<S: AsRef<str>>(items: &[S]) -> Self {
-        Py::List(items.iter().map(|s| Py::str(s.as_ref())).collect())
+        Json::List(items.iter().map(|s| Json::str(s.as_ref())).collect())
     }
 }
 
 /// `json.dumps(value, indent=2, ensure_ascii=False)`.
 #[must_use]
-pub fn dumps_indent(v: &Py) -> String {
+pub fn dumps_indent(v: &Json) -> String {
     let mut out = String::new();
     write(v, Some(2), 0, &mut out);
     out
@@ -68,22 +68,22 @@ pub fn dumps_indent(v: &Py) -> String {
 
 /// `json.dumps(value, ensure_ascii=False)`, on one line.
 #[must_use]
-pub fn dumps_line(v: &Py) -> String {
+pub fn dumps_line(v: &Json) -> String {
     let mut out = String::new();
     write(v, None, 0, &mut out);
     out
 }
 
-fn write(v: &Py, indent: Option<usize>, depth: usize, out: &mut String) {
+fn write(v: &Json, indent: Option<usize>, depth: usize, out: &mut String) {
     match v {
-        Py::Null => out.push_str("null"),
-        Py::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-        Py::Int(i) => {
+        Json::Null => out.push_str("null"),
+        Json::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        Json::Int(i) => {
             let _ = write!(out, "{i}");
         }
-        Py::Float(f) => out.push_str(&float_repr(*f)),
-        Py::Str(s) => write_str(s, out),
-        Py::List(items) => {
+        Json::Float(f) => out.push_str(&float_repr(*f)),
+        Json::Str(s) => write_str(s, out),
+        Json::List(items) => {
             let parts: Vec<String> = items
                 .iter()
                 .map(|x| {
@@ -94,7 +94,7 @@ fn write(v: &Py, indent: Option<usize>, depth: usize, out: &mut String) {
                 .collect();
             container('[', ']', &parts, indent, depth, out);
         }
-        Py::Dict(items) => {
+        Json::Dict(items) => {
             let parts: Vec<String> = items
                 .iter()
                 .map(|(k, x)| {
@@ -157,7 +157,7 @@ fn write_str(s: &str, out: &mut String) {
     out.push('"');
 }
 
-/// A float as Python's `repr` prints it: the shortest digits that read back, fixed between 1e-4 and
+/// A float in the shortest form: the shortest digits that read back, fixed between 1e-4 and
 /// 1e16, an exponent of at least two digits outside.
 #[must_use]
 pub fn float_repr(f: f64) -> String {
@@ -199,7 +199,7 @@ fn fixed(digits: &str, exp: i32) -> String {
     }
 }
 
-/// The first n characters, as a Python slice reads them.
+/// The first n characters, counted as characters, not bytes.
 #[must_use]
 pub fn cut(text: &str, n: usize) -> String {
     text.chars().take(n).collect()
@@ -212,5 +212,5 @@ pub fn or_none(v: Option<&str>) -> &str {
 }
 
 #[cfg(test)]
-#[path = "tests/py.rs"]
+#[path = "tests/jsonout.rs"]
 mod tests;

@@ -11,8 +11,16 @@ fn test_flow_line_reads_the_flow_then_what_is_aside() {
     ];
     assert_eq!(
         flow_line(&total),
-        "ready 2 > in progress 0 > under way 0 > done 4    parked 1"
+        "ready 2 > in progress 0 > done 4    parked 1"
     );
+}
+
+#[test]
+fn test_the_flow_line_names_no_plan_count_and_the_plans_line_reads_open_and_due() {
+    let r = read();
+    let text = render("o/p", &r).join("\n");
+    assert!(!flow_line(&r.total).contains("under way"), "{text}");
+    assert!(text.contains("Plans: 1 open, 0 audit due"), "{text}");
 }
 
 #[test]
@@ -42,7 +50,6 @@ fn read() -> Read {
     Read {
         total: vec![
             ("ready".to_string(), 3),
-            ("under way".to_string(), 1),
             ("done".to_string(), 4),
             ("parked".to_string(), 1),
         ],
@@ -50,6 +57,7 @@ fn read() -> Read {
             "skills": {"mode": "pause", "pool": "local=2"},
             "claims": [{"id": "T2", "title": "Second member", "branch": "audit/t2-1",
                         "host": "devbox", "since": 1000, "flag": "no event for 3h"}],
+            "plan_count": {"open": 1, "audit_due": 0},
             "plans": [{"id": "A1", "title": "Loaves stay put", "done": 1, "total": 4, "live": 1}],
             "due": [{"id": "A2", "title": "Orders print at the till"}],
             "problems": [],
@@ -66,7 +74,7 @@ fn read() -> Read {
 fn test_status_text_shows_claims_owner_items_and_due_audits() {
     let text = render("o/p", &read()).join("\n");
     assert!(text.starts_with("o/p"), "{text}");
-    assert!(text.contains("4 of 9 closed"), "{text}");
+    assert!(text.contains("4 of 8 closed"), "{text}");
     assert!(text.contains("CLAIMED NOW  1"), "{text}");
     assert!(
         text.contains(" T2     audit/t2-1 on devbox  3h 00m  [no event for 3h] Second member"),
@@ -104,12 +112,16 @@ fn test_status_text_says_when_nothing_is_claimed_waiting_or_due() {
     r.summary["claims"] = json!([]);
     r.summary["due"] = json!([]);
     r.summary["plans"] = json!([]);
+    r.summary["plan_count"] = json!({"open": 0, "audit_due": 0});
     r.yours = json!([]);
     let text = render("o/p", &r).join("\n");
     assert!(text.contains("CLAIMED NOW  nothing claimed"), "{text}");
     assert!(text.contains("YOURS  nothing waits on you"), "{text}");
     assert!(text.contains("AUDITS DUE  no plan is due"), "{text}");
-    assert!(text.contains("PLANS  none under way"), "{text}");
+    assert!(
+        text.contains("PLANS  none under way") && text.contains("Plans: 0 open, 0 audit due"),
+        "{text}"
+    );
 }
 
 #[test]

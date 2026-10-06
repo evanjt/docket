@@ -14,7 +14,7 @@ use tokio::sync::{Mutex, OwnedMutexGuard};
 use docket_core::assignment::{self, Ask, Claim, Held};
 use docket_core::clock;
 use docket_core::item::{Field, Item, Project, Refused};
-use docket_core::pyjson;
+use docket_core::jsontext;
 use docket_core::text::{citations, split_id};
 use docket_core::word::ItemType;
 use docket_migration::assignments;
@@ -667,7 +667,7 @@ impl Tx {
             self.execute(
                 "INSERT INTO meta (k, v) VALUES ('pending_dump_projects', ?) \
                  ON CONFLICT (k) DO UPDATE SET v=EXCLUDED.v",
-                vec![pyjson::dumps(&serde_json::json!(slugs), false).into()],
+                vec![jsontext::dumps(&serde_json::json!(slugs), false).into()],
             )
             .await?;
         }

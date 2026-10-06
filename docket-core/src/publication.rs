@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::item::Refused;
-use crate::text::py_repr;
+use crate::text::quoted;
 
 /// One publication as `GET /publications` lists it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,7 +33,7 @@ pub fn check_sha(what: &str, sha: &str) -> Result<(), Refused> {
     }
     Err(Refused(format!(
         "the {what} commit is a full sha of 40 or 64 lowercase hex digits, not {}",
-        py_repr(sha)
+        quoted(sha)
     )))
 }
 

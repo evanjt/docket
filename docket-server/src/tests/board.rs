@@ -429,7 +429,8 @@ async fn test_summary_reads_claims_plans_and_due_audits() {
             .unwrap()
             .starts_with("no event for")
     );
-    assert_eq!(ids(&m["plans"]), ["PK1", "A1", "A2"]);
+    assert_eq!(ids(&m["plans"]), ["PK1", "A1"]);
+    assert_eq!(m["plan_count"], json!({"open": 2, "audit_due": 1}));
     assert_eq!(
         (
             &m["plans"][1]["done"],

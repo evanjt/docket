@@ -848,3 +848,73 @@ fn test_a_job_that_forks_past_an_rlimit_cap_has_its_processes_refused() {
     started.child.wait().unwrap();
     assert!(!started.worktree.join("forked").exists());
 }
+
+/// `git ARGS` in `dir` with an identity, signing off and submodules over files allowed.
+fn git_as(dir: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.org",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "protocol.file.allow=always",
+        ])
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?}");
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+#[test]
+fn test_a_parked_worktree_has_its_submodule_back_at_the_pinned_commit_and_clean() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (lib, top, slot) = (
+        tmp.path().join("lib-origin"),
+        tmp.path().join("top"),
+        tmp.path().join("top-slot1"),
+    );
+    for (dir, file) in [(&lib, "lib.txt"), (&top, "top.txt")] {
+        fs::create_dir_all(dir).unwrap();
+        git_as(dir, &["init", "-q", "-b", "main"]);
+        fs::write(dir.join(file), "one\n").unwrap();
+        git_as(dir, &["add", file]);
+        git_as(dir, &["commit", "-q", "-m", "Start"]);
+    }
+    git_as(
+        &top,
+        &["submodule", "add", "-q", &lib.display().to_string(), "lib"],
+    );
+    git_as(&top, &["commit", "-q", "-m", "Pin lib"]);
+    git_as(
+        &top,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            &slot.display().to_string(),
+            "-b",
+            "job",
+        ],
+    );
+    git_as(&slot, &["submodule", "update", "--init", "-q"]);
+    let pinned = git_as(&slot, &["rev-parse", "HEAD:lib"]);
+
+    // A job's leftovers in the submodule: a tracked edit, a new file and a commit.
+    let inside = slot.join("lib");
+    fs::write(inside.join("lib.txt"), "edited\n").unwrap();
+    fs::write(inside.join("stray"), "x").unwrap();
+    git_as(&inside, &["commit", "-q", "-am", "Leftover"]);
+    fs::write(inside.join("lib.txt"), "edited again\n").unwrap();
+
+    park(&slot).unwrap();
+
+    assert_eq!(git_as(&inside, &["rev-parse", "HEAD"]), pinned);
+    assert_eq!(git_as(&inside, &["status", "--porcelain"]), "");
+    assert_eq!(git_as(&slot, &["status", "--porcelain"]), "");
+}

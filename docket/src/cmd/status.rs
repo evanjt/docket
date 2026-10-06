@@ -10,10 +10,10 @@ use docket_core::pace::duration;
 
 use crate::ctx::Ctx;
 use crate::fail::{Fail, Result};
-use crate::py::{Py, cut, or_none};
+use crate::jsonout::{Json, cut, or_none};
 
-const FLOW: [&str; 4] = ["ready", "in progress", "under way", "done"];
-const ASIDE: [&str; 3] = ["checking", "blocked", "parked"];
+const FLOW: [&str; 3] = ["ready", "in progress", "done"];
+const ASIDE: [&str; 4] = ["checking", "blocked", "waiting on owner", "parked"];
 const WIDTH: usize = 160;
 /// Rows each block shows before it says how many more.
 const SHOWN: usize = 21;
@@ -68,7 +68,7 @@ pub fn status(ctx: &mut Ctx) -> Result<i32> {
             out[k] = status[k].clone();
         }
         out["by_key"] = status["by_key"].clone();
-        ctx.emit(&Py::from_value(&out));
+        ctx.emit(&Json::from_value(&out));
         return Ok(0);
     }
     for line in render(&slug, &read) {
@@ -88,6 +88,7 @@ pub fn json_status(r: &Read) -> Value {
         "yours": r.yours,
         "due": s["due"],
         "plans": s["plans"],
+        "plan_count": s["plan_count"],
         "problems": Value::Object(
             check::counts(&s["problems"]).into_iter().map(|(k, n)| (k, n.into())).collect()
         ),
@@ -134,6 +135,7 @@ pub fn render(slug: &str, r: &Read) -> Vec<String> {
     ));
     out.extend(titled_lines("AUDITS DUE", "", "no plan is due", &s["due"]));
     out.extend(r.squash.iter().cloned());
+    out.push(plans_line(&s["plan_count"]));
     out.extend(plan_lines(&s["plans"]));
     let problems = problem_summary(&s["problems"]);
     if !problems.is_empty() {
@@ -149,7 +151,7 @@ pub fn render(slug: &str, r: &Read) -> Vec<String> {
     out
 }
 
-/// `ready 212 > in progress 17 > under way 18 > done 141    blocked 3  parked 9`.
+/// `ready 212 > in progress 17 > done 141    blocked 3  parked 9`.
 #[must_use]
 pub fn flow_line(total: &[(String, u64)]) -> String {
     let head: Vec<String> = FLOW
@@ -236,6 +238,12 @@ fn titled_lines(name: &str, hint: &str, none: &str, list: &Value) -> Vec<String>
     }
     shown(&mut lines, rows.len());
     lines
+}
+
+/// `Plans: 3 open, 1 audit due`, from the counts the summary route answers with.
+fn plans_line(c: &Value) -> String {
+    let n = |k: &str| c[k].as_u64().unwrap_or(0);
+    format!("Plans: {} open, {} audit due", n("open"), n("audit_due"))
 }
 
 /// PLANS: those with tickets being worked first, then the nearest done.
@@ -342,7 +350,7 @@ pub fn check(ctx: &mut Ctx, deep: bool) -> Result<i32> {
     }
     let problems = problem_lines(&ctx.read("/check", &[])?);
     if ctx.json {
-        ctx.emit(&Py::strs(&problems));
+        ctx.emit(&Json::strs(&problems));
     } else if problems.is_empty() {
         println!("clean");
     } else {

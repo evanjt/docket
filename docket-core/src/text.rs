@@ -58,7 +58,7 @@ pub fn split_id(text: &str) -> Result<(String, i64), Refused> {
     let not_an_id = || {
         Refused(format!(
             "{} is not an id: a key of one to three capitals and a number, like B14",
-            py_repr(text)
+            quoted(text)
         ))
     };
     let m = ID.captures(&upper).ok_or_else(not_an_id)?;
@@ -66,9 +66,9 @@ pub fn split_id(text: &str) -> Result<(String, i64), Refused> {
     Ok((m[1].to_string(), num))
 }
 
-/// A string as Python's repr prints it, for refusals that quote one.
+/// A string in single quotes, or double when it holds a single quote and no double, escaped; for refusals that quote one.
 #[must_use]
-pub fn py_repr(text: &str) -> String {
+pub fn quoted(text: &str) -> String {
     let quote = if text.contains('\'') && !text.contains('"') {
         '"'
     } else {

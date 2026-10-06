@@ -750,11 +750,30 @@ fn parked_slot(checkout: &Path, stem: &str) -> Result<Option<PathBuf>, String> {
 }
 
 /// Free a worktree for the next job: its head detached, its tracked changes and untracked files
-/// gone, its ignored files kept.
+/// gone, its ignored files kept, and each submodule checked out here back at the commit this
+/// worktree pins, clean.
 fn park(worktree: &Path) -> Result<(), String> {
     git(worktree, &["checkout", "--quiet", "--detach"])?;
     git(worktree, &["reset", "--quiet", "--hard"])?;
     git(worktree, &["clean", "--quiet", "-fd"])?;
+    reset_submodules(worktree)
+}
+
+/// Each submodule checked out under `worktree` detached at the commit the index pins, its tracked
+/// changes and untracked files gone, so an earlier job's edits there are not read as the next
+/// job's.
+fn reset_submodules(worktree: &Path) -> Result<(), String> {
+    for (path, pinned) in gitlinks(worktree, &["ls-files", "--stage", "-z"], 1)? {
+        let inside = worktree.join(&path);
+        if !is_repository(&inside) {
+            continue;
+        }
+        let at = |args: &[&str]| git(&inside, args).map_err(|e| format!("{path}: {e}"));
+        at(&["checkout", "--quiet", "--force", "--detach", &pinned])?;
+        at(&["reset", "--quiet", "--hard"])?;
+        at(&["clean", "--quiet", "-ffd"])?;
+        reset_submodules(&inside)?;
+    }
     Ok(())
 }
 
@@ -821,6 +840,7 @@ pub fn run(
     let parent = checkout.parent().unwrap_or(checkout);
     let worktree = if let Some(slot) = parked_slot(checkout, stem)? {
         git(&slot, &["checkout", "--quiet", &spec.branch])?;
+        reset_submodules(&slot)?;
         slot
     } else {
         {

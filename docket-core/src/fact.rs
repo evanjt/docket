@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use crate::item::Refused;
-use crate::text::py_repr;
+use crate::text::quoted;
 
 /// Every fact a project carries, in the order `docket skills` prints them, with its one-line meaning.
 pub const FACTS: [(&str, &str); 20] = [
@@ -352,7 +352,7 @@ pub fn check(key: &str, value: &str) -> Result<(), Refused> {
         return Err(Refused(format!(
             "{key} is one of {}, not {}",
             allowed.join(", "),
-            py_repr(value)
+            quoted(value)
         )));
     }
     check_shape(key, value)
@@ -363,7 +363,7 @@ fn check_shape(key: &str, value: &str) -> Result<(), Refused> {
     if COUNTS.contains(&key) && !is_count(value) {
         return Err(Refused(format!(
             "{key} is a whole number above 0, not {}",
-            py_repr(value)
+            quoted(value)
         )));
     }
     if key == "models" {
@@ -405,7 +405,7 @@ pub fn publish_of(value: &str) -> Result<Publish, String> {
     let shape = || {
         format!(
             "{} is not a local ref and a remote ref, as 'published origin/main'",
-            py_repr(value)
+            quoted(value)
         )
     };
     let words: Vec<&str> = value.split_whitespace().collect();
@@ -414,7 +414,7 @@ pub fn publish_of(value: &str) -> Result<Publish, String> {
     };
     for name in [local, remote] {
         if !is_ref_name(name) {
-            return Err(format!("{} is no ref git takes", py_repr(name)));
+            return Err(format!("{} is no ref git takes", quoted(name)));
         }
     }
     if !remote.contains('/') {
@@ -461,7 +461,7 @@ pub type Prices = BTreeMap<String, (f64, f64)>;
 pub fn prices_of(value: &str) -> Result<Prices, String> {
     let mut out = Prices::new();
     for entry in value.split_whitespace() {
-        let shape = || format!("{} is not model=input:output", py_repr(entry));
+        let shape = || format!("{} is not model=input:output", quoted(entry));
         let (model, rest) = entry.split_once('=').ok_or_else(shape)?;
         let (input, output) = rest.split_once(':').ok_or_else(shape)?;
         let price = |n: &str| {
@@ -500,7 +500,7 @@ pub enum Role {
 fn models_of(value: &str) -> Result<BTreeMap<String, Model>, String> {
     let mut out = BTreeMap::new();
     for entry in value.split_whitespace() {
-        let shape = || format!("{} is not key=runner:model[:effort]", py_repr(entry));
+        let shape = || format!("{} is not key=runner:model[:effort]", quoted(entry));
         let (key, rest) = entry.split_once('=').ok_or_else(shape)?;
         let parts: Vec<&str> = rest.splitn(3, ':').collect();
         if key.is_empty() || parts.len() < 2 || parts.iter().any(|p| p.is_empty()) {
@@ -509,14 +509,14 @@ fn models_of(value: &str) -> Result<BTreeMap<String, Model>, String> {
         if !MODEL_KEYS.contains(&key) {
             return Err(format!(
                 "{} names {key}, not one of {}",
-                py_repr(entry),
+                quoted(entry),
                 MODEL_KEYS.join(", ")
             ));
         }
         if !RUNNERS.contains(&parts[0]) {
             return Err(format!(
                 "{} runs on {}, not one of {}",
-                py_repr(entry),
+                quoted(entry),
                 parts[0],
                 RUNNERS.join(", ")
             ));
@@ -527,7 +527,7 @@ fn models_of(value: &str) -> Result<BTreeMap<String, Model>, String> {
             effort: parts.get(2).map(|e| (*e).to_string()),
         };
         if out.insert(key.to_string(), model).is_some() {
-            return Err(format!("{} sets {key} a second time", py_repr(entry)));
+            return Err(format!("{} sets {key} a second time", quoted(entry)));
         }
     }
     Ok(out)

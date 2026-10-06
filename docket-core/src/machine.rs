@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::item::Refused;
-use crate::text::py_repr;
+use crate::text::quoted;
 
 /// The agents a machine can run a job on.
 pub const RUNNERS: [&str; 2] = ["claude", "codex"];
@@ -192,7 +192,7 @@ pub fn check(m: &Machine) -> Result<(), Refused> {
     if name.split_whitespace().count() != 1 || name.trim() != name {
         return Err(Refused(format!(
             "a machine's name is one word, the host its key names, not {}",
-            py_repr(name)
+            quoted(name)
         )));
     }
     if m.ssh.trim().is_empty() || m.ssh.split_whitespace().count() != 1 {
@@ -225,7 +225,7 @@ pub fn check(m: &Machine) -> Result<(), Refused> {
             return Err(Refused(format!(
                 "{name}'s runners are {}, not {}",
                 RUNNERS.join(", "),
-                py_repr(r)
+                quoted(r)
             )));
         }
         if m.runners[..i].contains(r) {

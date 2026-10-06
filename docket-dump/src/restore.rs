@@ -472,7 +472,7 @@ async fn item_rid(tx: &DatabaseTransaction, slug: &str, id: &str) -> Result<Opti
     Ok(Some(rid).filter(|r| *r >= 0))
 }
 
-/// Whether Python reads the value as true: not null, false, zero or empty.
+/// Whether a value is true: not null, false, zero or empty.
 fn truthy(v: &Json) -> bool {
     match v {
         Json::Null => false,

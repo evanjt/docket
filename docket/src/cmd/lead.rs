@@ -8,7 +8,7 @@ use docket_core::lead::Lead;
 
 use crate::ctx::Ctx;
 use crate::fail::Result;
-use crate::py::Py;
+use crate::jsonout::Json;
 
 /// Shows the claim, or takes, renews or gives it back.
 ///
@@ -33,7 +33,7 @@ pub fn lead(ctx: &mut Ctx, what: &str, session: Option<&String>) -> Result<i32> 
     };
     if ctx.json {
         let v = serde_json::to_value(&state).unwrap_or_default();
-        ctx.emit(&Py::from_value(&v));
+        ctx.emit(&Json::from_value(&v));
     } else {
         print!("{}", lead_text(&state));
     }

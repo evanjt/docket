@@ -117,7 +117,7 @@ fn restore(args: &Args) -> Result<(), String> {
     Ok(())
 }
 
-/// The name a full dump's commit carries, as the Python sync names it.
+/// The name a full dump's commit carries.
 fn host() -> String {
     if let Some(h) = env::var("DOCKET_HOST").ok().filter(|h| !h.is_empty()) {
         return h;

@@ -7,7 +7,7 @@ fn test_id_reads_any_case_and_leading_zeros() {
 }
 
 #[test]
-fn test_id_refuses_what_is_not_one_in_pythons_words() {
+fn test_id_refuses_what_is_not_one_in_the_cli_words() {
     assert_eq!(
         id("zz").unwrap_err(),
         Fail::refused("'zz' is not an id: a key of one to three capitals and a number, like B14")

@@ -685,6 +685,7 @@ pub async fn summary(
         "skills": docket_core::fact::known(&stored),
         "claims": claims(&db, &q.project, &model).await?,
         "plans": plans(&board),
+        "plan_count": plan_count(&board),
         "due": due(&board),
         "problems": problems(&db, &q.project, &board).await?,
     })))
@@ -728,6 +729,12 @@ fn plans(board: &Board) -> Value {
             }))
             .collect::<Vec<_>>()
     )
+}
+
+/// The plans under way and those due for their audit, as the word counts them.
+fn plan_count(board: &Board) -> Value {
+    let c = board.plan_count();
+    json!({ "open": c.open, "audit_due": c.audit_due })
 }
 
 /// The plans due for their audit, as the core decides it.

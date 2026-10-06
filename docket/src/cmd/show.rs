@@ -12,7 +12,7 @@ use crate::cmd::lists::{print_decided_like, question_keys};
 use crate::cmd::published;
 use crate::ctx::{Ctx, id};
 use crate::fail::Result;
-use crate::py::{Py, cut, dumps_line, float_repr, or_none};
+use crate::jsonout::{Json, cut, dumps_line, float_repr, or_none};
 use crate::row::{fmt_row, item_json, row_of};
 
 /// `members: 9 of 13 done, 2 live`.
@@ -49,17 +49,17 @@ pub fn show(ctx: &mut Ctx, item: &str) -> Result<i32> {
             tail.push("progress");
         }
         let mut out = item_json(&v, &[], &[]);
-        if let Py::Dict(fields) = &mut out {
+        if let Json::Dict(fields) = &mut out {
             for k in ["related", "parent", "origin", "children"] {
-                fields.push((k.into(), Py::from_value(&v[k])));
+                fields.push((k.into(), Json::from_value(&v[k])));
             }
             let cites = v["cites"].as_array().into_iter().flatten();
             let cites = cites
-                .map(|c| Py::pick(c, &["path", "line", "kind"]))
+                .map(|c| Json::pick(c, &["path", "line", "kind"]))
                 .collect();
-            fields.push(("cites".into(), Py::List(cites)));
+            fields.push(("cites".into(), Json::List(cites)));
             if tail.contains(&"progress") {
-                let p = Py::pick(&v["progress"], &["done", "total", "live"]);
+                let p = Json::pick(&v["progress"], &["done", "total", "live"]);
                 fields.push(("progress".into(), p));
             }
         }
@@ -206,9 +206,9 @@ fn print_cites(v: &Value) {
     }
 }
 
-/// A value as Python's `str()` prints it inside an f-string.
+/// A value as its text reads inside a formatted line.
 #[must_use]
-pub fn py_str(v: &Value) -> String {
+pub fn shown(v: &Value) -> String {
     match v {
         Value::Null => "None".into(),
         Value::Bool(b) => if *b { "True" } else { "False" }.into(),
@@ -216,7 +216,7 @@ pub fn py_str(v: &Value) -> String {
             .as_i64()
             .map_or_else(|| float_repr(n.as_f64().unwrap_or(0.0)), |i| i.to_string()),
         Value::String(s) => s.clone(),
-        other => dumps_line(&Py::from_value(other)),
+        other => dumps_line(&Json::from_value(other)),
     }
 }
 
@@ -230,7 +230,9 @@ pub fn log(ctx: &mut Ctx, item: &str) -> Result<i32> {
         let keys = [
             "seq", "uid", "project", "rid", "at", "host", "branch", "kind", "note", "data",
         ];
-        ctx.emit(&Py::List(list.iter().map(|e| Py::pick(e, &keys)).collect()));
+        ctx.emit(&Json::List(
+            list.iter().map(|e| Json::pick(e, &keys)).collect(),
+        ));
         return Ok(0);
     }
     if list.is_empty() {
@@ -256,9 +258,9 @@ pub fn log_line(event: &Value) -> String {
         .map(|(k, v)| match v {
             Value::Array(items) => format!(
                 "{k}={}",
-                items.iter().map(py_str).collect::<Vec<_>>().join(",")
+                items.iter().map(shown).collect::<Vec<_>>().join(",")
             ),
-            other => format!("{k}={}", py_str(other)),
+            other => format!("{k}={}", shown(other)),
         })
         .collect();
     let data = if data.is_empty() {
@@ -312,7 +314,7 @@ pub fn deps(ctx: &mut Ctx, item: &str) -> Result<i32> {
                 )
             })
             .collect();
-        ctx.emit(&Py::Dict(fields));
+        ctx.emit(&Json::Dict(fields));
         return Ok(0);
     }
     let mut any = false;
@@ -325,7 +327,7 @@ pub fn deps(ctx: &mut Ctx, item: &str) -> Result<i32> {
         println!("\n{label}:");
         for x in rows {
             let extra = if k == "same_files" {
-                format!("  ({} shared)", py_str(&x["shared"]))
+                format!("  ({} shared)", shown(&x["shared"]))
             } else {
                 String::new()
             };
@@ -373,17 +375,17 @@ pub fn projects(ctx: &mut Ctx) -> Result<i32> {
         let out = with_roots
             .iter()
             .map(|(p, roots)| {
-                Py::Dict(vec![
-                    ("slug".into(), Py::from_value(&p["slug"])),
-                    ("open".into(), Py::from_value(&p["open"])),
-                    ("done".into(), Py::from_value(&p["done"])),
-                    ("dropped".into(), Py::from_value(&p["dropped"])),
-                    ("roots".into(), Py::strs(roots)),
-                    ("last_event".into(), Py::from_value(&p["last_event"])),
+                Json::Dict(vec![
+                    ("slug".into(), Json::from_value(&p["slug"])),
+                    ("open".into(), Json::from_value(&p["open"])),
+                    ("done".into(), Json::from_value(&p["done"])),
+                    ("dropped".into(), Json::from_value(&p["dropped"])),
+                    ("roots".into(), Json::strs(roots)),
+                    ("last_event".into(), Json::from_value(&p["last_event"])),
                 ])
             })
             .collect();
-        ctx.emit(&Py::List(out));
+        ctx.emit(&Json::List(out));
         return Ok(0);
     }
     if with_roots.is_empty() {
@@ -435,8 +437,8 @@ pub fn graph(ctx: &mut Ctx, dot: bool, no_files: bool) -> Result<i32> {
             };
             println!(
                 "  \"{}\" -> \"{}\" [style={style}];",
-                py_str(&e["from"]),
-                py_str(&e["to"])
+                shown(&e["from"]),
+                shown(&e["to"])
             );
         }
         println!("}}");
@@ -445,18 +447,18 @@ pub fn graph(ctx: &mut Ctx, dot: bool, no_files: bool) -> Result<i32> {
     let node_keys = [
         "id", "key", "kind", "state", "word", "release", "area", "title",
     ];
-    let out = Py::Dict(vec![
-        ("project".into(), Py::from_value(&g["project"])),
+    let out = Json::Dict(vec![
+        ("project".into(), Json::from_value(&g["project"])),
         (
             "nodes".into(),
-            Py::List(nodes.iter().map(|n| Py::pick(n, &node_keys)).collect()),
+            Json::List(nodes.iter().map(|n| Json::pick(n, &node_keys)).collect()),
         ),
         (
             "edges".into(),
-            Py::List(
+            Json::List(
                 edges
                     .iter()
-                    .map(|e| Py::pick(e, &["from", "to", "kind"]))
+                    .map(|e| Json::pick(e, &["from", "to", "kind"]))
                     .collect(),
             ),
         ),

@@ -223,7 +223,7 @@ fn ids(list: &Value) -> Vec<String> {
         .collect()
 }
 
-// ---- the pathways of test_core.py ----
+// ---- the core pathways ----
 
 #[tokio::test]
 async fn test_question_pathway() {
@@ -1054,7 +1054,7 @@ async fn test_every_verb_that_ends_a_claim_clears_its_runner_and_job() {
     }
 }
 
-// ---- test_audit.py ----
+// ---- audit ----
 
 async fn plan(s: &Scratch) {
     s.open_with_body("A", "The pantry plan", "Every oven has one schedule.\n")
@@ -1350,7 +1350,7 @@ async fn test_concept_and_idea_items_read_and_close_like_any_other_item() {
         .await;
 }
 
-// ---- test_flow.py ----
+// ---- flow ----
 
 #[tokio::test]
 async fn test_add_files_a_low_priority_ticket() {

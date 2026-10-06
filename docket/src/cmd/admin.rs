@@ -13,7 +13,7 @@ use docket_core::remap::Map;
 use crate::args::AdminCmd;
 use crate::ctx::Ctx;
 use crate::fail::{Fail, Result};
-use crate::py::Py;
+use crate::jsonout::Json;
 
 /// # Errors
 /// The server cannot be reached, the project is not in the dump, or a write is asked for.
@@ -54,7 +54,7 @@ fn migrate(ctx: &mut Ctx, dry_run: bool, all: bool, rules: Rules) -> Result<i32>
         return Err(Fail::refused(format!("{slug} is not in the server's dump")));
     }
     if ctx.json {
-        ctx.emit(&Py::from_value(
+        ctx.emit(&Json::from_value(
             &serde_json::to_value(&planned).unwrap_or_default(),
         ));
     } else {

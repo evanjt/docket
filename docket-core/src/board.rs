@@ -19,6 +19,13 @@ pub struct AreaCount {
     pub live: u64,
 }
 
+/// The open plans as the word counts them: under way, and due for their audit.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PlanCount {
+    pub open: u64,
+    pub audit_due: u64,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Board {
     pub project: ProjectRow,
@@ -194,14 +201,25 @@ impl Board {
             .collect()
     }
 
-    /// Open plans started: those being worked first, then the nearest done.
+    /// The plans whose word is under way, and those whose word is audit due.
+    #[must_use]
+    pub fn plan_count(&self) -> PlanCount {
+        let plans = self.open_of(&[Kind::Audit]);
+        let with = |w: &str| plans.iter().filter(|p| self.word(p) == w).count() as u64;
+        PlanCount {
+            open: with("under way"),
+            audit_due: with("audit due"),
+        }
+    }
+
+    /// Plans whose word is under way: those being worked first, then the nearest done.
     #[must_use]
     pub fn plans_under_way(&self) -> Vec<(&ItemRow, Progress)> {
         let mut out: Vec<(&ItemRow, Progress)> = self
             .open_of(&[Kind::Audit])
             .into_iter()
+            .filter(|p| self.word(p) == "under way")
             .map(|p| (p, self.progress(p)))
-            .filter(|(_, g)| g.total > 0)
             .collect();
         out.sort_by(|(a, x), (b, y)| {
             let near = |g: &Progress| g.done * 1000 / g.total;

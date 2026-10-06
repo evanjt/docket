@@ -1,7 +1,7 @@
 <script lang="ts">
   import { api } from '../lib/api';
   import { project } from '../lib/context';
-  import { MOVE_KINDS, daily, moves, plans } from '../lib/flow';
+  import { MOVE_KINDS, daily, moves, planCount, plans } from '../lib/flow';
   import { jobLine, leadLine, machineUse } from '../lib/fleet';
   import { checkByRelease, checkCounts, forecastLine, releaseTally, staleClaims } from '../lib/releases';
   import { clock, resource } from '../lib/live.svelte';
@@ -51,6 +51,7 @@
     events.data && ctx.board ? moves(events.data, (rid) => ctx.board?.byRid.get(rid)?.id).slice(0, MOVES) : [],
   );
   const plansOpen = $derived(ctx.board ? plans(ctx.board, 'audit') : []);
+  const planTotals = $derived(ctx.board ? planCount(ctx.board) : null);
   const measures = resource(() => (ctx.releases.length ? api.releases(ctx.slug) : null));
   const releases = $derived((measures.data ?? []).map((m, i) => releaseTally(m, i === 0)));
   const forecast = $derived(measures.data?.[0]?.forecast);
@@ -60,7 +61,12 @@
   const counts = $derived(checkCounts(summary.data?.problems ?? [], ctx.slug));
   const OPEN_WORDS = ['ready', 'in progress', 'plans under way', 'waiting on owner', 'blocked', 'held later'];
   const host = (h: string | null | undefined) => (h ?? '').split('.')[0];
-  const use = $derived(machines.data && wip.data ? machineUse(machines.data, wip.data, session.me?.host ?? '', now) : []);
+  /** The ends jobs reported since the oldest claim was made: all a claim's end can be among. */
+  const reports = resource(() => {
+    const since = (wip.data ?? []).map((r) => r.claim_since).filter((t): t is string => !!t).sort()[0];
+    return since ? api.since(ctx.slug, since, ['job_reported'], MOST) : null;
+  });
+  const use = $derived(machines.data && wip.data ? machineUse(machines.data, wip.data, reports.data ?? [], session.me?.host ?? '', now) : []);
   const COUNTED = ['claimed', 'released'];
 </script>
 
@@ -72,6 +78,7 @@
       {#if wip.data?.length}{wip.data.length} claimed right now.{:else if wip.data}Nothing is claimed right now.{/if}
       {#if yours.length}<a href={href(ctx.slug, 'yours')} class="you">{yours.length} waiting on you.</a>{/if}
     </p>
+    {#if planTotals}<p class="lede">Plans: {planTotals.open} open, {planTotals.auditDue} audit due</p>{/if}
   {:else if status.error}
     <p class="error">{status.error}</p>
   {:else}
@@ -110,6 +117,7 @@
                   {#each Array.from({ length: m.slots }, (_, i) => i < m.used) as busy, i (i)}<i class:busy></i>{/each}
                 </span>
                 <span class="count">{m.used}/{m.slots}</span>
+                {#if m.waiting}<span class="waiting" title="Jobs ended, claims not yet landed">{m.waiting} waiting to land</span>{/if}
                 <span class="runners">{m.runners.join(', ')}</span>
                 {#each m.limited as l (l.runner)}
                   <span class="limit" title={l.until}>{l.runner} unavailable until {stamp(l.until)}</span>
@@ -468,6 +476,11 @@
 
   .slots i.busy {
     background: var(--w-under-way);
+  }
+
+  .waiting {
+    color: var(--muted, inherit);
+    font-size: 12.5px;
   }
 
   .count {

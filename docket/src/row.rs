@@ -1,4 +1,4 @@
-//! An item as the server sends it, printed as the Python prints a row: one line and its tail, or JSON.
+//! An item as the server sends it, printed as a row: one line and its tail, or JSON.
 
 use std::fmt::Write;
 
@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use docket_core::rows::Row;
 
-use crate::py::{Py, cut, or_none};
+use crate::jsonout::{Json, cut, or_none};
 
 /// The stored columns in the order the database holds them, the order `--json` prints them in.
 pub const COLUMNS: [&str; 28] = [
@@ -46,7 +46,7 @@ pub const DERIVED: [&str; 4] = ["group", "word", "superseded_by", "priority"];
 /// One item in the `--json` shape: the columns, then `extra` columns a query selected, the derived
 /// fields, and `tail` fields set after.
 #[must_use]
-pub fn item_json(v: &Value, extra: &[&str], tail: &[&str]) -> Py {
+pub fn item_json(v: &Value, extra: &[&str], tail: &[&str]) -> Json {
     let keys: Vec<&str> = COLUMNS
         .iter()
         .chain(extra)
@@ -54,13 +54,13 @@ pub fn item_json(v: &Value, extra: &[&str], tail: &[&str]) -> Py {
         .chain(tail)
         .copied()
         .collect();
-    Py::pick(v, &keys)
+    Json::pick(v, &keys)
 }
 
 /// A list of items in the `--json` shape.
 #[must_use]
-pub fn items_json(rows: &Value, extra: &[&str], tail: &[&str]) -> Py {
-    Py::List(
+pub fn items_json(rows: &Value, extra: &[&str], tail: &[&str]) -> Json {
+    Json::List(
         rows.as_array()
             .into_iter()
             .flatten()

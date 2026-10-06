@@ -119,19 +119,19 @@ pub fn choice(name: &str, value: Option<&str>, allowed: &[&str]) -> Result<(), F
         Some(v) if !allowed.contains(&v) => Err(Failure::Invalid(format!(
             "{name} is one of {}, not {}",
             allowed.join(", "),
-            docket_core::text::py_repr(v)
+            docket_core::text::quoted(v)
         ))),
         _ => Ok(()),
     }
 }
 
-/// The first n characters, as a Python slice reads them.
+/// The first n characters, counted as characters, not bytes.
 #[must_use]
 pub fn chars(text: &str, n: usize) -> String {
     text.chars().take(n).collect()
 }
 
-/// `Some` for a string that says something, like a Python truth test.
+/// `Some` for a string that says something, as a non-empty test reads it.
 #[must_use]
 pub fn given(value: Option<&str>) -> Option<&str> {
     value.filter(|v| !v.is_empty())

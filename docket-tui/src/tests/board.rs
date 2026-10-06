@@ -55,7 +55,7 @@ fn test_plans_under_way_and_due_audits() {
         .iter()
         .map(|(p, _)| p.id.clone())
         .collect();
-    assert_eq!(under, ["PK1", "A1", "A2"]);
+    assert_eq!(under, ["PK1", "A1"]);
     assert_eq!(ids(&b.due_audits()), ["A2"]);
 }
 

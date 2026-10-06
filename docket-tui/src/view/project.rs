@@ -20,8 +20,8 @@ const WIDE: usize = 120;
 const SIDE: usize = 44;
 const GAP: usize = 2;
 /// The flow counts the sidebar always shows; the rest only when something carries them.
-const FLOW: [&str; 3] = ["ready", "in progress", "under way"];
-const ASIDE: [&str; 4] = ["audit due", "blocked", "waiting on owner", "parked"];
+const FLOW: [&str; 2] = ["ready", "in progress"];
+const ASIDE: [&str; 3] = ["blocked", "waiting on owner", "parked"];
 /// Rows each sidebar block shows before it says how many more.
 const ROWS: usize = 5;
 /// Rows of NEXT, and of MOVES until `m` shows them all.
@@ -106,7 +106,7 @@ fn item_spot(board: &Board, id: &str, pad: usize) -> Vec<Seg> {
 
 fn sidebar(board: &Board, data: &ProjectData, width: usize) -> Doc {
     let mut d = Doc::default();
-    progress(&mut d, data, width);
+    progress(&mut d, board, data, width);
     d.blank();
     releases(&mut d, data, width);
     d.blank();
@@ -129,7 +129,7 @@ fn sidebar(board: &Board, data: &ProjectData, width: usize) -> Doc {
 }
 
 /// PROGRESS: closed of everything in the flow, the forecast, and the open counts, each a hot spot.
-fn progress(d: &mut Doc, data: &ProjectData, width: usize) {
+fn progress(d: &mut Doc, board: &Board, data: &ProjectData, width: usize) {
     d.plain("PROGRESS", style::bold());
     let closed = data.status.count("done");
     let all = closed + data.status.open();
@@ -164,6 +164,14 @@ fn progress(d: &mut Doc, data: &ProjectData, width: usize) {
         ));
     }
     d.line(fit(segs, width));
+    let plans = board.plan_count();
+    d.plain(
+        cut(
+            &format!(" Plans: {} open, {} audit due", plans.open, plans.audit_due),
+            width,
+        ),
+        Style::default(),
+    );
 }
 
 /// RELEASES: each release not shipped, its closed of all, a hot spot to the queue for that release.

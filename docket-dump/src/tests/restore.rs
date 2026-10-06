@@ -247,7 +247,7 @@ async fn test_restore_refuses_a_reference_the_checkout_does_not_hold() {
 }
 
 #[test]
-fn test_truthy_reads_values_as_python_does() {
+fn test_truthy_reads_null_false_zero_and_empty_as_false() {
     for v in [
         json!(null),
         json!(false),

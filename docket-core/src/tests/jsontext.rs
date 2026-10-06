@@ -37,7 +37,7 @@ fn test_dumps_styled_keeps_non_ascii_when_not_ascii() {
 }
 
 #[test]
-fn test_dumps_styled_indents_as_python() {
+fn test_dumps_styled_indents_with_two_spaces() {
     let style = Style {
         sort_keys: true,
         ascii: false,

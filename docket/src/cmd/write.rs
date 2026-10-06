@@ -1,4 +1,4 @@
-//! The write verbs: each one request to the server, its answer printed as the Python prints it.
+//! The write verbs: each one request to the server, its answer printed.
 
 use std::path::{Path, PathBuf};
 
@@ -15,8 +15,8 @@ use docket_core::word::ItemType;
 use crate::cmd::lists::shares_text;
 use crate::ctx::{Ctx, id};
 use crate::fail::{Fail, Result};
+use crate::jsonout::cut;
 use crate::local;
-use crate::py::cut;
 use crate::row::{fmt_row, item_json, row_of};
 
 const TEMPLATE: &str = "- **Evidence.** file:line citations, read from the working tree.

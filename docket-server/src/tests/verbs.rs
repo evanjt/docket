@@ -178,17 +178,6 @@ impl Scratch {
         self.ok("new", json!({ "key": key, "title": title })).await
     }
 
-    /// The project as the migration finds it before areas exist: no area rows, and no item in one.
-    async fn forget_areas(&mut self) {
-        self.db
-            .seed(&format!(
-                "UPDATE items SET area_id=NULL WHERE project='{SLUG}'; \
-                 DELETE FROM areas WHERE project='{SLUG}'"
-            ))
-            .await;
-        self.filing_area = None;
-    }
-
     /// An item of a kind kept to read, written as the move onto plans left it.
     async fn kept(&self, key: &str, num: i64, title: &str) {
         self.db
@@ -1500,52 +1489,13 @@ async fn test_decide_appends_the_choice_and_its_basis() {
 }
 
 #[tokio::test]
-async fn test_decide_with_an_area_records_a_placement_the_derived_digest_lists() {
-    let mut s = Scratch::new().await;
-    s.open("B", "Mend the kite").await;
-    s.forget_areas().await;
-    s.ok(
-        "decide",
-        json!({ "id": "B1", "choice": "", "basis": "its title names kites",
-                "area": "Kites", "about": "string, frames and tails" }),
-    )
-    .await;
-    let decided = s
-        .events("B1")
-        .await
-        .into_iter()
-        .find(|e| e["kind"] == "decided")
-        .unwrap();
-    assert_eq!(decided["note"], "area kites");
-    let data = decided["data"].to_string();
-    assert_eq!(
-        docket_core::area::Placement::of(&data),
-        Some(docket_core::area::Placement {
-            area: "kites".to_string(),
-            about: Some("string, frames and tails".to_string()),
-        })
-    );
-    let (_, listed) = s
-        .send(
-            Method::GET,
-            &format!("/derived?project={SLUG}&n=10"),
-            "ownerkey",
-            None,
-        )
-        .await;
-    assert_eq!(listed[0]["id"], "B1");
-    assert_eq!(listed[0]["chose"], "area kites");
-}
-
-#[tokio::test]
 async fn test_decide_with_an_area_is_refused_on_a_closed_item_unsorted_or_a_question() {
-    let mut s = Scratch::new().await;
+    let s = Scratch::new().await;
     s.open("B", "Mend the kite").await;
     s.open("Q", "Which string").await;
     s.ok("close", json!({ "id": "B1", "resolution": "fixed" }))
         .await;
     s.open("B", "Open one").await;
-    s.forget_areas().await;
     let closed = s
         .refused(
             "decide",

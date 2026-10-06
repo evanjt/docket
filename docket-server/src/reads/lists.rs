@@ -131,7 +131,7 @@ async fn owner_rows(
                 .as_deref()
                 .is_some_and(|d| d.starts_with(DERIVED)),
             need: needs.get(&r.rid).map(String::as_str),
-            area: areas.name(r.area_id),
+            area: areas.name(Some(r.area_id)),
             release: listed.name(r.release_id),
             tier: PRIORITIES
                 .iter()

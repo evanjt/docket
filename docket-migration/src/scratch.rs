@@ -13,6 +13,26 @@ pub struct Scratch {
     name: String,
 }
 
+const PLACEMENT_REQUIRED: &str = "SELECT EXISTS (SELECT 1 FROM information_schema.columns \
+    WHERE table_name='items' AND column_name='area_id' AND is_nullable='NO')";
+
+/// Puts an item written with no area in its project's first area, for the seeds that do not care.
+const PLACE: &str = r"
+CREATE FUNCTION seed_place() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.area_id IS NULL THEN
+    SELECT MIN(id) INTO NEW.area_id FROM areas WHERE project = NEW.project;
+    IF NEW.area_id IS NULL THEN
+      INSERT INTO areas (id, project, name, position)
+        VALUES (1000000000 + (SELECT COUNT(*) FROM areas), NEW.project, 'seeded', 1000000)
+        RETURNING id INTO NEW.area_id;
+    END IF;
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER seed_place BEFORE INSERT ON items FOR EACH ROW EXECUTE FUNCTION seed_place();
+";
+
 impl Scratch {
     /// A new database with the schema applied, reached through a pool of `connections`.
     ///
@@ -52,13 +72,29 @@ impl Scratch {
         Self { db, admin, name }
     }
 
-    /// Rows written by hand with their own keys, each identity then moved past them.
+    /// Rows written by hand with their own keys, each identity then moved past them. Once an item's
+    /// area is required, an item the SQL gives none is put in its project's first area, made for it
+    /// when the project has none.
     ///
     /// # Panics
     /// The database refuses the SQL.
     pub async fn seed(&self, sql: &str) {
+        let required: bool = self
+            .db
+            .query_one_raw(crate::statement(PLACEMENT_REQUIRED, vec![]))
+            .await
+            .expect("read whether an item's area is required")
+            .and_then(|r| r.try_get_by_index(0).ok())
+            .unwrap_or(false);
+        let sql = if required {
+            format!(
+                "{PLACE}\n{sql}\n;\nDROP TRIGGER seed_place ON items; DROP FUNCTION seed_place();"
+            )
+        } else {
+            sql.to_string()
+        };
         self.db
-            .execute_unprepared(sql)
+            .execute_unprepared(&sql)
             .await
             .expect("seed the scratch database");
         crate::reset_identities(&self.db)

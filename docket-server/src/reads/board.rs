@@ -515,7 +515,7 @@ fn item_row(m: crate::entities::item::Model, wait: Option<&Wait>) -> ItemRow {
         decision: m.decision,
         resolution: m.resolution,
         release_id: m.release_id,
-        area_id: m.area_id,
+        area_id: Some(m.area_id),
         opened_at: m.opened_at,
         updated_at: m.updated_at,
         ..ItemRow::default()

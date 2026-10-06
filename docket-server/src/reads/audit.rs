@@ -218,7 +218,7 @@ async fn about_target(
     let listed = areas::listed(db, slug).await?;
     let area = model
         .first()
-        .and_then(|m| listed.rows.iter().find(|(id, _)| Some(*id) == m.area_id))
+        .and_then(|m| listed.rows.iter().find(|(id, _)| *id == m.area_id))
         .map_or(Value::Null, |(_, a)| {
             json!({ "name": a.name, "description": a.description, "priority": a.priority })
         });

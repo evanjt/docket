@@ -2,7 +2,7 @@ use super::*;
 
 use crate::scratch::Scratch;
 
-const MIGRATIONS: [&str; 25] = [
+const MIGRATIONS: [&str; 26] = [
     "m20261001_000001_schema",
     "m20261002_000001_machines_and_leads",
     "m20261005_000001_owner_facts",
@@ -28,6 +28,7 @@ const MIGRATIONS: [&str; 25] = [
     "m20261006_210713_open_assignments",
     "m20261006_213453_drop_old_columns",
     "m20261006_220000_remapped_events",
+    "m20261006_233349_items_area_not_null",
 ];
 
 /// The migrations to apply to stand just before the one named.
@@ -45,6 +46,21 @@ async fn migrate_before_the_drop(s: &Scratch) {
     let applied = Migrator::get_applied_migrations(&s.db).await.unwrap().len();
     let left = steps_before("m20261006_213453_drop_old_columns") - u32::try_from(applied).unwrap();
     Migrator::up(&s.db, Some(left)).await.unwrap();
+}
+
+/// Every migration still to apply up to the one that makes an item's area required, named as applied,
+/// so a test of an earlier one can seed and read items that hold no area.
+async fn migrate_before_area_required(s: &Scratch) -> Vec<String> {
+    let applied = Migrator::get_applied_migrations(&s.db).await.unwrap().len();
+    let stop = steps_before("m20261006_233349_items_area_not_null") as usize;
+    let all: Vec<String> = Migrator::migrations()
+        .iter()
+        .map(|m| m.name().to_string())
+        .collect();
+    Migrator::up(&s.db, Some(u32::try_from(stop - applied).unwrap()))
+        .await
+        .unwrap();
+    all[applied..stop].to_vec()
 }
 
 /// A migration's number is its name up to the label: `m20261005_000001`.
@@ -163,11 +179,11 @@ async fn test_the_assignments_migration_rebuilds_each_items_attempts_from_its_ev
     )
     .await;
     assert_eq!(
-        migrate(&s.db).await.unwrap(),
+        migrate_before_area_required(&s).await,
         MIGRATIONS[MIGRATIONS
             .iter()
             .position(|m| *m == "m20261005_000004_assignments")
-            .unwrap()..]
+            .unwrap()..MIGRATIONS.len() - 1]
     );
     let rows = s
         .db
@@ -441,7 +457,7 @@ INSERT INTO links (rid, kind, to_rid) VALUES
 "#,
     )
     .await;
-    migrate(&s.db).await.unwrap();
+    migrate_before_area_required(&s).await;
     let parents = pairs(
         &s,
         "SELECT a.id, b.id FROM items a JOIN items b ON b.rid=a.parent_rid ORDER BY a.id",
@@ -509,7 +525,7 @@ INSERT INTO events (uid, project, rid, at, host, kind, note) VALUES
 "#,
     )
     .await;
-    migrate(&s.db).await.unwrap();
+    migrate_before_area_required(&s).await;
     let areas = pairs(
         &s,
         "SELECT name, position::text || ' ' || description FROM areas ORDER BY position",
@@ -580,7 +596,7 @@ INSERT INTO events (uid, project, rid, at, host, kind, note, data) VALUES
 "#,
     )
     .await;
-    migrate(&s.db).await.unwrap();
+    migrate_before_area_required(&s).await;
     let areas = pairs(
         &s,
         "SELECT project || ' ' || name, position::text || ' ' || history::text || ' ' || \
@@ -620,8 +636,9 @@ async fn test_an_assignment_names_the_agent_or_the_owner_and_no_one_else() {
     s.seed(
         r"
 INSERT INTO projects (slug, created_at, updated_at) VALUES ('test/proj', 'c', 'u');
-INSERT INTO items (rid, project, key, num, title, state, opened_at, updated_at) VALUES
-  (1, 'test/proj', 'T', 1, 'fire', 'open', 'o', 'u');
+INSERT INTO areas (id, project, name, position) VALUES (1, 'test/proj', 'kiln', 0);
+INSERT INTO items (rid, project, key, num, title, state, area_id, opened_at, updated_at) VALUES
+  (1, 'test/proj', 'T', 1, 'fire', 'open', 1, 'o', 'u');
 ",
     )
     .await;
@@ -748,7 +765,7 @@ INSERT INTO links (rid, kind, to_rid) VALUES (2, 'related', 1), (1, 'related', 2
 "#,
     )
     .await;
-    migrate(&s.db).await.unwrap();
+    migrate_before_area_required(&s).await;
     let described = pairs(
         &s,
         "SELECT name, COALESCE(description, '-') FROM labels ORDER BY name",
@@ -792,9 +809,10 @@ async fn test_publications_read_back_newest_first_and_a_published_sha_is_recorde
     s.seed(&format!(
         r"
 INSERT INTO projects (slug, created_at, updated_at) VALUES ('test/proj', 'c', 'u');
-INSERT INTO items (rid, project, key, num, title, state, resolution, type, opened_at, updated_at) VALUES
-  (1, 'test/proj', 'A', 1, 'lay the kiln', 'done', 'fired', 'plan', 'o', 'u'),
-  (2, 'test/proj', 'A', 2, 'glaze the bowls', 'done', 'fired', 'plan', 'o', 'u');
+INSERT INTO areas (id, project, name, position) VALUES (1, 'test/proj', 'kiln', 0);
+INSERT INTO items (rid, project, key, num, title, state, resolution, type, area_id, opened_at, updated_at) VALUES
+  (1, 'test/proj', 'A', 1, 'lay the kiln', 'done', 'fired', 'plan', 1, 'o', 'u'),
+  (2, 'test/proj', 'A', 2, 'glaze the bowls', 'done', 'fired', 'plan', 1, 'o', 'u');
 INSERT INTO publications (id, project, published_sha, work_sha, created_at) VALUES
   (1, 'test/proj', '{old}', '{work}', '2026-01-01T00:00:00Z'),
   (2, 'test/proj', '{new}', '{work}', '2026-01-02T00:00:00Z');
@@ -851,7 +869,7 @@ INSERT INTO item_labels (rid, label_id) VALUES (3, 1);
 "#,
     )
     .await;
-    migrate(&s.db).await.unwrap();
+    migrate_before_area_required(&s).await;
     let carried = pairs(
         &s,
         "SELECT i.id, string_agg(l.name, ',' ORDER BY l.name) FROM item_labels il \
@@ -1005,8 +1023,9 @@ async fn test_the_drop_leaves_items_and_projects_without_the_columns_the_core_re
     assert!(!projects.contains(&"themes".to_string()));
     s.seed(
         "INSERT INTO projects (slug, created_at, updated_at) VALUES ('bakery/oven', 'c', 'u'); \
-         INSERT INTO items (project, key, num, title, state, opened_at, updated_at) \
-           VALUES ('bakery/oven', 'T', 1, 'Proof the dough', 'open', 'o', 'u')",
+         INSERT INTO areas (id, project, name, position) VALUES (1, 'bakery/oven', 'crust', 0); \
+         INSERT INTO items (project, key, num, title, state, area_id, opened_at, updated_at) \
+           VALUES ('bakery/oven', 'T', 1, 'Proof the dough', 'open', 1, 'o', 'u')",
     )
     .await;
 }
@@ -1031,4 +1050,36 @@ async fn test_the_drop_refuses_while_an_item_holds_a_sync_conflict_and_names_it(
     assert!(refused.contains("bakery/oven T2"), "{refused}");
     assert!(!refused.contains("T1"), "{refused}");
     assert!(columns(&s, "items").await.contains(&"conflict".to_string()));
+}
+
+#[tokio::test]
+async fn test_the_area_column_refuses_an_unplaced_item_by_name_and_then_an_insert_with_none() {
+    let s = Scratch::bare(2).await;
+    Migrator::up(
+        &s.db,
+        Some(steps_before("m20261006_233349_items_area_not_null")),
+    )
+    .await
+    .unwrap();
+    s.seed(
+        "INSERT INTO projects (slug, created_at, updated_at) VALUES ('bakery/oven', 'c', 'u'); \
+         INSERT INTO areas (id, project, name, position) VALUES (1, 'bakery/oven', 'crust', 0); \
+         INSERT INTO items (rid, project, key, num, title, state, area_id, opened_at, updated_at) VALUES \
+           (1, 'bakery/oven', 'T', 1, 'Proof the dough', 'open', 1, 'o', 'u'), \
+           (2, 'bakery/oven', 'T', 2, 'Score the loaf', 'open', NULL, 'o', 'u')",
+    )
+    .await;
+    let refused = migrate(&s.db).await.unwrap_err().to_string();
+    assert!(refused.contains("bakery/oven T2"), "{refused}");
+    assert!(!refused.contains("T1"), "{refused}");
+
+    s.seed("UPDATE items SET area_id=1 WHERE rid=2").await;
+    migrate(&s.db).await.unwrap();
+    let none =
+        s.db.execute_unprepared(
+            "INSERT INTO items (project, key, num, title, state, opened_at, updated_at) \
+             VALUES ('bakery/oven', 'T', 3, 'Glaze the bun', 'open', 'o', 'u')",
+        )
+        .await;
+    assert!(none.is_err());
 }

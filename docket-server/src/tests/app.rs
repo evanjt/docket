@@ -9,6 +9,7 @@ use super::*;
 
 const SEED: &str = r"
 INSERT INTO projects (slug, created_at, updated_at) VALUES ('o/p', 'c', 'u');
+INSERT INTO areas (id, project, name, position) VALUES (1, 'o/p', 'general', 0);
 INSERT INTO items (rid, project, key, num, title, state, body, opened_at, updated_at)
   VALUES (1, 'o/p', 'T', 1, 'First', 'open', 'Body text', 'o1', 'u1'),
          (2, 'o/p', 'PK', 1, 'Package', 'open', '', 'o2', 'u2'),
@@ -83,7 +84,7 @@ async fn test_show_matches_the_json_of_docket_show() {
         "claim_runner": null, "claim_job": null, "claim_on": null,
         "wait_on": null, "wait_ref": null, "wait_since": null,
         "decision": null, "decided_at": null, "resolution": null,
-        "complexity": null, "release": null, "area": null,
+        "complexity": null, "release": null, "area": "general",
         "type": "task", "labels": ["group:g", "single"], "body": "Body text",
         "opened_at": "o1", "updated_at": "u1",
         "group": "g", "word": "ready", "priority": "high", "superseded_by": null,

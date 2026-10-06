@@ -15,6 +15,7 @@ use docket_migration::scratch::Scratch;
 const SEED: &str = r#"
 INSERT INTO projects (slug, skills, remotes, created_at, updated_at) VALUES ('o/p', '{"stale_claim":"1","pool":"a=2"}', '["git@h:o/p.git"]', 'c', 'u'),
   ('o/q', '{}', '[]', 'c', 'u');
+INSERT INTO areas (id, project, name, position) VALUES (1, 'o/p', 'general', 0);
 INSERT INTO items (rid, project, key, num, title, state, body, opened_at, updated_at) VALUES
   (1, 'o/p', 'T', 1, 'Fix the sync', 'open',
      '- **Touches.** src/a.rs, src/b.rs' || chr(10) || '`src/a.rs:3` serves A1#1', '2026-01-01T00:00:00Z', 'u1'),
@@ -212,7 +213,7 @@ async fn test_context_reads_what_show_prints_beside_the_row() {
     let c = s.ok("/context/T1?project=o/p").await;
     assert_eq!(c["priority"], "high");
     assert_eq!(c["holds"], json!(["T6"]));
-    assert_eq!(c["area"], Value::Null);
+    assert_eq!(c["area"], "general");
 }
 
 #[tokio::test]

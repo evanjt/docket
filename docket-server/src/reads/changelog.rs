@@ -60,7 +60,7 @@ pub async fn changelog_of(
             title: i.title.clone(),
             state: i.state.clone(),
             kind: kind_of_type(&i.item_type),
-            area: areas.name(i.area_id).map(str::to_string),
+            area: areas.name(Some(i.area_id)).map(str::to_string),
             plan: i
                 .parent_rid
                 .and_then(|p| all.iter().find(|x| x.rid == p))

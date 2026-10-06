@@ -48,7 +48,7 @@ pub fn to_item(m: item::Model) -> Item {
         parent_rid: m.parent_rid,
         complexity: m.complexity,
         release_id: m.release_id,
-        area_id: m.area_id,
+        area_id: Some(m.area_id),
         item_type: ItemType::parse(&m.item_type).unwrap_or_default(),
         priority: m.priority,
         body: m.body,
@@ -331,7 +331,7 @@ pub struct NewItem {
     pub body: String,
     pub complexity: Option<String>,
     pub release_id: Option<i64>,
-    pub area_id: Option<i64>,
+    pub area_id: i64,
     pub item_type: ItemType,
     pub priority: String,
     /// The labels it is given, by name.

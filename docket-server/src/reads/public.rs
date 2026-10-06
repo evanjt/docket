@@ -169,7 +169,7 @@ pub async fn public<C: ConnectionTrait>(
         }
         None => None,
     };
-    let area = crate::verbs::areas::name_of(db, row.area_id).await?;
+    let area = crate::verbs::areas::name_of(db, Some(row.area_id)).await?;
     let wait = wait_of(db, row.rid).await?;
     let held = held_of(db, row.rid).await?;
     let mut out = Map::new();

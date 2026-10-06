@@ -188,7 +188,7 @@ async fn open_item(
             body: body.trim_end_matches('\n').to_string(),
             complexity: req.complexity,
             release_id,
-            area_id: Some(area_id),
+            area_id,
             item_type,
             priority: priority.to_string(),
             labels,

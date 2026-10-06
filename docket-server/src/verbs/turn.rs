@@ -80,7 +80,12 @@ async fn owner_task(call: &mut Call, r: &Item, condition: &str) -> Result<Item, 
             ),
             complexity: None,
             release_id: r.release_id,
-            area_id: r.area_id,
+            area_id: r.area_id.ok_or_else(|| {
+                Failure::Refused(format!(
+                    "{} has no area: give it one with docket edit {} --area NAME",
+                    r.id, r.id
+                ))
+            })?,
             item_type,
             priority: "normal".to_string(),
             labels: Vec::new(),

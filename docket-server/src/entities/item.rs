@@ -36,7 +36,7 @@ pub struct Model {
     #[crudcrate(filterable)]
     pub release_id: Option<i64>,
     #[crudcrate(filterable)]
-    pub area_id: Option<i64>,
+    pub area_id: i64,
     #[sea_orm(column_name = "type")]
     #[crudcrate(filterable)]
     pub item_type: String,

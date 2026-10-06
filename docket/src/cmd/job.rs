@@ -107,6 +107,7 @@ fn run(
         return Err(Fail::refused("docket job run needs -p SLUG"));
     }
     let mut ctx = Ctx::new(flags.json, flags.project.clone(), Some(branch.clone()))?;
+    let job_key = agent_key()?;
     let slug = ctx.project()?;
     let checkout = checkout(&mut ctx, &slug)?;
     let provision = ctx.api.facts(&slug)?.skills.get("provision").cloned();
@@ -128,6 +129,7 @@ fn run(
     let env = [
         ("DOCKET_PROJECT", slug.as_str()),
         ("DOCKET_JOB", name.as_str()),
+        ("DOCKET_KEY", job_key.as_str()),
     ];
     let started =
         job::run(&spec, &checkout, root, &env, &job::program(runner)).map_err(Fail::refused)?;
@@ -153,6 +155,43 @@ fn run(
         );
     }
     Ok(0)
+}
+
+/// The key a job presents: the `job_key` line of the machine's client file, which the server must
+/// know as an agent's. A job holding an owner key could answer as the owner, so none starts with
+/// that key or without one.
+fn agent_key() -> Result<String> {
+    let config =
+        docket_client::Config::load().map_err(|e| Fail::refused(format!("docket: {e}")))?;
+    let file = docket_client::config::path().and_then(|p| std::fs::read_to_string(p).ok());
+    let shown = docket_client::config::path().map_or_else(
+        || "~/.config/docket/client".to_string(),
+        |p| p.display().to_string(),
+    );
+    let Some(key) = file
+        .as_deref()
+        .and_then(|t| docket_client::config::field(t, "job_key"))
+    else {
+        return Err(Fail::refused(format!(
+            "docket job run needs `job_key = ...` in {shown}: the agent key this machine's jobs present, so that no job holds an owner key"
+        )));
+    };
+    let who: serde_json::Value = docket_client::Api::new(&docket_client::Config {
+        server: config.server,
+        key: key.clone(),
+    })
+    .and_then(|api| api.get("/whoami", &[]))
+    .map_err(|e| {
+        Fail::refused(format!(
+            "docket job run: the job_key in {shown} is refused: {e}"
+        ))
+    })?;
+    if who["owner"].as_bool() != Some(false) {
+        return Err(Fail::refused(format!(
+            "docket job run: the job_key in {shown} is an owner key; a job holds an agent key"
+        )));
+    }
+    Ok(key)
 }
 
 /// `docket job report DIR`: the end of the job in `dir` posted to the claim of its item. The

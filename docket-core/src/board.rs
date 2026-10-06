@@ -4,20 +4,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::member::{Edge, Tie, descendants};
-use crate::rows::{ItemRow, Progress, ProjectRow};
+use crate::metrics::{Progress, Subject, progress};
+use crate::rows::{ItemRow, ProjectRow};
 use crate::word::{Kind, Standing, kind_of_type};
-
-/// One area with what it holds: its open items, its closed ones and how many of the open are
-/// claimed now.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AreaCount {
-    pub name: String,
-    pub description: Option<String>,
-    pub priority: Option<String>,
-    pub open: u64,
-    pub done: u64,
-    pub live: u64,
-}
 
 /// The open plans as the word counts them: under way, and due for their audit.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -163,42 +152,37 @@ impl Board {
         }
     }
 
-    /// Done of all that an item holds, and how many are claimed now.
+    /// An item as the metrics count it: its word, its claim, its area and whether it holds others.
     #[must_use]
-    pub fn progress(&self, item: &ItemRow) -> Progress {
-        let held: Vec<&ItemRow> = self
-            .holds(item)
-            .into_iter()
-            .filter_map(|r| self.by_rid(r))
-            .collect();
-        Progress {
-            done: held.iter().filter(|m| m.state != "open").count() as u64,
-            total: held.len() as u64,
-            live: held.iter().filter(|m| m.claim_branch.is_some()).count() as u64,
+    pub fn subject(&self, item: &ItemRow) -> Subject {
+        let kind = self.kind(item);
+        Subject {
+            area: item.area_id,
+            holder: kind.is_plan() || kind == Kind::Idea,
+            ..Subject::member(&item.id, &self.word(item), item.claim_branch.is_some())
         }
     }
 
-    /// Each area in position order with its open and closed items. Dropped items are not counted.
+    /// Every item as the metrics count it.
     #[must_use]
-    pub fn area_progress(&self) -> Vec<AreaCount> {
-        let mut rows: Vec<&(i64, crate::area::Area)> = self.project.areas.rows.iter().collect();
-        rows.sort_by_key(|(_, a)| a.position);
-        rows.into_iter()
-            .map(|(id, a)| {
-                let mine = || self.items.iter().filter(|i| i.area_id == Some(*id));
-                let count = |state: &str| mine().filter(|i| i.state == state).count() as u64;
-                AreaCount {
-                    name: a.name.clone(),
-                    description: a.description.clone(),
-                    priority: a.priority.clone(),
-                    open: count("open"),
-                    done: count("done"),
-                    live: mine()
-                        .filter(|i| i.state == "open" && i.claim_branch.is_some())
-                        .count() as u64,
-                }
-            })
+    pub fn subjects(&self) -> Vec<Subject> {
+        self.items.iter().map(|i| self.subject(i)).collect()
+    }
+
+    /// What an item holds, as the metrics count it.
+    #[must_use]
+    pub fn held_subjects(&self, item: &ItemRow) -> Vec<Subject> {
+        self.holds(item)
+            .into_iter()
+            .filter_map(|r| self.by_rid(r))
+            .map(|m| self.subject(m))
             .collect()
+    }
+
+    /// The progress of what an item holds.
+    #[must_use]
+    pub fn held_progress(&self, item: &ItemRow) -> Progress {
+        progress(&self.held_subjects(item))
     }
 
     /// The plans whose word is under way, and those whose word is audit due.
@@ -219,14 +203,14 @@ impl Board {
             .open_of(&[Kind::Audit])
             .into_iter()
             .filter(|p| self.word(p) == "under way")
-            .map(|p| (p, self.progress(p)))
+            .map(|p| (p, self.held_progress(p)))
             .collect();
         out.sort_by(|(a, x), (b, y)| {
-            let near = |g: &Progress| g.done * 1000 / g.total;
-            (y.live, near(y), x.total - x.done, &a.id).cmp(&(
+            let near = |g: &Progress| g.done * 1000 / g.counted.max(1);
+            (y.live, near(y), x.counted - x.done, &a.id).cmp(&(
                 x.live,
                 near(x),
-                y.total - y.done,
+                y.counted - y.done,
                 &b.id,
             ))
         });
@@ -240,12 +224,10 @@ impl Board {
         if item.state != "open" || self.kind(item) != Kind::Audit {
             return false;
         }
-        let g = self.progress(item);
         item.wait_on.is_none()
             && item.claim_branch.is_none()
             && item.turn.as_deref() == Some("agent")
-            && g.total > 0
-            && g.done == g.total
+            && self.held_progress(item).settled()
     }
 
     /// Plans due for their audit, by key and number.

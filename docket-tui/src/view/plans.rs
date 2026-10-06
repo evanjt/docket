@@ -131,9 +131,9 @@ pub fn doc(board: Option<&Board>, p: &Plans, width: usize) -> Doc {
             Style::default(),
         ),
     ]);
-    if let Some(g) = p.shown.as_ref().and_then(|s| s.progress) {
+    if let Some(g) = p.shown.as_ref().and_then(|s| s.progress.as_ref()) {
         d.plain(
-            format!("members: {} of {} done, {} live", g.done, g.total, g.live),
+            format!("members: {} of {} done, {} live", g.done, g.counted, g.live),
             style::dim(),
         );
     }

@@ -2,7 +2,7 @@
 
 use axum::Json;
 use axum::extract::{Extension, State};
-use sea_orm::DatabaseConnection;
+use sea_orm::{ConnectionTrait, DatabaseConnection};
 
 use docket_core::api::{
     EditRequest, LinkRequest, Linked, Moved, MovedMany, ParentRequest, Parented, PriorityRequest,
@@ -173,19 +173,29 @@ pub async fn edit(
     Ok(Json(Moved { item }))
 }
 
-/// The area an edit gives an item, every item under it moved with it. Refused on an item under a
-/// plan, whose area is the plan's.
-async fn move_area(call: &mut Call, r: &Item, given: &str) -> Result<(Field, String), Failure> {
-    let to = areas::area_id(&call.tx.conn, &call.slug, given).await?;
+/// Refuse an area other than its own for an item under a plan, whose area is the plan's.
+pub async fn refuse_child_area<C: ConnectionTrait>(
+    c: &C,
+    r: &Item,
+    to: Option<i64>,
+) -> Result<(), Failure> {
     if let Some(plan) = r.parent_rid
         && to != r.area_id
     {
-        let plan = id_of(&call.tx.conn, plan).await?.unwrap_or_default();
+        let plan = id_of(c, plan).await?.unwrap_or_default();
         return Err(Failure::Refused(format!(
             "{} is under {plan}, and its area is {plan}'s: edit the area of {plan} instead",
             r.id
         )));
     }
+    Ok(())
+}
+
+/// The area an edit gives an item, every item under it moved with it. Refused on an item under a
+/// plan, whose area is the plan's.
+async fn move_area(call: &mut Call, r: &Item, given: &str) -> Result<(Field, String), Failure> {
+    let to = areas::area_id(&call.tx.conn, &call.slug, given).await?;
+    refuse_child_area(&call.tx.conn, r, to).await?;
     if let Some(to) = to
         && r.state == "open"
     {

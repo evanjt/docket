@@ -1,6 +1,6 @@
 import type {
   Offers,
-  Area, Count, Deps, Derived, EventRow, Facts, Graph, LeadState, Machine, Problem, ProjectRow, ReleaseCounts, Row, Shown, Status, Summary, Whoami,
+  Area, Count, Deps, Derived, EventRow, Facts, Graph, LeadState, Machine, Problem, ProjectRow, ReleaseCounts, Row, Shown, Status, Summary, Whole, Whoami,
 } from './types';
 
 const KEY = 'docket.key';
@@ -133,6 +133,7 @@ export const api = {
   summary: (p: string) => get<Summary>('/summary', of(p)),
   check: (p: string) => get<Problem[]>('/check', of(p)),
   graph: (p: string) => get<Graph>('/graph', of(p)),
+  whole: (p: string, days: number) => get<Whole>('/metrics', { project: p, scope: 'project', days: String(days) }),
   areas: (p: string) => get<Area[]>('/areas', of(p)),
   facts: (p: string) => get<Facts>('/facts', of(p)),
   machines: () => get<{ machines: Machine[] }>('/machines').then((m) => m.machines),

@@ -24,11 +24,11 @@ pub fn doc(board: Option<&Board>, d: &Detail, width: usize, now: i64) -> Doc {
     let r = &d.shown.row;
     head(&mut out, board, r, width);
     facts(&mut out, board, r, now, width);
-    if let Some(g) = d.shown.progress {
+    if let Some(g) = d.shown.progress.as_ref() {
         out.plain(
             format!(
                 "       members: {} of {} done, {} live",
-                g.done, g.total, g.live
+                g.done, g.counted, g.live
             ),
             Style::default(),
         );

@@ -27,7 +27,9 @@ pub const CLAIM_RUNNERS: [&str; 3] = ["codex", "claude", "remote"];
 pub const KEPT: &str = "kept";
 /// The roles an attempt is made in.
 pub const ROLES: [&str; 5] = ["build", "rebase", "review", "plan", "audit"];
-pub const OUTCOMES: [&str; 5] = ["landed", "conflict", "gate", "blocked", "failed"];
+/// An `ended` attempt is a session that finished or paused without a build to land, such as a plan
+/// filed or a usage limit; it is not a failure.
+pub const OUTCOMES: [&str; 6] = ["landed", "conflict", "gate", "blocked", "failed", "ended"];
 
 /// What an attempt is: an agent's claim, or the item handed to the owner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,7 +59,7 @@ impl Kind {
 }
 
 /// How a claim ended: its work landed, its branch did not merge, its gates failed, it waits on
-/// something, or it failed otherwise.
+/// something, it ended without a build to land, or it failed otherwise.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
@@ -66,6 +68,7 @@ pub enum Outcome {
     Gate,
     Blocked,
     Failed,
+    Ended,
 }
 
 impl Outcome {
@@ -77,6 +80,7 @@ impl Outcome {
             Outcome::Gate => "gate",
             Outcome::Blocked => "blocked",
             Outcome::Failed => "failed",
+            Outcome::Ended => "ended",
         }
     }
 
@@ -88,6 +92,7 @@ impl Outcome {
             "gate" => Some(Outcome::Gate),
             "blocked" => Some(Outcome::Blocked),
             "failed" => Some(Outcome::Failed),
+            "ended" => Some(Outcome::Ended),
             _ => None,
         }
     }
@@ -360,8 +365,8 @@ fn field(e: &Event, name: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// How a release ended its claim: the outcome it names, else a branch sent to be rebased is a
-/// conflict, else what its note says.
+/// How a release ended its claim: the outcome it names. A release written before the outcome was
+/// recorded is a conflict when its branch was sent to be rebased, else what its note says.
 fn released(e: &Event) -> Outcome {
     if let Some(o) = field(e, "outcome").as_deref().and_then(Outcome::parse) {
         return o;

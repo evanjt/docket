@@ -38,9 +38,31 @@ pub struct Subject {
     pub closed_at: Option<i64>,
     /// When its first assignment started.
     pub started_at: Option<i64>,
+    /// Whether an agent or a person holds a claim on it now.
+    pub claimed: bool,
+    /// The row id of its area.
+    pub area: Option<i64>,
+    /// A kind that holds other items: an area counts the work in it, not it.
+    pub holder: bool,
 }
 
 impl Subject {
+    /// An item as a plan's members are counted: its word and whether it is claimed, no dates.
+    #[must_use]
+    pub fn member(id: &str, word: &str, claimed: bool) -> Self {
+        Subject {
+            id: id.to_string(),
+            word: word.to_string(),
+            release: None,
+            opened_at: 0,
+            closed_at: None,
+            started_at: None,
+            claimed,
+            area: None,
+            holder: false,
+        }
+    }
+
     fn done(&self) -> bool {
         self.word == "done"
     }
@@ -50,14 +72,33 @@ impl Subject {
     }
 }
 
-/// Done of everything not dropped, and how many items stand under each open status word.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+/// How far a set of items is: how many are done, dropped and claimed now, and how many stand under
+/// each open status word.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Progress {
     pub done: u64,
     pub dropped: u64,
     /// Every item, dropped ones included.
     pub total: u64,
+    /// Every item but the dropped: what a bar is done of.
+    #[serde(default)]
+    pub counted: u64,
+    /// Every item neither done nor dropped.
+    #[serde(default)]
+    pub remaining: u64,
+    /// Items claimed now.
+    #[serde(default)]
+    pub live: u64,
+    #[serde(default)]
     pub open: BTreeMap<String, u64>,
+}
+
+impl Progress {
+    /// Whether the set holds an item and none of them is open.
+    #[must_use]
+    pub fn settled(&self) -> bool {
+        self.total > 0 && self.done + self.dropped == self.total
+    }
 }
 
 #[must_use]
@@ -65,13 +106,100 @@ pub fn progress(items: &[Subject]) -> Progress {
     let mut out = Progress::default();
     for i in items {
         out.total += 1;
+        if i.claimed && i.open() {
+            out.live += 1;
+        }
         match i.word.as_str() {
             "done" => out.done += 1,
             "dropped" => out.dropped += 1,
             word => *out.open.entry(word.to_string()).or_default() += 1,
         }
     }
+    out.counted = out.total - out.dropped;
+    out.remaining = out.counted - out.done;
     out
+}
+
+/// One area with what it holds: its open items, its done ones and how many of the open are claimed
+/// now. Plans and other holders are not counted, nor are dropped items.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AreaProgress {
+    pub name: String,
+    pub description: Option<String>,
+    pub priority: Option<String>,
+    pub open: u64,
+    pub done: u64,
+    #[serde(default)]
+    pub live: u64,
+}
+
+/// Each area in position order with its counts.
+#[must_use]
+pub fn area_progress(areas: &crate::area::Listed, items: &[Subject]) -> Vec<AreaProgress> {
+    let mut rows: Vec<&(i64, crate::area::Area)> = areas.rows.iter().collect();
+    rows.sort_by_key(|(_, a)| a.position);
+    rows.into_iter()
+        .map(|(id, a)| {
+            let mine = || items.iter().filter(|i| i.area == Some(*id) && !i.holder);
+            AreaProgress {
+                name: a.name.clone(),
+                description: a.description.clone(),
+                priority: a.priority.clone(),
+                open: mine().filter(|i| i.open()).count() as u64,
+                done: mine().filter(|i| i.done()).count() as u64,
+                live: mine().filter(|i| i.open() && i.claimed).count() as u64,
+            }
+        })
+        .collect()
+}
+
+/// Items opened, done and dropped on one calendar day, UTC.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Flow {
+    pub date: String,
+    pub opened: u64,
+    pub closed: u64,
+    pub dropped: u64,
+}
+
+/// Items opened, done and dropped per calendar day over the `days` ending with the day of `now`,
+/// oldest first; a day with none reads zero.
+#[must_use]
+pub fn daily(items: &[Subject], now: i64, days: u32) -> Vec<Flow> {
+    let today = now.div_euclid(DAY);
+    let first = today - i64::from(days.max(1)) + 1;
+    (first..=today)
+        .map(|d| {
+            let closed_on = |word: &str| {
+                items
+                    .iter()
+                    .filter(|i| {
+                        i.word == word && i.closed_at.is_some_and(|c| c.div_euclid(DAY) == d)
+                    })
+                    .count() as u64
+            };
+            Flow {
+                date: date_of(d),
+                opened: items
+                    .iter()
+                    .filter(|i| i.opened_at.div_euclid(DAY) == d)
+                    .count() as u64,
+                closed: closed_on("done"),
+                dropped: closed_on("dropped"),
+            }
+        })
+        .collect()
+}
+
+/// What `/metrics?scope=project` serves of the whole project: its progress, its days and its areas.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+pub struct Whole {
+    #[serde(default)]
+    pub progress: Progress,
+    #[serde(default)]
+    pub daily: Vec<Flow>,
+    #[serde(default)]
+    pub areas: Vec<AreaProgress>,
 }
 
 /// Items done on one calendar day, UTC.

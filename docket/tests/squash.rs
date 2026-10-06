@@ -100,7 +100,7 @@ impl Repo {
             r#"
 INSERT INTO projects (slug, skills, integration_ref, created_at, updated_at) VALUES
   ('acme/kiln',
-   '{{"owner":"Ada Lovelace","publish":"published origin/main"}}', 'main', 'c', 'u');
+   '{{"owner":"Ada Lovelace","publish":"shelf origin/main"}}', 'main', 'c', 'u');
 INSERT INTO areas (id, project, name, description, position, priority) VALUES (1, 'acme/kiln', 'firing', '', 1, NULL);
 INSERT INTO items (rid, project, key, num, title, state, body, type, opened_at, updated_at, resolution, parent_rid, area_id) VALUES
   (1, 'acme/kiln', 'A', 1, 'Fire the first bowls', 'done', '', 'plan', 'o', 'u', 'fired', NULL, 1),
@@ -162,7 +162,7 @@ fn messages(dir: &Path, lines: &str) -> String {
 
 fn published(dir: &Path) -> Option<String> {
     let out = Command::new("git")
-        .args(["rev-parse", "--verify", "--quiet", "refs/heads/published"])
+        .args(["rev-parse", "--verify", "--quiet", "refs/heads/shelf"])
         .current_dir(dir)
         .output()
         .unwrap();
@@ -201,7 +201,7 @@ fn test_two_messages_write_two_commits_on_the_snapshot_trees_and_leave_the_work_
     assert_eq!(sh(&r.dir, "git rev-list main"), closes);
 
     let published = r.published().expect("the published ref is written");
-    let chain = sh(&r.dir, "git rev-list --reverse origin/main..published");
+    let chain = sh(&r.dir, "git rev-list --reverse origin/main..shelf");
     let chain: Vec<&str> = chain.lines().collect();
     assert_eq!(chain.len(), 2);
     assert_eq!(chain[1], published);
@@ -231,7 +231,7 @@ fn test_two_messages_write_two_commits_on_the_snapshot_trees_and_leave_the_work_
         "Fire the first bowls"
     );
     let said = text(&out);
-    assert!(said.contains("git push origin published:main"), "{said}");
+    assert!(said.contains("git push origin shelf:main"), "{said}");
 
     // The publications are recorded: the next squash starts after them.
     let again = r.squash(&[]);
@@ -412,7 +412,7 @@ impl Nested {
             r#"
 INSERT INTO projects (slug, skills, integration_ref, repos, created_at, updated_at) VALUES
   ('acme/kiln',
-   '{{"owner":"Ada Lovelace","publish":"published origin/main"}}', 'main', '[".", "{GLAZE}"]', 'c', 'u');
+   '{{"owner":"Ada Lovelace","publish":"shelf origin/main"}}', 'main', '[".", "{GLAZE}"]', 'c', 'u');
 INSERT INTO areas (id, project, name, description, position, priority) VALUES (1, 'acme/kiln', 'firing', '', 1, NULL);
 INSERT INTO items (rid, project, key, num, title, state, body, type, opened_at, updated_at, resolution, parent_rid, area_id) VALUES
   (1, 'acme/kiln', 'A', 1, 'Fire the first bowls', 'done', '', 'plan', 'o', 'u', 'fired', NULL, 1),
@@ -450,7 +450,7 @@ fn test_each_published_tree_pins_the_published_submodule_commit_of_its_snapshots
     assert!(out.status.success(), "{}", text(&out));
 
     let inner = published(&r.glaze).expect("the submodule's published ref is written");
-    let inner_chain = sh(&r.glaze, "git rev-list --reverse origin/main..published");
+    let inner_chain = sh(&r.glaze, "git rev-list --reverse origin/main..shelf");
     let inner_chain: Vec<&str> = inner_chain.lines().collect();
     assert_eq!(inner_chain.len(), 2);
     assert_eq!(inner_chain[1], inner);
@@ -461,7 +461,7 @@ fn test_each_published_tree_pins_the_published_submodule_commit_of_its_snapshots
         );
     }
 
-    let chain = sh(&r.dir, "git rev-list --reverse origin/main..published");
+    let chain = sh(&r.dir, "git rev-list --reverse origin/main..shelf");
     let chain: Vec<&str> = chain.lines().collect();
     assert_eq!(chain.len(), 2);
     for (commit, want) in chain.iter().zip(&inner_chain) {
@@ -478,7 +478,7 @@ fn test_each_published_tree_pins_the_published_submodule_commit_of_its_snapshots
         r.pins[1]
     );
     assert!(
-        text(&out).contains("git push origin published:main"),
+        text(&out).contains("git push origin shelf:main"),
         "{}",
         text(&out)
     );
@@ -495,10 +495,7 @@ fn test_each_published_tree_pins_the_published_submodule_commit_of_its_snapshots
     let out = r.squash(&["--messages", &file]);
     assert!(out.status.success(), "{}", text(&out));
     assert_eq!(published(&r.glaze).as_deref(), Some(inner.as_str()));
-    assert_eq!(
-        sh(&r.dir, &format!("git rev-parse published:{GLAZE}")),
-        inner
-    );
+    assert_eq!(sh(&r.dir, &format!("git rev-parse shelf:{GLAZE}")), inner);
 }
 
 #[test]
@@ -556,7 +553,7 @@ fn test_show_names_the_publication_whose_snapshot_first_holds_the_close_sha() {
     let r = Repo::new();
     let file = r.messages("Fire the first bowls\nGlaze the platters\n");
     assert!(r.squash(&["--messages", &file]).status.success());
-    let commits = sh(&r.dir, "git rev-list --reverse refs/heads/published");
+    let commits = sh(&r.dir, "git rev-list --reverse refs/heads/shelf");
     let commits: Vec<&str> = commits.lines().collect();
     let (first, second) = (commits[commits.len() - 2], commits[commits.len() - 1]);
     assert!(docket(&r, &["show", "T1"]).contains(&format!("published: {first}")));
@@ -570,7 +567,7 @@ fn test_an_unpushed_publication_is_an_act_ask_until_the_remote_ref_holds_it() {
     assert!(r.squash(&["--messages", &file]).status.success());
     let todo = docket(&r, &["todo"]);
     assert!(todo.contains("An action from your machine:"), "{todo}");
-    assert!(todo.contains("Push published to origin/main"), "{todo}");
+    assert!(todo.contains("Push shelf to origin/main"), "{todo}");
     let tip = r.published().unwrap();
     sh(
         &r.dir,
@@ -586,13 +583,13 @@ fn test_the_push_ask_names_each_submodule_push_first_and_stays_open_until_all_ar
     let out = r.squash(&["--messages", &file]);
     assert!(out.status.success(), "{}", text(&out));
     let todo = docket_in(&r.dir, &r.config, &r.server, &["todo"]);
-    assert!(todo.contains("Push published to origin/main"), "{todo}");
+    assert!(todo.contains("Push shelf to origin/main"), "{todo}");
     let todo = docket_in(&r.dir, &r.config, &r.server, &["show", "T3"]);
     let inner = todo
-        .find(&format!("git -C {GLAZE} push origin published:main"))
+        .find(&format!("git -C {GLAZE} push origin shelf:main"))
         .unwrap_or_else(|| panic!("{todo}"));
     let parent = todo
-        .find("git push origin published:main")
+        .find("git push origin shelf:main")
         .unwrap_or_else(|| panic!("{todo}"));
     assert!(inner < parent, "{todo}");
 
@@ -602,7 +599,7 @@ fn test_the_push_ask_names_each_submodule_push_first_and_stays_open_until_all_ar
         &format!("git update-ref refs/remotes/origin/main {tip}"),
     );
     let todo = docket_in(&r.dir, &r.config, &r.server, &["todo"]);
-    assert!(todo.contains("Push published to origin/main"), "{todo}");
+    assert!(todo.contains("Push shelf to origin/main"), "{todo}");
 
     let tip = published(&r.glaze).unwrap();
     sh(

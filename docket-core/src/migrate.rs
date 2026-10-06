@@ -306,7 +306,7 @@ pub struct Area {
 
 /// The area the closed items nothing places go to, and what it says it holds.
 pub const UNSORTED: &str = "unsorted";
-const UNSORTED_ABOUT: &str = "closed items no area claimed at the migration";
+pub const UNSORTED_ABOUT: &str = "closed items no area claimed at the migration";
 
 /// How the items of one project came by their areas, for the dry run.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
@@ -1225,7 +1225,8 @@ impl<'a> Project<'a> {
     /// parent edges that has one, else its own concept, the oldest tie when it has several, else the
     /// area of its latest placement by an agent, as written. A plan is placed before its children, so
     /// it passes its area down. A closed item nothing places goes to `unsorted`, made only when one
-    /// does and never passed down; an open one waits on a placement. Ideas stay labels.
+    /// does and never passed down; an open one waits on a placement. An idea item becomes a label and
+    /// goes to `unsorted` like a closed item.
     fn areas(&mut self, existing: &[crate::area::Area], events: &[&EventDump]) {
         let named = self.concept_areas(existing);
         let concepts: Vec<&OldItem> = self
@@ -1290,13 +1291,7 @@ impl<'a> Project<'a> {
             };
             placed.insert(i.id.clone(), area);
         }
-        if !closed.is_empty() {
-            let area = self.unsorted(existing);
-            self.out.placed.unsorted = closed.len();
-            for id in closed {
-                placed.insert(id, area.clone());
-            }
-        }
+        self.send_to_unsorted(existing, closed, &mut placed);
         for c in &concepts {
             let area = named[&c.id].clone();
             placed.insert(c.id.clone(), area.clone());
@@ -1325,6 +1320,29 @@ impl<'a> Project<'a> {
                 action: "they are left with no area".to_string(),
                 waits: Some(Decision::Unplaced),
             });
+        }
+    }
+
+    /// The closed items nothing placed, and each idea item, go to `unsorted`, made only when one does.
+    fn send_to_unsorted(
+        &mut self,
+        existing: &[crate::area::Area],
+        mut closed: Vec<String>,
+        placed: &mut BTreeMap<String, String>,
+    ) {
+        closed.extend(
+            self.items
+                .iter()
+                .filter(|i| self.kind(&i.id) == Kind::Idea)
+                .map(|i| i.id.clone()),
+        );
+        if closed.is_empty() {
+            return;
+        }
+        let area = self.unsorted(existing);
+        self.out.placed.unsorted = closed.len();
+        for id in closed {
+            placed.insert(id, area.clone());
         }
     }
 

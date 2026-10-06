@@ -372,7 +372,7 @@ pub async fn graph(
             release: listed.name(r.release_id),
             area: areas.name(r.area_id),
             title: &r.title,
-            progress: held.then(|| board.progress(r)),
+            progress: held.then(|| board.held_progress(r)),
             due: (held && kind == Kind::Audit).then(|| board.due(r)),
         };
         separate(&mut text, i);
@@ -725,7 +725,7 @@ fn plans(board: &Board) -> Value {
             .plans_under_way()
             .into_iter()
             .map(|(p, g)| json!({
-                "id": p.id, "title": p.title, "done": g.done, "total": g.total, "live": g.live
+                "id": p.id, "title": p.title, "done": g.done, "total": g.counted, "live": g.live
             }))
             .collect::<Vec<_>>()
     )

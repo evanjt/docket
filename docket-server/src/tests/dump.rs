@@ -293,7 +293,7 @@ async fn questions(d: &mut Dumped) {
         ("reply", json!({ "id": "B2", "note": "metres" }), "Reply B2"),
         (
             "release",
-            json!({ "id": "B3", "note": "later" }),
+            json!({ "id": "B3", "note": "later", "outcome": "ended" }),
             "Unclaim B3",
         ),
         ("start", json!({ "id": "B3" }), "Start B3"),

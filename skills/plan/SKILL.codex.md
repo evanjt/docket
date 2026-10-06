@@ -34,7 +34,7 @@ a defect), the body holding **Evidence** (`file:line` from the working tree),
 **Fix**, and **Failing case** (the test that fails until it lands, at the
 lowest level that can fail for the right reason). Then `docket parent T14 T15
 A3` (an item has one parent, and it is a plan), `docket priority T14 high` where it is more urgent than normal,
-`docket rate T14 medium`, and `docket unclaim A3`: the plan waits on its
+`docket rate T14 medium`, and `docket unclaim A3 --outcome ended`: the plan waits on its
 tickets. The queue reads release, then priority, then age; an item with no
 release is in the backlog, which ranks after every release.
 

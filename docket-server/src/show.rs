@@ -12,8 +12,7 @@ use docket_core::word::{Kind, PRIORITIES};
 use crate::entities::{item, link};
 use crate::reads::public::{Failure, Members, id_of, internal, item_of, project_of, public};
 use crate::store::to_item;
-use crate::verbs::graph::{member_count, open_under};
-use docket_core::assignment::Held;
+use crate::verbs::graph::{member_count, open_under, package_progress};
 use docket_core::word::kind_of_type;
 
 #[derive(Deserialize)]
@@ -44,7 +43,6 @@ pub async fn show(
     let row = item_of(&db, &q.project, &id).await?;
     let kind = kind_of_type(&row.item_type);
     let under = children(&db, row.rid).await.map_err(|e| internal(&e))?;
-    let members = (kind == Kind::Package).then_some(&under);
     let held = if kind.is_plan() {
         member_count(&db, row.rid).await.map_err(|e| internal(&e))?
     } else {
@@ -79,6 +77,7 @@ pub async fn show(
         None => None,
     };
     let body = row.body.clone();
+    let rid = row.rid;
     let mut out = public(&db, kind, row, held, None)
         .await
         .map_err(|e| internal(&e))?;
@@ -91,19 +90,9 @@ pub async fn show(
         json!(under.iter().map(|c| c.id.clone()).collect::<Vec<_>>()),
     );
     out.insert("cites".into(), json!(cites));
-    if let Some(members) = members {
-        let rids: Vec<i64> = members.iter().map(|m| m.rid).collect();
-        let live = crate::store::held(&db, &rids)
-            .await
-            .map_err(|e| internal(&e))?
-            .values()
-            .filter(|h| matches!(h, Held::Claim(_)))
-            .count();
-        let done = members.len() - members.iter().filter(|m| m.state == "open").count();
-        out.insert(
-            "progress".into(),
-            json!({ "done": done, "total": members.len(), "live": live }),
-        );
+    if kind == Kind::Package {
+        let progress = package_progress(&db, rid).await.map_err(|e| internal(&e))?;
+        out.insert("progress".into(), json!(progress));
     }
     Ok(Json(Value::Object(out)))
 }

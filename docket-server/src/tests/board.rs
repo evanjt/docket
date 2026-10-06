@@ -286,24 +286,21 @@ fn node<'a>(g: &'a Value, id: &str) -> &'a Value {
         .unwrap()
 }
 
+/// A node's done, total and live counts.
+fn counts(node: &Value) -> Value {
+    let p = &node["progress"];
+    json!([p["done"], p["total"], p["live"]])
+}
+
 #[tokio::test]
 async fn test_graph_nodes_carry_progress_and_due_as_the_core_counts_them() {
     let s = Seeded::new().await;
     let g = s.ok("/graph?project=o/p").await;
-    assert_eq!(
-        node(&g, "A1")["progress"],
-        json!({ "done": 1, "total": 4, "live": 1 })
-    );
+    assert_eq!(counts(node(&g, "A1")), json!([1, 4, 1]));
     assert_eq!(node(&g, "A1")["due"], false);
-    assert_eq!(
-        node(&g, "A2")["progress"],
-        json!({ "done": 1, "total": 1, "live": 0 })
-    );
+    assert_eq!(counts(node(&g, "A2")), json!([1, 1, 0]));
     assert_eq!(node(&g, "A2")["due"], true);
-    assert_eq!(
-        node(&g, "PK1")["progress"],
-        json!({ "done": 1, "total": 3, "live": 1 })
-    );
+    assert_eq!(counts(node(&g, "PK1")), json!([1, 3, 1]));
     assert!(node(&g, "T1").get("progress").is_none(), "{g}");
     assert!(node(&g, "T1").get("due").is_none(), "{g}");
 }
@@ -321,10 +318,7 @@ async fn test_graph_counts_what_sits_under_a_plans_sub_plan() {
     )
     .await;
     let g = s.ok("/graph?project=o/p").await;
-    assert_eq!(
-        node(&g, "A2")["progress"],
-        json!({ "done": 1, "total": 3, "live": 0 })
-    );
+    assert_eq!(counts(node(&g, "A2")), json!([1, 3, 0]));
     assert_eq!(node(&g, "A2")["due"], false);
     let m = s.ok("/summary?project=o/p").await;
     assert_eq!(m["due"], json!([]));
@@ -672,4 +666,32 @@ async fn test_a_project_with_an_empty_key_list_reads_every_item_by_its_type() {
         .get("/projects?filter=%7B%22slug%22%3A%22o%2Fe%22%7D")
         .await;
     assert!(row[0].get("keys").is_none());
+}
+
+#[tokio::test]
+async fn test_a_dropped_member_reads_the_same_on_the_graph_and_metrics() {
+    let s = Seeded::new().await;
+    s.db.seed(
+        "INSERT INTO items (rid, project, key, num, title, state, resolution, opened_at, updated_at) VALUES \
+         (20, 'o/p', 'T', 20, 'Dropped under plan', 'dropped', 'dup', '2026-01-01T00:00:00Z', 'u20'); \
+         UPDATE items SET parent_rid=11 WHERE rid=20;",
+    )
+    .await;
+    let g = s.ok("/graph?project=o/p").await;
+    let fields = |p: &Value| json!([p["done"], p["dropped"], p["total"], p["counted"]]);
+    let on_graph = fields(&node(&g, "A2")["progress"]);
+    let on_metrics = fields(&s.ok("/metrics?project=o/p&scope=plan&plan=A2").await["progress"]);
+    assert_eq!(on_graph, json!([1, 1, 2, 1]));
+    assert_eq!(on_metrics, on_graph);
+    assert!(node(&g, "A2")["due"] == true, "{g}");
+}
+
+#[tokio::test]
+async fn test_metrics_of_the_project_serve_areas_and_days() {
+    let s = Seeded::new().await;
+    let m = s.ok("/metrics?project=o/p&scope=project&days=3").await;
+    assert_eq!(m["scope"], "project");
+    assert_eq!(m["daily"].as_array().unwrap().len(), 3);
+    assert_eq!(m["areas"][0]["name"], "general");
+    assert!(m["progress"]["total"].as_u64().unwrap() >= 10, "{m}");
 }

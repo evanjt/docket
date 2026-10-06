@@ -321,12 +321,21 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             };
             write::drop(ctx, &req)
         }
-        Cmd::Reopen { id, why, area } => {
+        Cmd::Reopen {
+            id,
+            why,
+            area,
+            release,
+            carry,
+            force,
+        } => {
             let req = ReopenRequest {
-                common: ctx.common(false)?,
+                common: ctx.common(*force)?,
                 id: id.clone(),
                 why: why.clone(),
                 area: area.clone(),
+                release: release.clone(),
+                carry: *carry,
             };
             write::moved(ctx, "reopen", &req)
         }
@@ -485,6 +494,7 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             name,
             to,
             move_open_to,
+            carry,
             target,
             note,
             all,
@@ -495,6 +505,7 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
                 name: name.as_deref(),
                 to: to.as_deref(),
                 move_open_to: move_open_to.as_deref(),
+                carry: *carry,
                 target: target.as_deref(),
                 note: note.as_deref(),
                 all: *all,

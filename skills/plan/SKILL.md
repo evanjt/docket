@@ -78,7 +78,7 @@ The queue reads release, then priority, then age. An item with no release is in
 the backlog, which ranks after every release. Complexity is rated apart from
 effort: high is architecture (a new data model, a migration, many dependants).
 
-Unclaim the plan once its tickets are filed (`docket unclaim A3`): it then
+Unclaim the plan once its tickets are filed (`docket unclaim A3 --outcome ended`): it then
 waits on them, and comes back for its audit when they are all closed.
 
 ## An investigation

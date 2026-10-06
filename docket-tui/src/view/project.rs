@@ -106,7 +106,7 @@ fn item_spot(board: &Board, id: &str, pad: usize) -> Vec<Seg> {
 
 fn sidebar(board: &Board, data: &ProjectData, width: usize) -> Doc {
     let mut d = Doc::default();
-    progress(&mut d, board, data, width);
+    progress_section(&mut d, board, data, width);
     d.blank();
     releases(&mut d, data, width);
     d.blank();
@@ -129,10 +129,9 @@ fn sidebar(board: &Board, data: &ProjectData, width: usize) -> Doc {
 }
 
 /// PROGRESS: closed of everything in the flow, the forecast, and the open counts, each a hot spot.
-fn progress(d: &mut Doc, board: &Board, data: &ProjectData, width: usize) {
+fn progress_section(d: &mut Doc, board: &Board, data: &ProjectData, width: usize) {
     d.plain("PROGRESS", style::bold());
-    let closed = data.status.count("done");
-    let all = closed + data.status.open();
+    let (closed, all) = (data.progress.done, data.progress.counted);
     d.plain(
         cut(
             &format!(" {}  {closed} of {all} closed", bar(closed, all)),
@@ -499,9 +498,9 @@ fn plans(d: &mut Doc, board: &Board, width: usize) {
         segs.push(seg(
             format!(
                 "{}  {:>3}/{:<3}{:>4}  {}",
-                bar(g.done, g.total),
+                bar(g.done, g.counted),
                 g.done,
-                g.total,
+                g.counted,
                 g.live,
                 p.title
             ),

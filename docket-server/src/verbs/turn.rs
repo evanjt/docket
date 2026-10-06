@@ -64,6 +64,7 @@ async fn owner_task(call: &mut Call, r: &Item, condition: &str) -> Result<Item, 
             "wait --until needs the condition, in words.".to_string(),
         ));
     }
+    ensure_owner_room(call).await?;
     let item_type = ItemType::Task;
     let key = item_type.key().to_string();
     let num = call.tx.next_num(&call.slug, &key).await?;
@@ -395,6 +396,12 @@ pub async fn answer(
     Extension(caller): Extension<Caller>,
     Json(req): Json<AnswerRequest>,
 ) -> Result<Json<Answered>, Failure> {
+    if !caller.owner && req.derived.is_none() {
+        return Err(Failure::Forbidden(
+            "an agent's key answers only with --derived and its basis: a plain answer records a decision as the owner's."
+                .to_string(),
+        ));
+    }
     let mut call = Call::begin(&db, &caller, &req.common).await?;
     let r = call.item(&req.id).await?;
     let mut carriers = Vec::new();

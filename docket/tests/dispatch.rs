@@ -94,7 +94,10 @@ impl World {
             does: String::new(),
             machines,
             bin,
-            server: serve(SEED, "alpha owner key-alpha\nbeta owner key-beta"),
+            server: serve(
+                SEED,
+                "alpha owner key-alpha\nbeta owner key-beta\nalpha agent job-alpha\nbeta agent job-beta",
+            ),
             _tmp: tmp,
         };
         let origin = w.machines.join("origin");
@@ -125,6 +128,7 @@ impl World {
             let home = w.home(name);
             fs::create_dir_all(home.join("src")).unwrap();
             fs::write(home.join("key"), format!("key-{name}")).unwrap();
+            w.set_client_config(name, &format!("job_key = job-{name}\n"));
             sh(
                 &home.join("src"),
                 &format!(
@@ -150,6 +154,13 @@ impl World {
             assert!(out.status.success(), "{}", text(&out));
         }
         w
+    }
+
+    /// The machine's client file, which holds the key its jobs present.
+    fn set_client_config(&self, name: &str, text: &str) {
+        let dir = self.home(name).join(".config/docket");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("client"), text).unwrap();
     }
 
     fn home(&self, name: &str) -> PathBuf {
@@ -733,4 +744,55 @@ fn test_a_final_message_that_reports_a_limit_limits_the_runner_but_a_finished_jo
     );
     w.lead(&["jobs", "--wait", "--every", "1"]);
     assert!(!text(&w.lead(&["machines"])).contains("limited"));
+}
+
+#[test]
+fn test_a_job_is_refused_unless_its_machine_names_an_agent_key() {
+    let w = World::new();
+    let beta = w.home("beta").join("src/p");
+    let run = |w: &World| {
+        w.docket(
+            "beta",
+            &beta,
+            &[
+                "-p",
+                "o/p",
+                "--branch",
+                "lead/t1-1",
+                "job",
+                "run",
+                "--id",
+                "T1",
+                "--runner",
+                "claude",
+                "--model",
+                "small",
+                "--role",
+                "build",
+            ],
+        )
+    };
+    for (config, says) in [
+        ("", "job_key"),
+        ("job_key = key-beta\n", "owner key"),
+        ("job_key = no-such-key\n", "is refused"),
+    ] {
+        w.set_client_config("beta", config);
+        let out = run(&w);
+        assert!(!out.status.success(), "{config}: {}", text(&out));
+        assert!(text(&out).contains(says), "{config}: {}", text(&out));
+        assert!(
+            !text(&out).contains("no branch"),
+            "refused before the branch is read: {}",
+            text(&out)
+        );
+        assert!(
+            !w.home("beta").join(".state").exists()
+                || fs::read_dir(w.home("beta").join(".state"))
+                    .unwrap()
+                    .next()
+                    .is_none(),
+            "nothing started"
+        );
+    }
 }

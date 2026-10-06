@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { FLOW, board, byId, daily, moves, planCount, planWord, plans, tally, wordVar } from './flow';
-import type { EventRow, Graph, GraphNode } from './types';
+import { FLOW, board, byId, moves, planCount, planWord, plans, tally, wordVar } from './flow';
+import type { EventRow, Graph, GraphNode, Progress } from './types';
+
+/** Progress as the server serves it, with `dropped` of the `total` not counted. */
+const served = (done: number, total: number, live: number, dropped = 0): Progress => ({ done, dropped, total, counted: total - dropped, remaining: total - dropped - done, live });
 
 const node = (id: string, kind: GraphNode['kind'], word: string, rid = 0): GraphNode => ({
   id, rid, key: id.replace(/\d+/, ''), kind, state: word === 'done' ? 'done' : 'open', title: id, word,
@@ -9,8 +12,8 @@ const node = (id: string, kind: GraphNode['kind'], word: string, rid = 0): Graph
 const GRAPH: Graph = {
   project: 'o/p',
   nodes: [
-    { ...node('A1', 'audit', 'under way', 1), progress: { done: 1, total: 2, live: 1 }, due: false },
-    { ...node('A2', 'audit', 'ready', 2), progress: { done: 1, total: 1, live: 0 }, due: true },
+    { ...node('A1', 'audit', 'under way', 1), progress: served(1, 2, 1), due: false },
+    { ...node('A2', 'audit', 'ready', 2), progress: served(1, 1, 0), due: true },
     node('T1', 'work', 'done', 3),
     node('T2', 'work', 'under way', 4),
     node('T3', 'work', 'done', 5),
@@ -47,6 +50,7 @@ describe('board', () => {
   it('reads what an item holds from the served progress', () => {
     expect(tally(b, 'A1')).toEqual({ done: 1, total: 2, live: 1 });
     expect(tally(b, 'T1')).toEqual({ done: 0, total: 0, live: 0 });
+    expect(tally(board({ project: 'p', nodes: [{ ...node('A4', 'audit', 'under way', 4), progress: served(1, 3, 0, 1) }], edges: [] }), 'A4')).toEqual({ done: 1, total: 2, live: 0 });
   });
 
   it('lists a plan the server holds due first', () => {
@@ -67,7 +71,7 @@ describe('plans', () => {
   const deep: Graph = {
     project: 'o/p',
     nodes: [
-      { ...node('A1', 'audit', 'under way', 1), progress: { done: 2, total: 3, live: 0 }, due: false },
+      { ...node('A1', 'audit', 'under way', 1), progress: served(2, 3, 0), due: false },
       node('T1', 'work', 'done', 2),
       node('A2', 'audit', 'done', 3),
       node('T3', 'work', 'ready', 4),
@@ -95,9 +99,9 @@ describe('planWord', () => {
   });
 
   it('keeps the badge of a plan due for its audit and the word of a held plan', () => {
-    const held = { ...node('A3', 'audit', 'blocked', 7), progress: { done: 0, total: 0, live: 0 } };
+    const held = { ...node('A3', 'audit', 'blocked', 7), progress: served(0, 0, 0) };
     expect(planWord({ node: held, tally: { done: 0, total: 0, live: 0 }, due: false })).toBe('blocked');
-    const due = { ...node('A2', 'audit', 'audit due', 2), progress: { done: 1, total: 1, live: 0 } };
+    const due = { ...node('A2', 'audit', 'audit due', 2), progress: served(1, 1, 0) };
     expect(planWord({ node: due, tally: due.progress, due: true })).toBe('audit due');
   });
 });
@@ -116,35 +120,6 @@ describe('byId', () => {
 });
 
 const event = (at: string, kind: string, rid: number): EventRow => ({ seq: 0, project: 'o/p', rid, at, host: 'h', kind });
-
-describe('daily', () => {
-  const now = Date.parse('2026-10-02T12:00:00') / 1000;
-  const events = [
-    event('2026-10-02T09:00:00', 'closed', 1),
-    event('2026-10-02T08:00:00', 'opened', 2),
-    event('2026-10-01T08:00:00', 'dropped', 3),
-    event('2026-09-29T08:00:00', 'opened', 4),
-  ];
-
-  it('counts each kind on its local day', () => {
-    const days = daily(events, 3, now, true);
-    expect(days.map((d) => [d.day, d.opened, d.closed, d.dropped])).toEqual([
-      ['2026-09-30', 0, 0, 0],
-      ['2026-10-01', 0, 0, 1],
-      ['2026-10-02', 1, 1, 0],
-    ]);
-  });
-
-  it('leaves out the days before the oldest event of a partial read', () => {
-    const days = daily(events.slice(0, 3), 5, now, false);
-    // the oldest event read is on 10-01, which may hold more than was read
-    expect(days.map((d) => d.day)).toEqual(['2026-10-02']);
-  });
-
-  it('shows nothing for a partial read holding no event', () => {
-    expect(daily([], 5, now, false)).toEqual([]);
-  });
-});
 
 describe('moves', () => {
   const ids: Record<number, string> = { 1: 'T1', 2: 'T2' };

@@ -7,9 +7,9 @@ use regex::Regex;
 use sea_orm::{ConnectionTrait, DbErr, QueryResult};
 use serde_json::json;
 
-use docket_core::api::Progress;
 use docket_core::item::Item;
 use docket_core::member::{Edge, Tie, descendants};
+use docket_core::metrics::{self, Progress, Subject};
 use docket_core::release::Listed;
 use docket_core::stall::{Target, Wait};
 use docket_core::text::split_id;
@@ -55,14 +55,20 @@ pub async fn package_members<C: ConnectionTrait>(
     .await
 }
 
-/// A package's members closed or dropped, all of them, and those claimed now.
+/// How far a package is, over its direct children, by `metrics::progress`.
 pub async fn package_progress<C: ConnectionTrait>(c: &C, prid: i64) -> Result<Progress, DbErr> {
     let ms = package_members(c, prid, false).await?;
-    Ok(Progress {
-        done: ms.iter().filter(|m| m.state != "open").count(),
-        total: ms.len(),
-        live: ms.iter().filter(|m| m.claim().is_some()).count(),
-    })
+    Ok(member_progress(&ms))
+}
+
+/// `metrics::progress` over rows read from the store, where an open item has no word to read.
+#[must_use]
+fn member_progress(ms: &[Item]) -> Progress {
+    let subjects: Vec<Subject> = ms
+        .iter()
+        .map(|m| Subject::member(&m.id, &m.state, m.claim().is_some()))
+        .collect();
+    metrics::progress(&subjects)
 }
 
 /// The open items under rid at any depth, by rid.
@@ -368,6 +374,74 @@ async fn dependants_of<C: ConnectionTrait>(
         .map(|(rid, _)| rid)
         .collect();
     Ok(out.into_iter().collect())
+}
+
+/// Refuse reopening `r`, already written open in `tx`, when what holds it, what it holds, or its
+/// plan would close a cycle through it, naming the path.
+pub async fn refuse_reopen_cycle<C: ConnectionTrait>(
+    c: &C,
+    p: &ProjectRow,
+    r: &Item,
+) -> Result<(), Failure> {
+    let st = standing(c, &p.rules.slug).await?;
+    let holds = holds_of(c, p, &st).await?;
+    for h in holds.get(&r.rid).into_iter().flatten() {
+        if let Some(path) = docket_core::stall::path(&holds, *h, r.rid) {
+            let mut around = vec![r.rid];
+            around.extend(&path[..path.len() - 1]);
+            return Err(Failure::Refused(format!(
+                "{} cannot be reopened: it would close the cycle {}.",
+                r.id,
+                st.cycle(&around)
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Refuse dropping `r` for `s` when every dependency on `r` passing to what holds `s` would put a
+/// dependant in a later release than its new holder, or close a cycle, naming the path.
+pub async fn refuse_successor(
+    tx: &Tx,
+    p: &ProjectRow,
+    r: &Item,
+    s: &Item,
+    force: bool,
+) -> Result<(), Failure> {
+    let slug = &p.rules.slug;
+    let st = standing(&tx.conn, slug).await?;
+    let dependants = dependants_of(&tx.conn, slug, r.rid, &st).await?;
+    let mut after = standing_before(&st, r);
+    after
+        .targets
+        .insert(r.rid, Target::of("dropped", false, Some(s.rid)));
+    let Some(h) = docket_core::stall::holder(s.rid, &after.targets) else {
+        return Ok(());
+    };
+    let holder = tx.fresh(h).await?;
+    let listed = release_list(&tx.conn, slug).await?;
+    let mut holds = holds_of(&tx.conn, p, &st).await?;
+    for v in holds.values_mut() {
+        v.retain(|x| *x != r.rid);
+    }
+    for rid in dependants {
+        let dependant = tx.fresh(rid).await?;
+        refuse_later(&listed, &dependant, &holder, force)?;
+        if let Some(path) = docket_core::stall::path(&holds, h, rid) {
+            let mut around = vec![rid];
+            around.extend(&path[..path.len() - 1]);
+            return Err(Failure::Refused(format!(
+                "{} cannot be superseded by {}: {} would be held by {}, which closes the cycle {}.",
+                r.id,
+                s.id,
+                dependant.id,
+                holder.id,
+                st.cycle(&around)
+            )));
+        }
+        holds.entry(rid).or_default().push(h);
+    }
+    Ok(())
 }
 
 /// The standing as it was before `was` became `target`: the same, with the target as it stood.
@@ -741,6 +815,26 @@ impl Order {
     /// Refuse a move that leaves items out of order that were in order, naming each.
     pub fn refuse(&self, change: &BTreeMap<i64, usize>) -> Result<(), Failure> {
         let out = docket_core::stall::order::introduced(&self.needs, &self.rank, change);
+        self.refuse_pairs(&out, change)
+    }
+
+    /// Refuse the items out of order with `rid`, an item that has just become open and so had no
+    /// place in the order before.
+    pub fn refuse_around(&self, rid: i64) -> Result<(), Failure> {
+        let none = BTreeMap::new();
+        let out: Vec<(i64, i64)> =
+            docket_core::stall::order::violations(&self.needs, &self.rank, &none)
+                .into_iter()
+                .filter(|(held, holder)| *held == rid || *holder == rid)
+                .collect();
+        self.refuse_pairs(&out, &none)
+    }
+
+    fn refuse_pairs(
+        &self,
+        out: &[(i64, i64)],
+        change: &BTreeMap<i64, usize>,
+    ) -> Result<(), Failure> {
         if out.is_empty() {
             return Ok(());
         }
@@ -770,6 +864,30 @@ impl Order {
             .filter(|(r, _)| *r != rid)
             .map(|(r, place)| (r, self.id(r), self.release_at(place)))
             .collect()
+    }
+
+    /// What moving every item of `rids` to the release `to` takes with it, as `(rid, item id,
+    /// release id)` for each item outside `rids`.
+    #[must_use]
+    pub fn carried_all(&self, rids: &[i64], to: Option<i64>) -> Vec<(i64, String, Option<i64>)> {
+        let mut rank = self.rank.clone();
+        let mut moved = BTreeMap::new();
+        for rid in rids {
+            let step = docket_core::stall::order::carry(&self.needs, &rank, *rid, self.place(to));
+            rank.extend(step.iter().map(|(r, p)| (*r, *p)));
+            moved.extend(step);
+        }
+        moved
+            .into_iter()
+            .filter(|(r, _)| !rids.contains(r))
+            .map(|(r, place)| (r, self.id(r), self.release_at(place)))
+            .collect()
+    }
+
+    /// The change that moves every item of `rids` to the release `to`.
+    #[must_use]
+    pub fn moving_all(&self, rids: &[i64], to: Option<i64>) -> BTreeMap<i64, usize> {
+        rids.iter().map(|r| (*r, self.place(to))).collect()
     }
 
     /// The place `rid` takes if moved to the release `to`, as a change.

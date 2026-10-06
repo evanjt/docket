@@ -29,13 +29,7 @@ pub struct Cite {
     pub kind: String,
 }
 
-/// A package's members: closed or dropped, all of them, and those claimed now.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Progress {
-    pub done: usize,
-    pub total: usize,
-    pub live: usize,
-}
+pub use crate::metrics::Progress;
 
 /// One item in the shape `docket show --json` prints: ids instead of rids, the derived word and tier.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -284,6 +278,13 @@ pub struct ReopenRequest {
     /// The area the item reopens in; needed when its own area holds closed items only.
     #[serde(default)]
     pub area: Option<String>,
+    /// The release it reopens in: current, a release not shipped, or "" for the backlog. Needed
+    /// when its own release has shipped.
+    #[serde(default)]
+    pub release: Option<String>,
+    /// Move too what the reopened item would leave out of order.
+    #[serde(default)]
+    pub carry: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -425,6 +426,9 @@ pub struct ReleasesRequest {
     /// Where `move` and `ship` take the open items: `current`, a release, or empty for the backlog.
     #[serde(default)]
     pub to: Option<String>,
+    /// `move` and `ship`: move too what the move would leave out of order, instead of refusing it.
+    #[serde(default)]
+    pub carry: bool,
     #[serde(default)]
     pub target_date: Option<String>,
     #[serde(default)]

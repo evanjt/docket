@@ -51,7 +51,7 @@
     opened = { title: item.title, body: item.body, updated_at: item.updated_at };
     text = f === 'edit' ? item.title : '';
     extra = f === 'edit' ? item.body : f === 'start' ? 'main' : '';
-    choice = f === 'wait' ? 'until' : f === 'link' ? 'related' : '';
+    choice = f === 'wait' ? 'until' : f === 'link' ? 'related' : f === 'release' ? 'ended' : '';
   }
 
   const common = (branch?: string | null) => ({ project: slug, branch: branch ?? null });
@@ -66,7 +66,7 @@
       case 'reply': return ['reply', { ...common(), id, note: text.trim() }, 'Replied'];
       case 'start': return ['start', { ...common(given(extra) ?? 'main'), id }, `Started on ${given(extra) ?? 'main'}`];
       case 'close': return ['close', { ...common(held), id, resolution: given(text) }, 'Closed'];
-      case 'release': return ['release', { ...common(held), id, note: given(text) }, 'Unclaimed'];
+      case 'release': return ['release', { ...common(held), id, note: given(text), outcome: choice }, 'Unclaimed'];
       case 'resume': return ['resume', { ...common(), id, note: given(text) }, 'Resumed'];
       case 'ask': return ['ask', { ...common(held), id, note: text.trim() }, 'Parked for you'];
       case 'wait':
@@ -193,6 +193,12 @@
         </div>
         <!-- svelte-ignore a11y_autofocus -->
         <input class="field" bind:value={text} autofocus placeholder={choice === 'on' ? 'An id, like T12' : 'What has to be true first'} />
+      {:else if form === 'release'}
+        <select class="field" bind:value={choice} aria-label="Outcome">
+          {#each ['ended', 'landed', 'conflict', 'gate', 'blocked', 'failed'] as o (o)}<option value={o}>{o}</option>{/each}
+        </select>
+        <!-- svelte-ignore a11y_autofocus -->
+        <input class="field" bind:value={text} autofocus placeholder={p.placeholder} />
       {:else if form === 'link'}
         <div class="choice">
           <label><input type="radio" bind:group={choice} value="related" /> {item.id} is related to</label>

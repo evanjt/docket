@@ -1,7 +1,7 @@
 <script lang="ts">
   import { api } from '../lib/api';
   import { project } from '../lib/context';
-  import { MOVE_KINDS, daily, moves, planCount, plans } from '../lib/flow';
+  import { MOVE_KINDS, moves, planCount, plans } from '../lib/flow';
   import { jobLine, leadLine, machineUse } from '../lib/fleet';
   import { checkByRelease, checkCounts, forecastLine, releaseTally, staleClaims } from '../lib/releases';
   import { clock, resource } from '../lib/live.svelte';
@@ -31,21 +31,15 @@
   const events = resource(() => api.events(ctx.slug, READ, MOVE_KINDS));
   const lead = resource(() => api.lead(ctx.slug));
   const machines = resource(() => api.machines());
-  const start = $derived.by(() => {
-    const d = new Date(clock.now * 1000);
-    d.setHours(0, 0, 0, 0);
-    d.setDate(d.getDate() - (DAYS - 1));
-    return d.toISOString().replace(/\.\d+Z$/, 'Z');
-  });
-  const span = resource(() => api.since(ctx.slug, start, ['opened', 'closed', 'dropped'], MOST));
+  const whole = resource(() => api.whole(ctx.slug, DAYS));
 
   const now = $derived(clock.now);
   const yours = $derived.by(() => {
     const seen = new Set<string>();
     return [...(todo.data ?? []), ...(questions.data ?? [])].filter((r) => !seen.has(r.id) && seen.add(r.id));
   });
-  const open = $derived(status.data ? Object.entries(status.data.by_word).filter(([w]) => !['done', 'dropped'].includes(w)).reduce((a, [, n]) => a + n, 0) : null);
-  const days = $derived(span.data ? daily(span.data, DAYS, now, span.data.length < MOST) : []);
+  const open = $derived(whole.data?.progress.remaining ?? null);
+  const days = $derived(whole.data?.daily ?? []);
   const closedWeek = $derived(days.slice(-7).reduce((a, d) => a + d.closed, 0));
   const recent = $derived(
     events.data && ctx.board ? moves(events.data, (rid) => ctx.board?.byRid.get(rid)?.id).slice(0, MOVES) : [],
@@ -146,7 +140,7 @@
         <header><h2>Opened and closed</h2></header>
         {#if days.length}
           <DailyChart {days} />
-        {:else if span.data}
+        {:else if whole.data}
           <p class="empty">No moves recorded yet.</p>
         {/if}
       </section>

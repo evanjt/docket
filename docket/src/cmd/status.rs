@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use docket_core::check;
 use docket_core::flow::GET_GOING;
-use docket_core::metrics::Forecast;
+use docket_core::metrics::{Forecast, Whole};
 use docket_core::pace::duration;
 
 use crate::ctx::Ctx;
@@ -37,6 +37,8 @@ pub struct Read {
     pub summary: Value,
     /// The `/metrics` body of the current release, null when the server has none.
     pub metrics: Value,
+    /// The whole project's progress, as the server works it out.
+    pub whole: Whole,
     pub yours: Value,
     pub next: Value,
     pub now: i64,
@@ -57,6 +59,11 @@ pub fn status(ctx: &mut Ctx) -> Result<i32> {
         metrics: ctx
             .read("/metrics", &[("scope", Some("release".into()))])
             .unwrap_or(Value::Null),
+        whole: ctx
+            .read("/metrics", &[("scope", Some("project".into()))])
+            .ok()
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default(),
         yours: ctx.read("/todo", &[])?,
         next: ctx.read("/next", &[("n", Some("8".into()))])?,
         now: now(),
@@ -112,18 +119,13 @@ pub fn render(slug: &str, r: &Read) -> Vec<String> {
         out.push(forecast.line());
     }
     out.push(flow_line(&r.total));
-    let closed = count(&r.total, "done");
-    let open: u64 = r
-        .total
-        .iter()
-        .filter(|(w, _)| !matches!(w.as_str(), "done" | "dropped"))
-        .map(|(_, n)| n)
-        .sum();
+    let progress = &r.whole.progress;
     #[allow(clippy::cast_precision_loss)]
     out.push(format!(
-        "Progress: {}  {closed} of {} closed",
-        bar(closed as f64, (closed + open) as f64),
-        closed + open
+        "Progress: {}  {} of {} closed",
+        bar(progress.done as f64, progress.counted as f64),
+        progress.done,
+        progress.counted
     ));
     out.push(String::new());
     out.extend(claim_lines(&s["claims"], r.now));

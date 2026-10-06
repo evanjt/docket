@@ -439,3 +439,14 @@ fn test_no_lead_variant_merges_with_a_message_naming_the_branch() {
         assert!(text.contains("merge --no-ff -m \"Merge <the job's commit subject>\""));
     }
 }
+
+#[test]
+fn test_every_unclaim_in_a_skill_names_its_outcome() {
+    for (name, text) in texts() {
+        for (n, line) in text.lines().enumerate() {
+            if line.contains("docket unclaim") || line.contains("> unclaim ") {
+                assert!(line.contains("--outcome"), "{name}:{}: {line}", n + 1);
+            }
+        }
+    }
+}

@@ -80,6 +80,10 @@ impl<S: Source> App<S> {
             let wip = self.source.list("wip", &slug)?;
             let recent = self.source.recent(&slug)?;
             let mut data = project_data(&board, status, next, wip, &recent, now());
+            if let Ok(whole) = self.source.whole(&slug, TREND_DAYS) {
+                data.progress = whole.progress;
+                data.trend = whole.daily.iter().map(|d| (d.opened, d.closed)).collect();
+            }
             data.releases = self.source.releases(&slug).unwrap_or_default();
             data.problems = self.source.problems(&slug).unwrap_or_default();
             data.lead = self.source.lead(&slug).ok();
@@ -384,48 +388,13 @@ pub fn project_data(
         lead: None,
         machines: Vec::new(),
         problems: Vec::new(),
-        trend: daily(recent, TREND_DAYS, now),
+        progress: docket_core::metrics::Progress::default(),
+        trend: Vec::new(),
     }
 }
 
 /// The days of the trend line.
-const TREND_DAYS: usize = 7;
-
-/// Opened and closed counts per local day for the `days` days ending today, oldest first. Days older
-/// than the oldest event read are left out, so a page of events that does not reach back the whole
-/// window never shows a false zero.
-#[must_use]
-pub fn daily(recent: &[EventRow], days: usize, now: i64) -> Vec<(u64, u64)> {
-    use chrono::{Duration, Local, TimeZone};
-    let Some(today) = Local.timestamp_opt(now, 0).single().map(|t| t.date_naive()) else {
-        return Vec::new();
-    };
-    let stamps: Vec<(chrono::NaiveDate, &str)> = recent
-        .iter()
-        .filter_map(|e| {
-            let at = Local.timestamp_opt(epoch(&e.at)?, 0).single()?;
-            Some((at.date_naive(), e.kind.as_str()))
-        })
-        .collect();
-    let Some(oldest) = stamps.iter().map(|(d, _)| *d).min() else {
-        return Vec::new();
-    };
-    let span = i64::try_from(days).unwrap_or(0);
-    (0..span)
-        .rev()
-        .map(|back| today - Duration::days(back))
-        .filter(|day| *day > oldest)
-        .map(|day| {
-            let on = |kind: &str| {
-                stamps
-                    .iter()
-                    .filter(|(d, k)| *d == day && *k == kind)
-                    .count() as u64
-            };
-            (on("opened"), on("closed"))
-        })
-        .collect()
-}
+pub const TREND_DAYS: u32 = 7;
 
 /// The moves of a project's newest events, oldest first.
 fn moves_of(board: &Board, recent: &[EventRow]) -> Vec<Move> {
@@ -475,7 +444,7 @@ pub fn plan_rows(board: &Board, open: &std::collections::BTreeSet<String>) -> Ve
             push_plan(board, root, 0, open, &mut out);
         }
     }
-    let areas = board.area_progress();
+    let areas = docket_core::metrics::area_progress(&board.project.areas, &board.subjects());
     if !areas.is_empty() {
         out.push(PlanRow {
             heading: Some(format!("AREAS  {}", areas.len())),
@@ -511,7 +480,7 @@ fn push_plan(
     out: &mut Vec<PlanRow>,
 ) {
     let held = board.holds(item);
-    let g = board.progress(item);
+    let g = board.held_progress(item);
     let unfolded = open.contains(&item.id);
     out.push(PlanRow {
         heading: None,
@@ -520,7 +489,7 @@ fn push_plan(
         word: board.word(item),
         title: item.title.clone(),
         done: g.done,
-        total: g.total,
+        total: g.counted,
         live: g.live,
         folded: (!held.is_empty()).then_some(!unfolded),
         area: None,

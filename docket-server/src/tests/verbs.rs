@@ -303,6 +303,30 @@ async fn test_a_derived_answer_carries_its_basis() {
 }
 
 #[tokio::test]
+async fn test_an_agent_key_answers_only_with_a_basis() {
+    let s = Scratch::new().await;
+    s.open("Q", "One cache or two").await;
+    let (status, out) = s
+        .post_as(
+            "agentkey",
+            "answer",
+            json!({ "id": "Q1", "decision": "Two" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{out}");
+    assert!(out.to_string().contains("--derived"), "{out}");
+    assert_eq!(s.item("Q1").await["decision"], Value::Null);
+    let (status, out) = s
+        .post_as(
+            "agentkey",
+            "answer",
+            json!({ "id": "Q1", "decision": "Two", "derived": "one owner per cache" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+}
+
+#[tokio::test]
 async fn test_a_derived_answer_with_its_carrier_closes_and_never_lists_for_planning() {
     let s = Scratch::new().await;
     s.open("Q", "Retry or fail on a timeout").await;
@@ -1011,7 +1035,8 @@ async fn test_start_records_the_runner_and_job() {
         claimed["data"],
         json!({"job": "pk2-s1", "machine": "devbox", "model": "gpt-5.4", "role": "build", "runner": "codex"})
     );
-    s.ok("release", json!({ "id": "B1" })).await;
+    s.ok("release", json!({ "id": "B1", "outcome": "ended" }))
+        .await;
     assert_eq!(s.item("B1").await["claim_on"], Value::Null);
 }
 
@@ -1020,7 +1045,7 @@ async fn test_every_verb_that_ends_a_claim_clears_its_runner_and_job() {
     let s = Scratch::new().await;
     s.open("Q", "which way").await;
     let verbs = [
-        ("release", json!({})),
+        ("release", json!({ "outcome": "ended" })),
         ("wait", json!({ "on": "Q1" })),
         ("ask", json!({ "note": "run it on a device" })),
         ("close", json!({ "resolution": "abc1234" })),
@@ -1158,7 +1183,8 @@ async fn test_a_held_plan_closes_with_work_open_under_it_and_an_unheld_one_does_
     s.open("B", "The rye ratio is in no table").await;
     s.ok("parent", json!({ "a": ["B1"], "plan": "A1" })).await;
     assert_eq!(s.word("A1").await, "in progress");
-    s.ok("release", json!({ "id": "A1" })).await;
+    s.ok("release", json!({ "id": "A1", "outcome": "ended" }))
+        .await;
     assert_eq!(s.word("A1").await, "under way");
     assert_eq!(
         s.refused("close", json!({ "id": "A1", "resolution": "clean" }))
@@ -1403,7 +1429,8 @@ async fn test_a_claim_records_the_host_a_job_runs_on_and_the_group_it_is_in() {
         .await;
     assert_eq!(out["item"]["claim_on"], "devbox");
     assert_eq!(out["group_others"], json!(["B2"]));
-    s.ok("release", json!({ "id": "B1" })).await;
+    s.ok("release", json!({ "id": "B1", "outcome": "ended" }))
+        .await;
     assert_eq!(s.item("B1").await["claim_on"], Value::Null);
 }
 
@@ -1770,6 +1797,43 @@ async fn test_a_second_failed_unclaim_assigns_the_item_to_the_owner() {
 }
 
 #[tokio::test]
+async fn test_an_unclaim_with_no_outcome_is_refused_naming_the_outcomes() {
+    let s = Scratch::new().await;
+    s.open("B", "Kettle trips the fuse").await;
+    s.ok(
+        "start",
+        json!({ "id": "B1", "runner": "claude", "job": "b1-j" }),
+    )
+    .await;
+    assert_eq!(
+        s.refused("release", json!({ "id": "B1", "note": "plan filed" }))
+            .await,
+        "an unclaim names its outcome: one of landed, conflict, gate, blocked, failed, ended"
+    );
+    assert_eq!(s.assignments("B1").await[0]["ended_at"], Value::Null);
+}
+
+#[tokio::test]
+async fn test_two_unclaims_that_ended_without_failing_leave_the_item_the_agents() {
+    let s = Scratch::new().await;
+    s.open("B", "Kettle trips the fuse").await;
+    for _ in 0..2 {
+        s.ok(
+            "start",
+            json!({ "id": "B1", "runner": "claude", "job": "b1-j" }),
+        )
+        .await;
+        s.ok(
+            "release",
+            json!({ "id": "B1", "outcome": "ended", "note": "usage limit until noon" }),
+        )
+        .await;
+    }
+    assert_eq!(s.item("B1").await["turn"], "agent");
+    assert_eq!(s.assignments("B1").await[1]["outcome"], "ended");
+}
+
+#[tokio::test]
 async fn test_a_failed_unclaim_under_a_raised_failure_limit_stays_the_agents() {
     let s = Scratch::new().await;
     s.open("B", "Kettle trips the fuse").await;
@@ -1976,7 +2040,8 @@ async fn test_the_claim_and_the_owners_turn_are_read_from_the_open_assignment() 
     s.ok("reply", json!({ "id": "B1", "note": "it trips at once" }))
         .await;
     assert_eq!(s.word("B1").await, "ready");
-    s.ok("release", json!({ "id": "T1" })).await;
+    s.ok("release", json!({ "id": "T1", "outcome": "ended" }))
+        .await;
     assert!(ids(&read("wip").await).is_empty());
 }
 
@@ -2016,6 +2081,37 @@ async fn test_an_ask_past_the_owner_limit_is_refused_naming_the_limit() {
         .refused("new", json!({ "key": "Q", "title": "Which fan" }))
         .await;
     assert!(why.contains("owner_limit"), "{why}");
+}
+
+#[tokio::test]
+async fn test_wait_until_past_the_owner_limit_is_refused_and_opens_no_task() {
+    let s = Scratch::new().await;
+    s.db.seed(&format!(
+        "UPDATE projects SET skills = '{{\"owner_limit\": \"1\"}}' WHERE slug = '{SLUG}'"
+    ))
+    .await;
+    asked(&s, "B", "Kettle trips the fuse", json!({})).await;
+    let waiter = s.open("B", "Fan rattles").await["item"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    s.ok("start", json!({ "id": waiter })).await;
+    let why = s
+        .refused(
+            "wait",
+            json!({ "id": waiter, "until": "the vendor ships the part" }),
+        )
+        .await;
+    assert!(why.contains("owner_limit"), "{why}");
+    let (_, listed) = s
+        .send(
+            Method::GET,
+            &format!("/todo?project={SLUG}"),
+            "ownerkey",
+            None,
+        )
+        .await;
+    assert!(!listed.to_string().contains("vendor ships"), "{listed}");
 }
 
 #[tokio::test]
@@ -2113,6 +2209,40 @@ async fn test_moving_a_plan_before_its_child_is_refused_and_carry_moves_both() {
     assert!(
         child.iter().any(|e| note(e).contains("with A1")),
         "{child:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_moving_a_release_later_than_a_plan_holding_its_child_is_refused_and_carry_moves_both()
+{
+    let s = two_releases().await;
+    s.ok("releases", json!({ "action": "add", "name": "0.9.0" }))
+        .await;
+    filed(&s, "A", "1.0.0").await;
+    filed(&s, "T", "0.9.0").await;
+    s.ok("parent", json!({ "a": ["T1"], "plan": "A1" })).await;
+    assert_eq!(
+        s.refused(
+            "releases",
+            json!({ "action": "move", "name": "0.9.0", "to": "1.1.0" }),
+        )
+        .await,
+        "A1 (1.0.0) would be held by T1 (1.1.0), which ships later. Move T1 to 1.0.0, or move A1 to 1.1.0, or pass --carry to move them together, or --force."
+    );
+    assert_eq!(s.item("T1").await["release"], "0.9.0");
+    s.ok(
+        "releases",
+        json!({ "action": "move", "name": "0.9.0", "to": "1.1.0", "carry": true }),
+    )
+    .await;
+    assert_eq!(s.item("T1").await["release"], "1.1.0");
+    assert_eq!(s.item("A1").await["release"], "1.1.0");
+    let events = s.events("A1").await;
+    assert!(
+        events
+            .iter()
+            .any(|e| e["note"].as_str().is_some_and(|n| n.contains("with T1"))),
+        "{events:?}"
     );
 }
 
@@ -2759,4 +2889,186 @@ async fn test_remap_is_the_owners() {
     let s = Scratch::new().await;
     let (status, _) = s.post_as("agentkey", "remap", json!({ "map": [] })).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn test_reopening_an_item_that_closes_a_cycle_is_refused_with_its_path() {
+    let s = Scratch::new().await;
+    for title in ["Throw", "Trim", "Fire"] {
+        s.open("T", title).await;
+    }
+    s.ok("dep", json!({ "id": "T2", "on": ["T3"] })).await;
+    s.ok("dep", json!({ "id": "T1", "on": ["T2"] })).await;
+    s.ok(
+        "drop",
+        json!({ "id": "T2", "why": "waiting on nothing now" }),
+    )
+    .await;
+    s.ok("dep", json!({ "id": "T3", "on": ["T1"] })).await;
+    assert_eq!(
+        s.refused("reopen", json!({ "id": "T2", "why": "needed after all" }))
+            .await,
+        "T2 cannot be reopened: it would close the cycle T2 -> T3 -> T1 -> T2."
+    );
+    assert_eq!(s.item("T2").await["state"], "dropped");
+}
+
+#[tokio::test]
+async fn test_reopening_a_child_under_a_closed_plan_is_refused() {
+    let s = Scratch::new().await;
+    plan(&s).await;
+    s.open("B", "Port the proofer").await;
+    s.ok("parent", json!({ "a": ["B1"], "plan": "A1" })).await;
+    s.ok("close", json!({ "id": "B1", "resolution": "abc1234" }))
+        .await;
+    s.ok("close", json!({ "id": "A1", "resolution": "clean" }))
+        .await;
+    let why = s
+        .refused("reopen", json!({ "id": "B1", "why": "it slipped" }))
+        .await;
+    assert!(
+        why.contains("under A1, which is done") && why.contains("closed plan"),
+        "{why}"
+    );
+    assert_eq!(s.item("B1").await["state"], "done");
+}
+
+#[tokio::test]
+async fn test_reopening_a_child_in_an_earlier_release_than_its_plan_is_refused_unless_forced() {
+    let s = two_releases().await;
+    s.ok(
+        "new",
+        json!({ "key": "A", "title": "The pantry plan", "release": "1.0.0" }),
+    )
+    .await;
+    filed(&s, "B", "1.0.0").await;
+    s.ok("parent", json!({ "a": ["B1"], "plan": "A1" })).await;
+    s.ok("close", json!({ "id": "B1", "resolution": "abc1234" }))
+        .await;
+    s.ok("edit", json!({ "id": "A1", "release": "1.1.0" }))
+        .await;
+    s.ok("edit", json!({ "id": "B1", "release": "1.1.0" }))
+        .await;
+    s.ok("edit", json!({ "id": "A1", "release": "1.0.0" }))
+        .await;
+    let why = s
+        .refused("reopen", json!({ "id": "B1", "why": "it slipped" }))
+        .await;
+    assert_eq!(
+        why,
+        "A1 (1.0.0) would be held by B1 (1.1.0), which ships later. Move B1 to 1.0.0, or move A1 to 1.1.0, or pass --carry to move them together, or --force."
+    );
+    s.ok(
+        "reopen",
+        json!({ "id": "B1", "why": "it slipped", "force": true }),
+    )
+    .await;
+    assert_eq!(s.word("B1").await, "ready");
+}
+
+#[tokio::test]
+async fn test_reopening_an_item_of_a_shipped_release_names_a_release_that_has_not_shipped() {
+    let s = two_releases().await;
+    filed(&s, "T", "1.0.0").await;
+    s.ok("close", json!({ "id": "T1", "resolution": "fixed" }))
+        .await;
+    s.ok("releases", json!({ "action": "ship", "name": "1.0.0" }))
+        .await;
+    assert_eq!(
+        s.refused("reopen", json!({ "id": "T1", "why": "it came back" }))
+            .await,
+        "T1 is in 1.0.0, which has shipped: reopen it with --release current or one of 1.1.0, or \"\" for the backlog."
+    );
+    assert_eq!(s.item("T1").await["state"], "done");
+    assert_eq!(
+        s.refused(
+            "reopen",
+            json!({ "id": "T1", "why": "it came back", "release": "1.0.0" })
+        )
+        .await,
+        "1.0.0 has shipped: give current or one of 1.1.0"
+    );
+    s.ok(
+        "reopen",
+        json!({ "id": "T1", "why": "it came back", "release": "current" }),
+    )
+    .await;
+    assert_eq!(s.item("T1").await["release"], "1.1.0");
+    assert_eq!(next(&s, "work").await, vec!["T1"]);
+}
+
+#[tokio::test]
+async fn test_reopen_area_on_a_child_names_its_plan_and_on_a_plan_moves_its_subtree() {
+    let s = Scratch::new().await;
+    for area in ["kites", "ovens"] {
+        s.ok("areas", json!({ "action": "add", "name": area }))
+            .await;
+    }
+    s.ok(
+        "new",
+        json!({ "key": "A", "title": "The pantry plan", "area": "kites" }),
+    )
+    .await;
+    s.ok(
+        "new",
+        json!({ "key": "B", "title": "Port the proofer", "parent": "A1" }),
+    )
+    .await;
+    s.ok("close", json!({ "id": "B1", "resolution": "abc1234" }))
+        .await;
+    let why = s
+        .refused(
+            "reopen",
+            json!({ "id": "B1", "why": "it slipped", "area": "ovens" }),
+        )
+        .await;
+    assert_eq!(
+        why,
+        "B1 is under A1, and its area is A1's: edit the area of A1 instead"
+    );
+    assert_eq!(s.item("B1").await["state"], "done");
+    s.ok("close", json!({ "id": "A1", "resolution": "clean" }))
+        .await;
+    s.ok(
+        "reopen",
+        json!({ "id": "A1", "why": "again", "area": "ovens" }),
+    )
+    .await;
+    assert_eq!(s.item("A1").await["area"], "ovens");
+    assert_eq!(s.item("B1").await["area"], "ovens");
+}
+
+#[tokio::test]
+async fn test_a_drop_superseded_by_a_plan_its_dependant_is_under_is_refused_with_the_path() {
+    let s = Scratch::new().await;
+    plan(&s).await;
+    s.open("T", "Throw").await;
+    s.open("B", "Port the proofer").await;
+    s.ok("parent", json!({ "a": ["B1"], "plan": "A1" })).await;
+    s.ok("dep", json!({ "id": "B1", "on": ["T1"] })).await;
+    assert_eq!(
+        s.refused("drop", json!({ "id": "T1", "superseded_by": "A1" }))
+            .await,
+        "T1 cannot be superseded by A1: B1 would be held by A1, which closes the cycle B1 -> A1 -> B1."
+    );
+    assert_eq!(s.word("T1").await, "ready");
+}
+
+#[tokio::test]
+async fn test_a_drop_superseded_by_an_item_of_a_later_release_is_refused_unless_forced() {
+    let s = two_releases().await;
+    filed(&s, "T", "1.0.0").await;
+    filed(&s, "T", "1.0.0").await;
+    filed(&s, "T", "1.1.0").await;
+    s.ok("dep", json!({ "id": "T2", "on": ["T1"] })).await;
+    assert_eq!(
+        s.refused("drop", json!({ "id": "T1", "superseded_by": "T3" }))
+            .await,
+        "T2 (1.0.0) would be held by T3 (1.1.0), which ships later. Move T3 to 1.0.0, or move T2 to 1.1.0, or pass --force."
+    );
+    s.ok(
+        "drop",
+        json!({ "id": "T1", "superseded_by": "T3", "force": true }),
+    )
+    .await;
 }

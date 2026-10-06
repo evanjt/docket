@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use docket_client::{Api, Error};
 use docket_core::api::{LeadState, Machines};
 use docket_core::member::{Edge, Tie};
-use docket_core::metrics::ReleaseRow;
+use docket_core::metrics::{ReleaseRow, Whole};
 use docket_core::release::Listed;
 use docket_core::rows::{Derived, EventRow, ProjectRow, Row, Shown, Status};
 use serde_json::Value;
@@ -91,6 +91,11 @@ pub trait Source: Sync {
     /// # Errors
     /// As `projects`.
     fn releases(&self, slug: &str) -> Result<Vec<ReleaseRow>>;
+    /// The whole project's progress and its days, as the server works them out.
+    ///
+    /// # Errors
+    /// As `projects`.
+    fn whole(&self, slug: &str, days: u32) -> Result<Whole>;
     /// The integrity problems `check` finds, each with its `kind`.
     ///
     /// # Errors
@@ -169,6 +174,12 @@ impl Source for Http {
 
     fn releases(&self, slug: &str) -> Result<Vec<ReleaseRow>> {
         self.0.release_rows(slug).map_err(|e| e.to_string())
+    }
+
+    fn whole(&self, slug: &str, days: u32) -> Result<Whole> {
+        self.0
+            .project_metrics(slug, days)
+            .map_err(|e| e.to_string())
     }
 
     fn problems(&self, slug: &str) -> Result<Vec<Value>> {

@@ -1,6 +1,6 @@
 use super::{Board, PlanCount};
 use crate::member::{Edge, Tie};
-use crate::rows::{ItemRow, Progress, ProjectRow};
+use crate::rows::{ItemRow, ProjectRow};
 use crate::word::ItemType;
 
 /// A project whose stored key list is empty: every item is read by its type.
@@ -54,14 +54,8 @@ fn plan_with_grandchild(t3: &str) -> Board {
 fn test_a_plan_counts_everything_under_it_at_any_depth() {
     let b = plan_with_grandchild("open");
     let a1 = b.get("A1").unwrap();
-    assert_eq!(
-        b.progress(a1),
-        Progress {
-            done: 2,
-            total: 3,
-            live: 0
-        }
-    );
+    let g = b.held_progress(a1);
+    assert_eq!((g.done, g.dropped, g.total, g.live), (2, 0, 3, 0));
     assert!(!b.due(a1));
 }
 
@@ -77,51 +71,6 @@ fn test_a_claimed_plan_is_not_due() {
     let mut b = plan_with_grandchild("done");
     b.items[0].claim_branch = Some("audit/a1".into());
     assert!(!b.due(b.get("A1").unwrap()));
-}
-
-#[test]
-fn test_area_progress_counts_open_and_closed_items_per_area_in_position_order() {
-    use crate::area::{Area, Listed};
-    let area = |name: &str, position: i64, priority: Option<&str>| Area {
-        name: name.into(),
-        description: Some(format!("{name} work")),
-        position,
-        priority: priority.map(String::from),
-        history: false,
-    };
-    let mut p = project();
-    p.areas = Listed {
-        rows: vec![
-            (1, area("lanterns", 2, Some("high"))),
-            (2, area("kites", 1, None)),
-            (3, area("sails", 3, None)),
-        ],
-    };
-    let mut items = vec![
-        item(1, "T1", "done"),
-        item(2, "T2", "open"),
-        item(3, "T3", "dropped"),
-        item(4, "T4", "open"),
-        item(5, "T5", "open"),
-    ];
-    for (i, area) in items.iter_mut().zip([1, 1, 1, 2, 2]) {
-        i.area_id = Some(area);
-    }
-    items[4].claim_branch = Some("b".into());
-    let b = Board::new(p, items, Vec::new());
-    let got: Vec<(String, Option<String>, u64, u64, u64)> = b
-        .area_progress()
-        .into_iter()
-        .map(|a| (a.name, a.priority, a.open, a.done, a.live))
-        .collect();
-    assert_eq!(
-        got,
-        [
-            ("kites".into(), None, 2, 0, 1),
-            ("lanterns".into(), Some("high".into()), 1, 1, 0),
-            ("sails".into(), None, 0, 0, 0),
-        ]
-    );
 }
 
 #[test]
@@ -160,4 +109,15 @@ fn test_a_plan_whose_tickets_are_all_closed_is_not_listed_as_under_way() {
     assert!(closed.plans_under_way().is_empty());
     let open = plan_with_grandchild("open");
     assert_eq!(open.plans_under_way().len(), 1);
+}
+
+#[test]
+fn test_a_dropped_member_is_counted_apart_by_the_board_as_by_the_metrics() {
+    let b = plan_with_grandchild("dropped");
+    let g = b.held_progress(b.get("A1").unwrap());
+    assert_eq!((g.done, g.dropped, g.total, g.counted), (2, 1, 3, 2));
+    assert_eq!(
+        g,
+        crate::metrics::progress(&b.held_subjects(b.get("A1").unwrap()))
+    );
 }

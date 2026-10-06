@@ -14,6 +14,7 @@ pub struct Releases<'a> {
     pub name: Option<&'a str>,
     pub to: Option<&'a str>,
     pub move_open_to: Option<&'a str>,
+    pub carry: bool,
     pub target: Option<&'a str>,
     pub note: Option<&'a str>,
     pub all: bool,
@@ -154,6 +155,7 @@ pub fn releases(ctx: &mut Ctx, a: &Releases) -> Result<i32> {
         action: action.to_string(),
         name: name.to_string(),
         to: a.to.or(a.move_open_to).map(str::to_string),
+        carry: a.carry,
         target_date: a.target.map(str::to_string),
         note: a.note.map(str::to_string),
     };

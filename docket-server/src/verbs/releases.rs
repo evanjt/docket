@@ -13,6 +13,7 @@ use docket_core::release::{self, Listed, Release, Row};
 
 use crate::auth::Caller;
 use crate::store::sql;
+use crate::verbs::graph::Order;
 use crate::verbs::{Call, Failure, require_owner};
 
 const ROWS: &str = "SELECT id, name, position, target_date, shipped_at, note FROM releases \
@@ -114,12 +115,12 @@ pub async fn releases(
                 )));
             };
             let from = existing(&listed, &name)?;
-            move_open(&mut call, from, &name, to).await?
+            move_open(&mut call, from, &name, to, req.carry).await?
         }
         "ship" => {
             let from = existing(&listed, &name)?;
             let moved = match req.to.as_deref() {
-                Some(to) => move_open(&mut call, from, &name, to).await?,
+                Some(to) => move_open(&mut call, from, &name, to, req.carry).await?,
                 None => Vec::new(),
             };
             let open = open_in(&call, from).await?;
@@ -211,6 +212,7 @@ async fn move_open(
     from: i64,
     from_name: &str,
     to: &str,
+    carry: bool,
 ) -> Result<Vec<String>, Failure> {
     let to_id = release_id(&call.tx.conn, &call.slug, to).await?;
     if to_id == Some(from) {
@@ -222,6 +224,22 @@ async fn move_open(
         .await?
         .unwrap_or_else(|| "the backlog".to_string());
     let ids = open_in(call, from).await?;
+    let mut rids = Vec::with_capacity(ids.len());
+    for id in &ids {
+        rids.push(call.item(id).await?.rid);
+    }
+    let order = Order::load(&call.tx.conn, &call.slug).await?;
+    if carry {
+        let note = format!("release {to_name} (carried with {})", ids.join(", "));
+        for (rid, _, release) in order.carried_all(&rids, to_id) {
+            call.tx.update(rid, &[Field::ReleaseId(release)]).await?;
+            call.tx
+                .event(&call.slug, Some(rid), "edited", Some(&note), None, None)
+                .await?;
+        }
+    } else if !call.ctx.force {
+        order.refuse(&order.moving_all(&rids, to_id))?;
+    }
     let note = format!("release {from_name} to {to_name}");
     for id in &ids {
         let r = call.item(id).await?;

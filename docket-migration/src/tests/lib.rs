@@ -2,7 +2,7 @@ use super::*;
 
 use crate::scratch::Scratch;
 
-const MIGRATIONS: [&str; 26] = [
+const MIGRATIONS: [&str; 27] = [
     "m20261001_000001_schema",
     "m20261002_000001_machines_and_leads",
     "m20261005_000001_owner_facts",
@@ -29,6 +29,7 @@ const MIGRATIONS: [&str; 26] = [
     "m20261006_213453_drop_old_columns",
     "m20261006_220000_remapped_events",
     "m20261006_233349_items_area_not_null",
+    "m20261006_235900_outcome_ended",
 ];
 
 /// The migrations to apply to stand just before the one named.
@@ -183,7 +184,7 @@ async fn test_the_assignments_migration_rebuilds_each_items_attempts_from_its_ev
         MIGRATIONS[MIGRATIONS
             .iter()
             .position(|m| *m == "m20261005_000004_assignments")
-            .unwrap()..MIGRATIONS.len() - 1]
+            .unwrap()..MIGRATIONS.len() - 2]
     );
     let rows = s
         .db
@@ -803,6 +804,59 @@ INSERT INTO links (rid, kind, to_rid) VALUES (2, 'related', 1), (1, 'related', 2
 }
 
 #[tokio::test]
+async fn test_every_item_left_without_an_area_goes_to_unsorted_before_the_column_is_required() {
+    let s = Scratch::bare(2).await;
+    Migrator::up(&s.db, Some(steps_before("m20261006_163830_labels")))
+        .await
+        .unwrap();
+    s.seed(
+        r#"
+INSERT INTO projects (slug, keys, created_at, updated_at) VALUES ('test/proj',
+  '[{"key": "T", "kind": "work"}, {"key": "CID", "kind": "idea"}]', 'c', 'u');
+INSERT INTO items (rid, project, key, num, title, body, state, turn, opened_at, updated_at) VALUES
+  (1, 'test/proj', 'CID', 1, 'Every stall glows', '', 'open', 'agent', 'o', 'u'),
+  (2, 'test/proj', 'T', 1, 'fold the frames', '', 'open', 'agent', 'o', 'u'),
+  (3, 'test/proj', 'T', 2, 'sweep the stalls', '', 'open', 'agent', 'o', 'u');
+UPDATE items SET state='done', turn=NULL, resolution='swept' WHERE rid=3;
+"#,
+    )
+    .await;
+    Migrator::up(&s.db, None).await.unwrap();
+    let placed = pairs(
+        &s,
+        "SELECT i.id, a.name || ' ' || a.history::text FROM items i JOIN areas a ON a.id=i.area_id \
+         ORDER BY i.id",
+    )
+    .await;
+    let want = [
+        ("CID1", "unsorted true"),
+        ("T1", "unsorted true"),
+        ("T2", "unsorted true"),
+    ];
+    assert_eq!(placed, want.map(|(a, b)| (a.to_string(), b.to_string())));
+    let moved = pairs(
+        &s,
+        "SELECT i.id, e.note FROM events e JOIN items i ON i.rid=e.rid \
+         WHERE e.host='migration' AND e.kind='edited' ORDER BY i.id",
+    )
+    .await;
+    assert_eq!(
+        moved,
+        [(
+            "T1".to_string(),
+            "placed in unsorted: it held no area".to_string()
+        )]
+    );
+    let nullable = pairs(
+        &s,
+        "SELECT column_name, is_nullable FROM information_schema.columns \
+         WHERE table_name='items' AND column_name='area_id'",
+    )
+    .await;
+    assert_eq!(nullable, [("area_id".to_string(), "NO".to_string())]);
+}
+
+#[tokio::test]
 async fn test_publications_read_back_newest_first_and_a_published_sha_is_recorded_once() {
     let s = Scratch::new(2).await;
     let (old, new, work) = ("a".repeat(40), "b".repeat(40), "c".repeat(40));
@@ -1053,7 +1107,7 @@ async fn test_the_drop_refuses_while_an_item_holds_a_sync_conflict_and_names_it(
 }
 
 #[tokio::test]
-async fn test_the_area_column_refuses_an_unplaced_item_by_name_and_then_an_insert_with_none() {
+async fn test_the_area_column_refuses_an_insert_with_none() {
     let s = Scratch::bare(2).await;
     Migrator::up(
         &s.db,
@@ -1065,15 +1119,9 @@ async fn test_the_area_column_refuses_an_unplaced_item_by_name_and_then_an_inser
         "INSERT INTO projects (slug, created_at, updated_at) VALUES ('bakery/oven', 'c', 'u'); \
          INSERT INTO areas (id, project, name, position) VALUES (1, 'bakery/oven', 'crust', 0); \
          INSERT INTO items (rid, project, key, num, title, state, area_id, opened_at, updated_at) VALUES \
-           (1, 'bakery/oven', 'T', 1, 'Proof the dough', 'open', 1, 'o', 'u'), \
-           (2, 'bakery/oven', 'T', 2, 'Score the loaf', 'open', NULL, 'o', 'u')",
+           (1, 'bakery/oven', 'T', 1, 'Proof the dough', 'open', 1, 'o', 'u')",
     )
     .await;
-    let refused = migrate(&s.db).await.unwrap_err().to_string();
-    assert!(refused.contains("bakery/oven T2"), "{refused}");
-    assert!(!refused.contains("T1"), "{refused}");
-
-    s.seed("UPDATE items SET area_id=1 WHERE rid=2").await;
     migrate(&s.db).await.unwrap();
     let none =
         s.db.execute_unprepared(

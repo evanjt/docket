@@ -69,10 +69,10 @@ pub async fn metrics(
 ) -> Result<Json<Value>, Failure> {
     if !matches!(
         q.scope.as_deref(),
-        None | Some("release" | "plan" | "releases")
+        None | Some("release" | "plan" | "releases" | "project")
     ) {
         return Err(Failure::Invalid(
-            "scope: choose from release, plan, releases".into(),
+            "scope: choose from release, plan, releases, project".into(),
         ));
     }
     let model = project_model(&db, &q.project).await?;
@@ -100,17 +100,17 @@ pub async fn metrics(
         })));
     }
     let plan = q.scope.as_deref() == Some("plan");
+    let whole = q.scope.as_deref() == Some("project");
     let given = q.release.as_deref().unwrap_or(release::CURRENT);
-    let name = release::resolve(&listed.all(), given)?.unwrap_or_default();
-    let held: HashSet<i64> = if plan {
-        let id = q
-            .plan
-            .as_deref()
-            .ok_or_else(|| Failure::Invalid("plan: name the plan to read".into()))?;
-        let item = board
-            .get(id)
-            .ok_or_else(|| Failure::NotFound(format!("no item {id}")))?;
-        board.holds(item)
+    let name = if whole || plan {
+        String::new()
+    } else {
+        release::resolve(&listed.all(), given)?.unwrap_or_default()
+    };
+    let held = if whole {
+        board.items.iter().map(|i| i.rid).collect()
+    } else if plan {
+        plan_rids(&board, q.plan.as_deref())?
     } else {
         let id = listed.id(&name);
         board
@@ -139,15 +139,19 @@ pub async fn metrics(
         .collect();
     let mut out = json!({
         "project": q.project,
-        "scope": if plan { "plan" } else { "release" },
+        "scope": q.scope.as_deref().unwrap_or("release"),
         "progress": metrics::progress(&items),
         "throughput": metrics::throughput(&items, now, days),
+        "daily": metrics::daily(&items, now, days),
         "cycle_time": metrics::cycle_time(&items),
         "lead_time": metrics::lead_time(&items),
         "time_spent": metrics::time_spent(&spans, now),
         "cost": metrics::cost(&spans, now, &prices),
     });
-    if plan {
+    if whole {
+        let areas = crate::verbs::areas::listed(&db, &q.project).await?;
+        out["areas"] = json!(metrics::area_progress(&areas, &items));
+    } else if plan {
         out["plan"] = json!(q.plan);
     } else {
         out["release"] = json!(name);
@@ -159,6 +163,15 @@ pub async fn metrics(
         }
     }
     Ok(Json(out))
+}
+
+/// The rids a plan holds at any depth.
+fn plan_rids(board: &Board, plan: Option<&str>) -> Result<HashSet<i64>, Failure> {
+    let id = plan.ok_or_else(|| Failure::Invalid("plan: name the plan to read".into()))?;
+    let item = board
+        .get(id)
+        .ok_or_else(|| Failure::NotFound(format!("no item {id}")))?;
+    Ok(board.holds(item))
 }
 
 /// The releases not yet shipped, with their place in the whole order.
@@ -217,6 +230,9 @@ async fn subjects(
                 opened_at: at(&i.opened_at),
                 closed_at,
                 started_at,
+                claimed: i.claim_branch.is_some(),
+                area: i.area_id,
+                holder: board.subject(i).holder,
             };
             (i.rid, subject)
         })

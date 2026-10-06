@@ -171,7 +171,7 @@ back with the note. The plan stays open until its tickets close and its audit
 is due: `close` refuses while it has open work.
 
     docket collect A3
-    docket --branch <the job's branch> unclaim A3 "<the NOTE line>"
+    docket --branch <the job's branch> unclaim A3 --outcome ended "<the NOTE line>"
 
 **DONE, for an investigation or a decided question.** Merge any commit as for a
 ticket, then close it with the note, or for a decided question, with what it
@@ -186,12 +186,12 @@ item and clear the job:
 
 **A usage limit.** `docket collect` prints `usage limit: RUNNER on MACHINE until
 RESET` and the server records it, so `docket machines` and the next dispatch
-read it. Clear the job and give the claim back with that reason. It is not
+read it. Clear the job and give the claim back with the outcome `ended` and that reason. It is not
 a failed job: it neither counts toward the second failure of the item nor
 toward the stop below.
 
     docket collect T14 --discard
-    docket --branch <branch> unclaim T14 "RUNNER usage limit until RESET"
+    docket --branch <branch> unclaim T14 --outcome ended "RUNNER usage limit until RESET"
 
 **FAILED, or lost, or no report.** Read why (`docket jobs`, and the job's log
 on its machine with `docket job log NAME`). Clear it with `docket collect T14

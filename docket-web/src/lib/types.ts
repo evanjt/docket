@@ -61,10 +61,41 @@ export interface Cite {
   kind: string;
 }
 
+/** Progress as `/metrics` counts it: dropped items stand apart from the done and the open. */
 export interface Progress {
   done: number;
+  dropped: number;
   total: number;
+  /** Every item but the dropped: what a bar is done of. */
+  counted: number;
+  /** Every item neither done nor dropped. */
+  remaining: number;
   live: number;
+}
+
+/** Items opened, closed and dropped on one UTC day. */
+export interface Flow {
+  date: string;
+  opened: number;
+  closed: number;
+  dropped: number;
+}
+
+/** One area with its open and done items, as `/metrics?scope=project` counts them. */
+export interface AreaProgress {
+  name: string;
+  description: string | null;
+  priority: string | null;
+  open: number;
+  done: number;
+  live: number;
+}
+
+/** The whole project as `/metrics?scope=project` serves it. */
+export interface Whole {
+  progress: Progress;
+  daily: Flow[];
+  areas: AreaProgress[];
 }
 
 export interface Shown extends Row {

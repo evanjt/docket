@@ -194,13 +194,7 @@ pub struct Cite {
     pub kind: String,
 }
 
-/// How far a package is: members done of all, and how many are claimed now.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Progress {
-    pub done: u64,
-    pub total: u64,
-    pub live: u64,
-}
+pub use crate::metrics::Progress;
 
 /// One item as `/show` prints it.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

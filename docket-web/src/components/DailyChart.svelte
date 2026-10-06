@@ -1,7 +1,7 @@
 <script lang="ts">
-  import type { Day } from '../lib/flow';
+  import type { Flow } from '../lib/types';
 
-  let { days }: { days: Day[] } = $props();
+  let { days }: { days: Flow[] } = $props();
 
   let hover = $state<number | null>(null);
   const top = $derived(Math.max(1, ...days.map((d) => Math.max(d.opened, d.closed + d.dropped))));
@@ -19,14 +19,14 @@
     <span><i class="closed"></i>Closed or dropped</span>
     <span class="readout" aria-live="polite">
       {#if shown}
-        {label(shown.day)}: {shown.opened} opened, {shown.closed} closed{shown.dropped ? `, ${shown.dropped} dropped` : ''}
+        {label(shown.date)}: {shown.opened} opened, {shown.closed} closed{shown.dropped ? `, ${shown.dropped} dropped` : ''}
       {:else}
         {totals.o} opened and {totals.c} closed over {days.length} days
       {/if}
     </span>
   </div>
   <div class="plot" role="img" aria-label="Opened and closed items per day">
-    {#each days as d, i (d.day)}
+    {#each days as d, i (d.date)}
       <div
         class="day"
         class:hover={hover === i}
@@ -38,7 +38,7 @@
           <span class="bar opened" style="height: {(d.opened / top) * 100}%"></span>
           <span class="bar closed" style="height: {((d.closed + d.dropped) / top) * 100}%"></span>
         </div>
-        <span class="tick">{i % 2 === days.length % 2 || days.length <= 8 ? label(d.day) : ''}</span>
+        <span class="tick">{i % 2 === days.length % 2 || days.length <= 8 ? label(d.date) : ''}</span>
       </div>
     {/each}
   </div>
@@ -46,7 +46,7 @@
     <caption>Opened and closed per day</caption>
     <thead><tr><th>Day</th><th>Opened</th><th>Closed</th><th>Dropped</th></tr></thead>
     <tbody>
-      {#each days as d (d.day)}<tr><td>{d.day}</td><td>{d.opened}</td><td>{d.closed}</td><td>{d.dropped}</td></tr>{/each}
+      {#each days as d (d.date)}<tr><td>{d.date}</td><td>{d.opened}</td><td>{d.closed}</td><td>{d.dropped}</td></tr>{/each}
     </tbody>
   </table>
 </figure>

@@ -8,7 +8,7 @@ use docket_core::api::{LeadState, Machines};
 use docket_core::flow::tally;
 use docket_core::machine::Machine;
 use docket_core::member::{Edge, Tie};
-use docket_core::metrics::ReleaseRow;
+use docket_core::metrics::{ReleaseRow, Whole};
 use docket_core::release::{Listed, Release};
 use docket_core::rows::{Derived, EventRow, ItemRow, Progress, ProjectRow, Row, Shown, Status};
 use docket_core::word::Kind;
@@ -255,6 +255,19 @@ impl Source for Fixture {
         Ok(self.owner.lock().unwrap().iter().cloned().collect())
     }
 
+    fn whole(&self, _slug: &str, _days: u32) -> Result<Whole> {
+        Ok(Whole {
+            progress: Progress {
+                done: 2,
+                total: 9,
+                counted: 9,
+                remaining: 7,
+                ..Progress::default()
+            },
+            ..Whole::default()
+        })
+    }
+
     fn releases(&self, _slug: &str) -> Result<Vec<ReleaseRow>> {
         Ok(self.releases.lock().unwrap().clone())
     }
@@ -391,7 +404,7 @@ impl Source for Fixture {
             })
             .collect();
         let children = b.children(i.rid).iter().map(|c| c.id.clone()).collect();
-        let progress: Option<Progress> = (b.kind(i) == Kind::Package).then(|| b.progress(i));
+        let progress: Option<Progress> = (b.kind(i) == Kind::Package).then(|| b.held_progress(i));
         Ok(Shown {
             row: Self::row(&b, i),
             related,

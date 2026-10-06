@@ -8,7 +8,7 @@ const TURNS: [&str; 2] = docket_core::assignment::TURNS;
 const STATES: [&str; 4] = ["open", "done", "dropped", "any"];
 const RUNNERS: [&str; 3] = docket_core::assignment::CLAIM_RUNNERS;
 const ROLES: [&str; 5] = docket_core::assignment::ROLES;
-const OUTCOMES: [&str; 5] = docket_core::assignment::OUTCOMES;
+const OUTCOMES: [&str; 6] = docket_core::assignment::OUTCOMES;
 const NEEDS: [&str; 4] = docket_core::queue::NEEDS;
 const WAITS: [&str; 2] = ["item", "condition"];
 const QUEUE_ROLES: [&str; 3] = ["plan", "work", "audit"];
@@ -240,7 +240,7 @@ pub enum Cmd {
         #[arg(long)]
         model: Option<String>,
         /// how the attempt ended, recorded on its assignment
-        #[arg(long, value_parser = OUTCOMES)]
+        #[arg(long, value_parser = OUTCOMES, required = true)]
         outcome: Option<String>,
         #[arg(long)]
         force: bool,
@@ -278,6 +278,15 @@ pub enum Cmd {
         /// the area it reopens in, needed when its own holds closed items only
         #[arg(long)]
         area: Option<String>,
+        /// the release it reopens in: current, a release not shipped, or "" for the backlog; needed when its own has shipped
+        #[arg(long)]
+        release: Option<String>,
+        /// with --release: move too what the reopen would leave out of order
+        #[arg(long)]
+        carry: bool,
+        /// reopen although it would leave items out of release order
+        #[arg(long)]
+        force: bool,
     },
     /// park an item behind another, or until a condition, which becomes a task for the owner
     #[command(alias = "block")]
@@ -385,6 +394,9 @@ pub enum Cmd {
         /// ship: move what is still open there first; without it ship refuses while any is open
         #[arg(long = "move-open-to", value_name = "RELEASE")]
         move_open_to: Option<String>,
+        /// move and ship: move too what the move would leave out of order, dependants and plans later, dependencies and children earlier
+        #[arg(long)]
+        carry: bool,
         /// add: the date it is meant to ship
         #[arg(long, value_name = "DATE")]
         target: Option<String>,

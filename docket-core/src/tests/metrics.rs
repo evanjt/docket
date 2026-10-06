@@ -22,6 +22,9 @@ fn subject(
         opened_at: day(opened),
         closed_at: closed.map(day),
         started_at: started.map(day),
+        claimed: false,
+        area: None,
+        holder: false,
     }
 }
 
@@ -337,4 +340,137 @@ fn test_release_rows_count_each_word_apart_with_held_later_and_pace() {
     assert_eq!(first.forecast.target.as_deref(), Some("2030-01-01"));
     let second = &rows[1];
     assert_eq!((second.closed, second.open, second.held_later), (0, 1, 0));
+}
+
+#[test]
+fn test_a_plan_with_one_done_and_one_dropped_member_reads_both_apart() {
+    let members = [
+        Subject::member("T1", "done", false),
+        Subject::member("T2", "dropped", false),
+        Subject::member("T3", "in progress", true),
+    ];
+    let got = progress(&members[..2]);
+    assert_eq!(
+        (got.done, got.dropped, got.total, got.counted),
+        (1, 1, 2, 1)
+    );
+    assert!(got.settled());
+    let all = progress(&members);
+    assert_eq!(
+        (all.live, all.remaining, all.open["in progress"]),
+        (1, 1, 1)
+    );
+    assert!(!all.settled());
+}
+
+#[test]
+fn test_area_progress_leaves_holders_and_dropped_items_out_in_position_order() {
+    use crate::area::{Area, Listed};
+    let area = |name: &str, position: i64| Area {
+        name: name.into(),
+        description: None,
+        position,
+        priority: None,
+        history: false,
+    };
+    let areas = Listed {
+        rows: vec![(1, area("lanterns", 2)), (2, area("kites", 1))],
+    };
+    let mut items = vec![
+        Subject::member("T1", "done", false),
+        Subject::member("T2", "ready", true),
+        Subject::member("T3", "dropped", false),
+        Subject::member("A1", "under way", false),
+        Subject::member("T4", "ready", false),
+    ];
+    for (i, a) in items.iter_mut().zip([1, 1, 1, 1, 2]) {
+        i.area = Some(a);
+    }
+    items[3].holder = true;
+    let got: Vec<(String, u64, u64, u64)> = area_progress(&areas, &items)
+        .into_iter()
+        .map(|a| (a.name, a.open, a.done, a.live))
+        .collect();
+    assert_eq!(
+        got,
+        [("kites".into(), 1, 0, 0), ("lanterns".into(), 1, 1, 1)]
+    );
+}
+
+#[test]
+fn test_daily_counts_opened_done_and_dropped_per_day_with_zeros() {
+    let items = [
+        subject("T1", "done", 98, None, Some(99)),
+        subject("T2", "dropped", 99, None, Some(99)),
+        subject("T3", "ready", 99, None, None),
+    ];
+    let got: Vec<(u64, u64, u64)> = daily(&items, NOW, 3)
+        .into_iter()
+        .map(|d| (d.opened, d.closed, d.dropped))
+        .collect();
+    assert_eq!(got, [(1, 0, 0), (2, 1, 1), (0, 0, 0)]);
+}
+
+/// Every source file under `dir` with the extension, as a path and its text.
+fn sources(dir: &std::path::Path, ext: &str, out: &mut Vec<(std::path::PathBuf, String)>) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            if path
+                .file_name()
+                .is_some_and(|n| n != "node_modules" && n != "target")
+            {
+                sources(&path, ext, out);
+            }
+        } else if path.extension().is_some_and(|e| e == ext) {
+            let text = std::fs::read_to_string(&path).unwrap();
+            out.push((path, text));
+        }
+    }
+}
+
+#[test]
+fn test_progress_and_throughput_are_worked_out_only_in_the_metrics_module() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let mut found = Vec::new();
+    for krate in std::fs::read_dir(&root).unwrap() {
+        let src = krate.unwrap().path().join("src");
+        if src.is_dir() {
+            sources(&src, "rs", &mut found);
+        }
+    }
+    let mut owners: Vec<String> = Vec::new();
+    for (path, text) in &found {
+        if path.ends_with("docket-core/src/metrics.rs") {
+            continue;
+        }
+        for line in text.lines().map(str::trim_start) {
+            let name = line
+                .trim_start_matches("pub(crate) ")
+                .trim_start_matches("pub ")
+                .strip_prefix("fn ");
+            if let Some(name) = name.and_then(|n| n.split(['(', '<']).next())
+                && matches!(name, "daily" | "progress" | "area_progress")
+            {
+                owners.push(format!("{} defines fn {name}", path.display()));
+            }
+        }
+    }
+    let mut web = Vec::new();
+    sources(&root.join("docket-web/src/lib"), "ts", &mut web);
+    for (path, text) in &web {
+        for line in text.lines().map(str::trim_start) {
+            let name = line
+                .trim_start_matches("export ")
+                .strip_prefix("function ")
+                .and_then(|n| n.split(['(', '<']).next());
+            if matches!(
+                name,
+                Some("daily" | "progress" | "areaCounts" | "areaProgress")
+            ) {
+                owners.push(format!("{} defines {line}", path.display()));
+            }
+        }
+    }
+    assert!(owners.is_empty(), "{owners:#?}");
 }

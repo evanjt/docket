@@ -103,6 +103,8 @@ pub struct ProjectData {
     pub machines: Vec<Machine>,
     /// The problems `check` finds; none when the route could not be read.
     pub problems: Vec<serde_json::Value>,
+    /// The whole project's progress, as the server works it out.
+    pub progress: docket_core::metrics::Progress,
     /// Opened and closed per day for the last week, oldest first.
     pub trend: Vec<(u64, u64)>,
 }

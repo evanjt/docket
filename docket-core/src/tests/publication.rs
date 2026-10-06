@@ -49,11 +49,11 @@ fn test_a_squash_is_due_for_an_uncovered_finished_plan_or_many_landings() {
 #[test]
 fn test_the_push_ask_names_the_command() {
     assert_eq!(
-        push_command("published", "origin/main"),
-        "git push origin published:main"
+        push_command("shelf", "upstream/trunk"),
+        "git push upstream shelf:trunk"
     );
     assert_eq!(
-        push_title("published", "origin/main"),
-        "Push published to origin/main"
+        push_title("shelf", "upstream/trunk"),
+        "Push shelf to upstream/trunk"
     );
 }

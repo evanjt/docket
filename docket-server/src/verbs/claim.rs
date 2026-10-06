@@ -2,7 +2,7 @@
 
 use axum::Json;
 use axum::extract::{Extension, State};
-use sea_orm::DatabaseConnection;
+use sea_orm::{ConnectionTrait, DatabaseConnection};
 use serde_json::{Map, Value as Json_, json};
 
 use docket_core::api::{
@@ -19,7 +19,12 @@ use docket_core::word::Kind;
 use crate::auth::Caller;
 use crate::store::scalar;
 use crate::verbs::areas;
-use crate::verbs::graph::{hold_waiters, live_overlaps, open_under, release_waiters, wait_of};
+use crate::verbs::fields::refuse_child_area;
+use crate::verbs::graph::{
+    Order, hold_waiters, live_overlaps, open_under, refuse_reopen_cycle, refuse_successor,
+    release_list, release_waiters, wait_of,
+};
+use crate::verbs::releases::{name_of, release_id};
 use crate::verbs::view::{brief, item_view};
 use crate::verbs::{Call, Failure, ROLES, RUNNERS, choice, given};
 
@@ -151,7 +156,7 @@ async fn started(call: &Call, row: &Item) -> Result<Started, Failure> {
 /// Give a claim back.
 ///
 /// # Errors
-/// 409 when the item is not claimed, or held by another branch.
+/// 409 when the item is not claimed, or held by another branch, or the release names no outcome.
 pub async fn release(
     State(db): State<DatabaseConnection>,
     Extension(caller): Extension<Caller>,
@@ -161,11 +166,15 @@ pub async fn release(
     let mut call = Call::begin(&db, &caller, &req.common).await?;
     let r = call.item(&req.id).await?;
     rules::release(&r, &call.ctx)?;
+    let Some(outcome) = given(req.outcome.as_deref()) else {
+        return Err(Failure::Refused(format!(
+            "an unclaim names its outcome: one of {}",
+            OUTCOMES.join(", ")
+        )));
+    };
     let row = call.tx.update(r.rid, &[]).await?;
     let mut data = run_facts(req.runner.as_deref(), req.model.as_deref());
-    if let Some(outcome) = given(req.outcome.as_deref()) {
-        data.insert("outcome".into(), json!(outcome));
-    }
+    data.insert("outcome".into(), json!(outcome));
     if req.bounce {
         data.insert("bounce".into(), json!(true));
     }
@@ -349,6 +358,9 @@ pub async fn drop(
         (None, None) => None,
     };
     let cols = rules::drop(&r, &call.ctx, why.as_deref(), sup.as_ref().map(|s| s.rid))?;
+    if let Some(s) = &sup {
+        refuse_successor(&call.tx, &call.project, &r, s, call.ctx.force).await?;
+    }
     call.tx.update(r.rid, &cols).await?;
     call.tx
         .event(
@@ -370,6 +382,37 @@ pub async fn drop(
     Ok(Json(out))
 }
 
+/// The release an item reopens in: the one given, or its own while that has not shipped.
+async fn reopen_release<C: ConnectionTrait>(
+    c: &C,
+    slug: &str,
+    r: &Item,
+    given: Option<&str>,
+) -> Result<Option<i64>, Failure> {
+    if let Some(given) = given {
+        return release_id(c, slug, given).await;
+    }
+    let releases = release_list(c, slug).await?;
+    if let Some(shipped) = releases
+        .name(r.release_id)
+        .filter(|n| !releases.open.contains(&(*n).to_string()))
+    {
+        let choices = if releases.open.is_empty() {
+            "\"\" for the backlog".to_string()
+        } else {
+            format!(
+                "current or one of {}, or \"\" for the backlog",
+                releases.open.join(" ")
+            )
+        };
+        return Err(Failure::Refused(format!(
+            "{} is in {shipped}, which has shipped: reopen it with --release {choices}.",
+            r.id
+        )));
+    }
+    Ok(r.release_id)
+}
+
 /// A done or dropped item back to open, with a reason.
 ///
 /// # Errors
@@ -382,11 +425,25 @@ pub async fn reopen(
     let mut call = Call::begin(&db, &caller, &req.common).await?;
     let r = call.item(&req.id).await?;
     let mut cols = rules::reopen(&r, given(Some(&req.why)))?;
+    if let Some(plan) = r.parent_rid {
+        let plan = call.tx.fresh(plan).await?;
+        if plan.state != "open" {
+            return Err(Failure::Refused(format!(
+                "{} is under {}, which is {}, and a closed plan holds no open children: reopen {} first, or put {} under an open plan.",
+                r.id, plan.id, plan.state, plan.id, r.id
+            )));
+        }
+    }
+    let release = reopen_release(&call.tx.conn, &call.slug, &r, req.release.as_deref()).await?;
+    if req.release.is_some() {
+        cols.push(Field::ReleaseId(release));
+    }
     let listed = areas::listed(&call.tx.conn, &call.slug).await?;
     let own = listed.name(r.area_id).map(str::to_string);
     let given = req.area.as_deref().map(str::trim).filter(|a| !a.is_empty());
     let moved = if let Some(given) = given {
         let to = areas::area_id(&call.tx.conn, &call.slug, given).await?;
+        refuse_child_area(&call.tx.conn, &r, to).await?;
         if let Some(to) = to {
             areas::open_into(&call.tx.conn, &call.slug, to).await?;
         }
@@ -413,12 +470,34 @@ pub async fn reopen(
         cols.push(Field::AreaId(Some(to)));
     }
     call.tx.update(r.rid, &cols).await?;
+    refuse_reopen_cycle(&call.tx.conn, &call.project, &r).await?;
+    let mut order = Order::load(&call.tx.conn, &call.slug).await?;
+    if req.carry && !call.ctx.force {
+        let label = name_of(&call.tx.conn, release).await?;
+        let note = format!(
+            "release {} (carried with {})",
+            label.as_deref().unwrap_or("the backlog"),
+            r.id
+        );
+        for (rid, _, to) in order.carried(r.rid, release) {
+            call.tx.update(rid, &[Field::ReleaseId(to)]).await?;
+            call.tx
+                .event(&call.slug, Some(rid), "edited", Some(&note), None, None)
+                .await?;
+        }
+        order = Order::load(&call.tx.conn, &call.slug).await?;
+    }
+    if !call.ctx.force {
+        order.refuse_around(r.rid)?;
+    }
     if let Some(to) = moved {
         let name = areas::name_of(&call.tx.conn, Some(to)).await?;
         let why = format!("area {}", areas::label(name.as_deref()));
         call.tx
             .event(&call.slug, Some(r.rid), "edited", Some(&why), None, None)
             .await?;
+        let carried = format!("{} (with {})", why, r.id);
+        areas::carry_under(&mut call.tx, &call.slug, r.rid, Some(to), &carried).await?;
     }
     call.tx
         .event(

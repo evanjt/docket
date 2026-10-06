@@ -162,7 +162,7 @@ back with the note. The plan stays open until its tickets close and its audit
 is due: `close` refuses while it has open work.
 
     docket collect A3
-    docket --branch <the job's branch> unclaim A3 "<the NOTE line>"
+    docket --branch <the job's branch> unclaim A3 --outcome ended "<the NOTE line>"
 
 **DONE, for an investigation or a decided question.** Merge any commit as for a
 ticket, then close it with the note, or for a decided question, with what it

@@ -154,6 +154,10 @@ The keys file has one line per key, `host role key`, where role is `owner` or `a
 what the server records on every event made with that key, so a client cannot claim to be another
 machine. An agent key cannot open items with `new` or `add`.
 
+A machine that runs jobs names an agent key as `job_key = KEY` in its client file. `docket job run`
+hands that key to the job and refuses to start one without it, or with an owner key, so no job can
+answer as the owner.
+
 ## Machines and the lead
 
 The machines jobs run on are rows on the server, so every machine reads the same list and none of

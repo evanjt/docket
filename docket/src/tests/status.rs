@@ -63,6 +63,15 @@ fn read() -> Read {
             "problems": [],
         }),
         metrics: Value::Null,
+        whole: docket_core::metrics::Whole {
+            progress: docket_core::metrics::Progress {
+                done: 4,
+                total: 9,
+                counted: 8,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
         yours: json!([{"id": "Q1", "title": "Which shelf holds the loaves"}]),
         next: json!([{"id": "T3", "title": "Fix the loaf count", "complexity": "low"}]),
         now: 1000 + 3 * 3600,

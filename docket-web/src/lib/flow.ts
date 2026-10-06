@@ -81,13 +81,22 @@ export function board(g: Graph): Board {
   return b;
 }
 
-export type Tally = Progress;
+/** What a bar draws: done of the items not dropped, and those claimed now. */
+export interface Tally {
+  done: number;
+  total: number;
+  live: number;
+}
 
 const NONE: Tally = { done: 0, total: 0, live: 0 };
 
+function bar(p: Progress | null | undefined): Tally {
+  return p ? { done: p.done, total: p.counted, live: p.live } : NONE;
+}
+
 /** What an item holds, closed of all and claimed now, as the server counts it; nothing for a ticket. */
 export function tally(b: Board, id: string): Tally {
-  return b.nodes.get(id)?.progress ?? NONE;
+  return bar(b.nodes.get(id)?.progress);
 }
 
 export interface PlanRow {
@@ -119,7 +128,7 @@ export function plans(b: Board, kind: Kind): PlanRow[] {
   const rows: PlanRow[] = [];
   for (const node of b.nodes.values()) {
     if (node.kind !== kind || isClosed(node.word)) continue;
-    rows.push({ node, tally: node.progress ?? NONE, due: node.due === true });
+    rows.push({ node, tally: bar(node.progress), due: node.due === true });
   }
   const share = (r: PlanRow) => (r.tally.total ? r.tally.done / r.tally.total : -1);
   return rows.sort((a, z) => Number(z.due) - Number(a.due) || share(z) - share(a) || byId(a.node.id, z.node.id));
@@ -130,37 +139,6 @@ export function byId(a: string, z: string): number {
   const [, ka, na] = /^([A-Z]+)(\d+)$/.exec(a) ?? [, a, '0'];
   const [, kz, nz] = /^([A-Z]+)(\d+)$/.exec(z) ?? [, z, '0'];
   return (ka ?? '').localeCompare(kz ?? '') || Number(na) - Number(nz);
-}
-
-export interface Day {
-  day: string;
-  opened: number;
-  closed: number;
-  dropped: number;
-}
-
-/**
- * Opens and closes per local day, for the `days` days ending today. Days older than the oldest event read
- * are left out, so a page of events that does not reach back the whole window never shows a false zero.
- */
-export function daily(events: EventRow[], days: number, now: number, complete: boolean): Day[] {
-  const out: Day[] = [];
-  for (let i = days - 1; i >= 0; i--) out.push({ day: day(now - i * 86400), opened: 0, closed: 0, dropped: 0 });
-  const index = new Map(out.map((d, i) => [d.day, i]));
-  let oldest = Infinity;
-  for (const e of events) {
-    const t = epoch(e.at);
-    if (t === null) continue;
-    oldest = Math.min(oldest, t);
-    const i = index.get(day(t));
-    if (i === undefined) continue;
-    if (e.kind === 'opened') out[i].opened++;
-    else if (e.kind === 'closed') out[i].closed++;
-    else if (e.kind === 'dropped') out[i].dropped++;
-  }
-  if (complete || oldest === Infinity) return complete ? out : [];
-  const first = day(oldest);
-  return out.filter((d) => d.day > first);
 }
 
 export interface Move {

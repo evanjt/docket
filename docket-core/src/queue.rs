@@ -325,7 +325,7 @@ pub fn owner_limit_refusal(open: usize, limit: usize) -> Option<String> {
     (open >= limit).then(|| {
         format!(
             "The owner already holds {open} open asks, the owner_limit of {limit}. Derive it from a \
-             recorded decision (docket answer --derived), depend on an ask already open, or wait."
+             recorded decision (docket answer --derived) or depend on an ask already open."
         )
     })
 }

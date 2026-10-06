@@ -7,7 +7,7 @@ use docket_core::search::is_id;
 
 use crate::doc::{Listing, Route, Target};
 
-use self::Slot::{Id, Ids, MaybeRest, Rest, Word};
+use self::Slot::{Id, Ids, MaybeRest, Parented, Rest, Word};
 
 /// What a palette line does.
 #[derive(Clone, Debug, PartialEq)]
@@ -33,6 +33,9 @@ enum Slot {
     Rest(&'static str),
     /// The rest of the line, if any.
     MaybeRest(&'static str),
+    /// Ids and then the plan they go under, which is the last id named; the plan alone puts the
+    /// marked rows or the selected one under it. `(ids field, plan field)`.
+    Parented(&'static str, &'static str),
 }
 
 /// A write verb: the names it answers to, the route it posts to, its positionals and its flags.
@@ -40,13 +43,14 @@ struct Spec {
     names: &'static [&'static str],
     route: &'static str,
     slots: &'static [Slot],
-    /// `(--flag, field)`; a field starting with `!` is a switch.
+    /// `(--flag, field)`; a field starting with `!` is a switch, `#` a number, `,` a comma list
+    /// and `*` a list of `FIELD=VALUE`.
     flags: &'static [(&'static str, &'static str)],
 }
 
 const RUN: [(&str, &str); 2] = [("--runner", "runner"), ("--model", "model")];
 
-const SPECS: [Spec; 20] = [
+const SPECS: [Spec; 27] = [
     Spec {
         names: &["new"],
         route: "new",
@@ -85,6 +89,7 @@ const SPECS: [Spec; 20] = [
         flags: &[
             ("--bounce", "!bounce"),
             ("--rebase", "rebase"),
+            ("--outcome", "outcome"),
             RUN[0],
             RUN[1],
         ],
@@ -172,10 +177,69 @@ const SPECS: [Spec; 20] = [
         flags: &[("--remove", "!remove")],
     },
     Spec {
-        names: &["key"],
-        route: "key",
-        slots: &[Word("key"), Word("kind"), Rest("meaning")],
-        flags: &[("--turn", "turn")],
+        names: &["releases"],
+        route: "releases",
+        slots: &[Word("action"), Word("name")],
+        flags: &[
+            ("--to", "to"),
+            ("--move-open-to", "to"),
+            ("--carry", "!carry"),
+            ("--target", "target_date"),
+            ("--note", "note"),
+        ],
+    },
+    Spec {
+        names: &["areas"],
+        route: "areas",
+        slots: &[Word("action"), Word("name")],
+        flags: &[
+            ("--about", "about"),
+            ("--name", "rename"),
+            ("--priority", "priority"),
+            ("--to", "#to"),
+        ],
+    },
+    Spec {
+        names: &["label"],
+        route: "label",
+        slots: &[Word("action"), Id("id"), Word("name")],
+        flags: &[("--about", "about")],
+    },
+    Spec {
+        names: &["dep"],
+        route: "dep",
+        slots: &[Word("action"), Id("id"), Ids("on")],
+        flags: &[],
+    },
+    Spec {
+        names: &["parent"],
+        route: "parent",
+        slots: &[Parented("a", "plan")],
+        flags: &[("--none", "!none")],
+    },
+    Spec {
+        names: &["machine"],
+        route: "machine",
+        slots: &[Word("action"), Word("name")],
+        flags: &[
+            ("--ssh", "ssh"),
+            ("--slots", "#slots"),
+            ("--runners", ",runners"),
+            ("--note", "note"),
+            ("--path", "path"),
+        ],
+    },
+    Spec {
+        names: &["limit"],
+        route: "limit",
+        slots: &[Word("machine"), Word("runner"), Word("until")],
+        flags: &[],
+    },
+    Spec {
+        names: &["lead"],
+        route: "lead",
+        slots: &[Word("act")],
+        flags: &[("--session", "session")],
     },
     Spec {
         names: &["reindex"],
@@ -236,7 +300,47 @@ pub fn parse(line: &str, project: &str, selection: &[String]) -> Result<Command,
     body.insert("force".into(), json!(false));
     let positional = flags(spec, rest, &mut body)?;
     slots(verb, spec, &positional, selection, &mut body)?;
+    finish(verb, spec, &mut body)?;
     Ok(Command::Post(spec.route.to_string(), Value::Object(body)))
+}
+
+/// The requests whose body is not the positionals as they were read: the action word that picks
+/// `remove` or an act the server reads, and what the server needs that the line left out.
+fn finish(verb: &str, spec: &Spec, body: &mut Map<String, Value>) -> Result<(), String> {
+    let action = body
+        .get("action")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let word = |allowed: &[&str]| match action.as_deref() {
+        Some(a) if allowed.contains(&a) => Ok(()),
+        _ => Err(format!("{verb} takes {}", allowed.join(" or "))),
+    };
+    match spec.route {
+        "machine" => {
+            word(&["set", "remove"])?;
+            body.remove("action");
+            body.insert("remove".into(), json!(action.as_deref() == Some("remove")));
+        }
+        "dep" => {
+            word(&["add", "rm"])?;
+            body.remove("action");
+            body.insert("remove".into(), json!(action.as_deref() == Some("rm")));
+        }
+        "releases" => word(&["add", "move", "ship"])?,
+        "areas" => word(&["add", "edit", "move", "rm"])?,
+        "label" => word(&["add", "rm"])?,
+        "lead" => {
+            let act = body.get("act").and_then(Value::as_str).unwrap_or_default();
+            if !["take", "renew", "give"].contains(&act) {
+                return Err(format!("{verb} takes take, renew or give"));
+            }
+            if !body.contains_key("session") {
+                return Err(format!("{verb} {act} needs --session NAME"));
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// The reads the screen has a page for.
@@ -315,6 +419,18 @@ fn flags<'a>(
 
 /// A flag's value in its field; `--set FIELD=VALUE` adds to a list.
 fn flag_value(field: &str, value: &str, body: &mut Map<String, Value>) -> Result<(), String> {
+    if let Some(number) = field.strip_prefix('#') {
+        let n: i64 = value
+            .parse()
+            .map_err(|_| format!("--{number} takes a number, not {value}"))?;
+        body.insert(number.into(), json!(n));
+        return Ok(());
+    }
+    if let Some(list) = field.strip_prefix(',') {
+        let items: Vec<&str> = value.split(',').filter(|v| !v.is_empty()).collect();
+        body.insert(list.into(), json!(items));
+        return Ok(());
+    }
     let Some(list) = field.strip_prefix('*') else {
         body.insert(field.into(), json!(value));
         return Ok(());
@@ -369,6 +485,35 @@ fn slots(
                     return Err(need("ids: mark rows or name them"));
                 }
                 body.insert(field.into(), json!(ids));
+            }
+            Parented(ids, plan) => {
+                let named: Vec<String> = words[at..]
+                    .iter()
+                    .take_while(|w| is_id(w))
+                    .map(|w| (*w).to_string())
+                    .collect();
+                at += named.len();
+                let none = body.remove("none").is_some();
+                let (under, plan_id) = match (none, named.split_last()) {
+                    (true, _) => (named, None),
+                    (false, Some((last, rest))) if !rest.is_empty() => {
+                        (rest.to_vec(), Some(last.clone()))
+                    }
+                    (false, Some((last, _))) => (selection.to_vec(), Some(last.clone())),
+                    (false, None) => return Err(need("a plan: name one, or --none")),
+                };
+                let under = if under.is_empty() {
+                    selection.to_vec()
+                } else {
+                    under
+                };
+                if under.is_empty() {
+                    return Err(need("ids: mark rows or name them"));
+                }
+                body.insert(ids.into(), json!(under));
+                if let Some(plan_id) = plan_id {
+                    body.insert(plan.into(), json!(plan_id));
+                }
             }
             Word(field) => {
                 let w = words.get(at).ok_or_else(|| need(field))?;

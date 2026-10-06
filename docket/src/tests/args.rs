@@ -3,9 +3,16 @@ use clap::CommandFactory;
 
 #[test]
 fn test_unclaim_and_its_hidden_alias_parse_alike() {
-    let new = Cli::try_parse_from(["docket", "unclaim", "T1", "--bounce"]).unwrap();
-    let old = Cli::try_parse_from(["docket", "release", "T1", "--bounce"]).unwrap();
+    let new =
+        Cli::try_parse_from(["docket", "unclaim", "T1", "--bounce", "--outcome", "ended"]).unwrap();
+    let old =
+        Cli::try_parse_from(["docket", "release", "T1", "--bounce", "--outcome", "ended"]).unwrap();
     assert_eq!(format!("{:?}", new.cmd), format!("{:?}", old.cmd));
+}
+
+#[test]
+fn test_an_unclaim_without_an_outcome_does_not_parse() {
+    assert!(Cli::try_parse_from(["docket", "unclaim", "T1", "note"]).is_err());
 }
 
 #[test]

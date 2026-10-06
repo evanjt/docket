@@ -765,7 +765,7 @@ fn test_an_item_under_no_plan_tied_to_several_concepts_takes_the_oldest_link() {
 fn test_an_open_item_nothing_places_waits_on_an_agents_placement() {
     let c = planned_crafts();
     assert_eq!(area_of(&c, "T5"), None);
-    assert_eq!(area_of(&c, "CID1"), None);
+    assert_eq!(area_of(&c, "CID1").as_deref(), Some("unsorted"));
     assert!(has(
         &c,
         &Change::BecomesLabel {
@@ -851,7 +851,7 @@ fn test_a_closed_item_nothing_places_goes_to_unsorted_marked_history_and_last() 
     );
     assert!(
         text.contains(
-            "items: 1 by plan, 2 by concept, 1 by placement, 1 closed to unsorted, 1 open unplaced"
+            "items: 1 by plan, 2 by concept, 1 by placement, 2 closed to unsorted, 1 open unplaced"
         ),
         "{text}"
     );

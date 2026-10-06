@@ -287,6 +287,18 @@ impl Api {
         Ok(serde_json::from_value(body["releases"].take()).unwrap_or_default())
     }
 
+    /// `/metrics` over the whole project: its progress, its opened, closed and dropped per day for
+    /// `days` days, and its areas.
+    ///
+    /// # Errors
+    /// As `get`.
+    pub fn project_metrics(&self, slug: &str, days: u32) -> Result<docket_core::metrics::Whole> {
+        let mut query = of(slug).clone();
+        query.push(("scope", "project".to_string()));
+        query.push(("days", days.to_string()));
+        self.get("/metrics", &query)
+    }
+
     /// `/check`: the integrity problems of a project, each an object with its `kind`.
     ///
     /// # Errors

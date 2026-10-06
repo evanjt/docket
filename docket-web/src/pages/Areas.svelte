@@ -1,15 +1,17 @@
 <script lang="ts">
-  import { areaCounts } from '../lib/areas';
+  import { api } from '../lib/api';
   import { project } from '../lib/context';
+  import { resource } from '../lib/live.svelte';
   import { href } from '../lib/route';
 
   const ctx = project();
 
-  const rows = $derived(ctx.board ? areaCounts(ctx.areas, ctx.board.nodes.values()) : []);
+  const whole = resource(() => api.whole(ctx.slug, 1));
+  const rows = $derived(whole.data?.areas ?? []);
 </script>
 
 <div class="areas">
-  {#if !ctx.board}
+  {#if !whole.data}
     <p class="faint">Reading the areas</p>
   {:else if rows.length === 0}
     <div class="empty">
@@ -22,11 +24,11 @@
         <tr><th>Area</th><th>Description</th><th>Priority</th><th class="n">Open</th><th class="n">Done</th></tr>
       </thead>
       <tbody>
-        {#each rows as r (r.area.id)}
+        {#each rows as r (r.name)}
           <tr>
-            <td><a class="name" href={href(ctx.slug, 'work', { area: r.area.name })}>{r.area.name}</a></td>
-            <td class="muted">{r.area.description ?? ''}</td>
-            <td>{#if r.area.priority}<span class="pri pri-{r.area.priority}">{r.area.priority}</span>{/if}</td>
+            <td><a class="name" href={href(ctx.slug, 'work', { area: r.name })}>{r.name}</a></td>
+            <td class="muted">{r.description ?? ''}</td>
+            <td>{#if r.priority}<span class="pri pri-{r.priority}">{r.priority}</span>{/if}</td>
             <td class="n">{r.open}</td>
             <td class="n">{r.done}</td>
           </tr>

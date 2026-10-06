@@ -37,7 +37,7 @@ fn test_with_word_leaves_packages_out_as_the_flow_does() {
 fn test_progress_by_kind() {
     let b = board();
     let of = |id| {
-        let g = b.progress(b.get(id).unwrap());
+        let g = b.held_progress(b.get(id).unwrap());
         (g.done, g.total, g.live)
     };
     // PK1 holds T1 (done) and T2 (claimed).
@@ -92,7 +92,7 @@ fn test_plan_rows_list_each_area_with_its_open_count_and_no_concepts() {
     let (lanterns, kites) = (area("lanterns"), area("kites"));
     assert_eq!(
         (lanterns.total - lanterns.done, kites.total - kites.done),
-        (3, 1)
+        (2, 1)
     );
     assert!(rows.iter().all(|r| r.area.is_none() || r.heading.is_some()));
     assert!(!rows.iter().any(|r| r.id == "CON1"));

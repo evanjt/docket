@@ -236,3 +236,25 @@ async fn test_an_all_projects_set_refuses_a_project_fact_and_a_bad_value() {
         assert!(out["refused"].as_str().unwrap().starts_with(why), "{out}");
     }
 }
+
+#[tokio::test]
+async fn test_the_work_fact_sets_the_projects_work_ref_for_the_owner_only() {
+    let (_db, app) = scratch().await;
+    let (status, _) = set_as(&app, "agentkey", "work", "main").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (_, projects) = send(&app, Method::GET, "/projects", "ownerkey", None).await;
+    assert_eq!(projects[0]["integration_ref"], Value::Null);
+
+    let (status, out) = set_as(&app, "ownerkey", "work", "main").await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["skills"]["work"], "main");
+    let (_, projects) = send(&app, Method::GET, "/projects", "ownerkey", None).await;
+    assert_eq!(projects[0]["integration_ref"], "main");
+
+    let (status, _) = set_as(&app, "ownerkey", "work", "bad ref").await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, _) = set_as(&app, "ownerkey", "work", "").await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, projects) = send(&app, Method::GET, "/projects", "ownerkey", None).await;
+    assert_eq!(projects[0]["integration_ref"], Value::Null);
+}

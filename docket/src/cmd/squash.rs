@@ -75,7 +75,9 @@ pub fn squash(ctx: &mut Ctx, messages: Option<&str>, cap: Option<usize>) -> Resu
         .as_str()
         .filter(|r| !r.is_empty())
     else {
-        return Err(Fail::refused("the project stores no integration_ref"));
+        return Err(Fail::refused(
+            "the project has no work ref: the owner sets it with docket skills set work BRANCH",
+        ));
     };
     let cwd = std::env::current_dir().map_err(|e| Fail::refused(e.to_string()))?;
     let repo = PathBuf::from(

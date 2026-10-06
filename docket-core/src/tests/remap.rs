@@ -29,7 +29,7 @@ fn an_ambiguous_prefix_a_short_sha_and_an_unmapped_one_are_left() {
     let two = Map::parse(&format!("{A} {X}\n{A2} {Y}\n")).unwrap();
     assert_eq!(two.remap("aaaaaaaaa rest"), None);
     assert!(two.remap(&format!("{A2} rest")).is_some());
-    assert_eq!(map().remap("aaaaaaaa rest"), None);
+    assert_eq!(map().remap("aaaaaa rest"), None);
     assert_eq!(map().remap("ccccccccc rest"), None);
     assert_eq!(map().remap("superseded by B1"), None);
     assert_eq!(map().remap("aaaaaaaaaxyz"), None);
@@ -40,4 +40,13 @@ fn a_map_line_that_is_no_pair_of_shas_is_refused() {
     assert!(Map::parse("aaaaaaaaa").is_err());
     assert!(Map::parse("aaaaaaaaa zzzzzzzzz").is_err());
     assert!(Map::parse("a b c").is_err());
+}
+
+#[test]
+fn a_seven_character_sha_is_read_when_one_old_sha_starts_with_it() {
+    let r = map().remap("aaaaaaa rest").unwrap();
+    assert_eq!(r.new, "1234567");
+    assert_eq!(r.resolution, "1234567 rest");
+    let two = Map::parse(&format!("{A} {X}\n{A2} {Y}\n")).unwrap();
+    assert_eq!(two.remap("aaaaaaa rest"), None);
 }

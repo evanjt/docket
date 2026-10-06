@@ -17,10 +17,12 @@ use docket_core::word::PRIORITIES;
 
 use crate::auth::Caller;
 use crate::store::{Tx, json, scalar, sql};
-use crate::verbs::Failure;
+use crate::verbs::{Failure, require_owner};
 
 const SKILLS: &str = "SELECT skills FROM projects WHERE slug=?";
 const WRITE: &str = "UPDATE projects SET skills=?, updated_at=? WHERE slug=?";
+const WORK_REF: &str = "SELECT integration_ref FROM projects WHERE slug=?";
+const WORK_REF_WRITE: &str = "UPDATE projects SET integration_ref=?, updated_at=? WHERE slug=?";
 const OWNER: &str = "SELECT key, value FROM owner_facts";
 const OWNER_SET: &str = "INSERT INTO owner_facts (key, value, updated_at) VALUES (?, ?, ?) \
                          ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=EXCLUDED.updated_at";
@@ -84,6 +86,11 @@ pub async fn read(
     let mut skills = fact::known(&stored(&db, &q.project).await?);
     let open = crate::verbs::releases::listed(&db, &q.project).await?.open;
     skills.remove("releases");
+    let work: Option<Option<String>> =
+        scalar(&db, WORK_REF, vec![q.project.clone().into()]).await?;
+    if let Some(work) = work.flatten().filter(|w| !w.is_empty()) {
+        skills.insert("work".to_string(), work);
+    }
     if !open.is_empty() {
         skills.insert("releases".to_string(), open.join(" "));
     }
@@ -135,6 +142,28 @@ pub async fn set(
         }));
     }
     fact::check(&key, &value)?;
+    if key == "work" {
+        require_owner(&caller, "skills set work")?;
+        let stored = (!value.is_empty()).then(|| sea_orm::Value::from(value.clone()));
+        let stored = stored.unwrap_or(sea_orm::Value::String(None));
+        tx.execute(
+            WORK_REF_WRITE,
+            vec![stored, tx.now.clone().into(), slug.clone().into()],
+        )
+        .await?;
+        tx.touch_project(&slug);
+        tx.commit().await?;
+        let mut shown = fact::known(&skills);
+        if !value.is_empty() {
+            shown.insert(key.clone(), value);
+        }
+        return Ok(Json(FactSet {
+            project: slug,
+            key,
+            skills: shown,
+            owner: owner(&db).await?,
+        }));
+    }
     let skills = fact::with(&skills, &key, &value);
     let stored = json(serde_json::to_value(&skills).unwrap_or_default());
     tx.execute(

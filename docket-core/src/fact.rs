@@ -6,7 +6,7 @@ use crate::item::Refused;
 use crate::text::quoted;
 
 /// Every fact a project carries, in the order `docket skills` prints them, with its one-line meaning.
-pub const FACTS: [(&str, &str); 20] = [
+pub const FACTS: [(&str, &str); 21] = [
     ("owner", "the owner's name, as the skills address them"),
     (
         "worktree",
@@ -16,6 +16,10 @@ pub const FACTS: [(&str, &str); 20] = [
     (
         "publish",
         "the local ref a squash writes the published history to and the remote ref the owner pushes it to, as \"published origin/main\"; unset, the project does not squash",
+    ),
+    (
+        "work",
+        "the branch a squash reads the work history from, held on the project and set by the owner only; unset, a squash is refused",
     ),
     (
         "provision",
@@ -371,6 +375,12 @@ fn check_shape(key: &str, value: &str) -> Result<(), Refused> {
     }
     if key == "prices" {
         prices_of(value).map_err(|why| Refused(format!("prices: {why}")))?;
+    }
+    if key == "work" && !is_ref_name(value) {
+        return Err(Refused(format!(
+            "work: {} is no ref git takes",
+            quoted(value)
+        )));
     }
     if key == "publish" {
         publish_of(value).map_err(|why| Refused(format!("publish: {why}")))?;

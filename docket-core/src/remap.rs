@@ -2,8 +2,8 @@
 
 use std::collections::BTreeMap;
 
-/// The shortest sha a resolution leads with that is read as one.
-pub const LEAST: usize = 9;
+/// The shortest sha a resolution leads with that is read as one: what `git rev-parse --short` gives.
+pub const LEAST: usize = 7;
 
 /// The old shas a map names, each with its new one.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

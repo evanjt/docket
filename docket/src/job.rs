@@ -133,6 +133,36 @@ pub struct Meta {
     /// in; none is the `checkout` fact's.
     #[serde(default)]
     pub repo: Option<String>,
+    /// Each repository of an item that names several, whose worktrees the job directory, then
+    /// `worktree`, holds; empty for an item naming one or none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<Part>,
+}
+
+/// One repository of a job whose item names several.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Part {
+    /// The repository as the item names it.
+    pub repo: String,
+    /// This machine's checkout of it, which the job's worktree belongs to.
+    pub checkout: String,
+    /// The job's worktree of it, inside the job directory.
+    pub worktree: String,
+    /// The commit the job started from there.
+    pub base: String,
+}
+
+/// Where a repository sits in a job directory: its path under the project root, and another
+/// project's root at that project's last word, so the directory is laid out like the root.
+#[must_use]
+pub fn place_of(repo: &str) -> PathBuf {
+    let rel = match docket_core::label::foreign(repo) {
+        Some((slug, sub)) => Path::new(slug.rsplit('/').next().unwrap_or(slug)).join(sub),
+        None => PathBuf::from(repo),
+    };
+    rel.components()
+        .filter(|c| matches!(c, std::path::Component::Normal(_)))
+        .collect()
 }
 
 /// The brief for a role, filled in for one item on one branch.
@@ -392,10 +422,29 @@ pub fn observations(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// An observation split into the repository it names and its text: `[REPO] text` names a repository
+/// as an item does, anything else is text alone.
+#[must_use]
+pub fn observation(line: &str) -> (Option<&str>, &str) {
+    let line = line.trim();
+    if let Some((repo, text)) = line.strip_prefix('[').and_then(|rest| rest.split_once(']'))
+        && matches!(docket_core::label::repo_path(repo), Ok(Some(p)) if p == repo)
+    {
+        return (Some(repo), text.trim());
+    }
+    (None, line)
+}
+
 /// The observations as appended to the job's item.
 #[must_use]
 pub fn observed(job: &str, observations: &[String]) -> String {
-    let list: Vec<String> = observations.iter().map(|o| format!("- {o}")).collect();
+    let list: Vec<String> = observations
+        .iter()
+        .map(|o| match observation(o) {
+            (Some(repo), text) => format!("- [{repo}] {text}"),
+            (None, text) => format!("- {text}"),
+        })
+        .collect();
     format!(
         "**Observations, from the job {job}.**\n\n{}",
         list.join("\n")
@@ -590,6 +639,8 @@ pub struct Row {
     pub base: Option<String>,
     /// The repository the item named, under the project root; none is the `checkout` fact's.
     pub repo: Option<String>,
+    /// The repositories of a job whose item names several, in the order its directory was made.
+    pub repos: Vec<String>,
     /// The final message in full: the result of a Claude session, the last message file of Codex.
     pub last: Option<String>,
     /// The reset of the usage limit the job reported, as a stamp.
@@ -656,6 +707,7 @@ pub fn row(dir: &Path, at: u64) -> Option<Row> {
         observations: last.as_deref().map(observations).unwrap_or_default(),
         base: meta.base,
         repo: meta.repo,
+        repos: meta.parts.iter().map(|p| p.repo.clone()).collect(),
         last,
         limit,
         worktree: meta.worktree,
@@ -827,6 +879,145 @@ pub fn run(
     env: &[(&str, &str)],
     program: &str,
 ) -> Result<Started, String> {
+    let (text, name, dir) = prepare(spec, root)?;
+    let reference = format!("refs/heads/{}", spec.branch);
+    let Ok(base) = git(checkout, &["rev-parse", "--verify", "--quiet", &reference]) else {
+        return Err(no_branch(spec, checkout));
+    };
+    let stem = slot_stem(&spec.project, spec.repo.as_deref());
+    let stem = stem.as_str();
+    let parent = checkout.parent().unwrap_or(checkout);
+    let worktree = if let Some(slot) = parked_slot(checkout, stem)? {
+        git(&slot, &["checkout", "--quiet", &spec.branch])?;
+        reset_submodules(&slot)?;
+        slot
+    } else {
+        let worktree = (1..=u32::MAX)
+            .map(|n| parent.join(format!("{stem}-{SLOT}{n}")))
+            .find(|p| !p.exists())
+            .expect("an unbounded range");
+        git(
+            checkout,
+            &[
+                "worktree",
+                "add",
+                &worktree.display().to_string(),
+                &spec.branch,
+            ],
+        )?;
+        if let Err(why) = provision(&worktree, spec.provision.as_deref()) {
+            let _ = remove_worktree(checkout, &worktree);
+            return Err(why);
+        }
+        worktree
+    };
+    let meta = Meta {
+        worktree: worktree.display().to_string(),
+        base: Some(base),
+        repo: spec.repo.clone(),
+        ..meta_of(spec, &name)
+    };
+    begin(&dir, &meta, &text, program, env, &spec.launch)
+}
+
+/// Start a job whose item names several repositories: a job directory laid out like the project
+/// root, holding a worktree of each repository's checkout here on the branch the lead pushed to
+/// each, `provision` run once in it, and the session started there. `repos` pairs each repository
+/// as the item names it with its checkout on this machine. A repository that fails leaves none.
+///
+/// # Errors
+/// As [`run`], for any of the repositories, and two repositories that sit at one place.
+pub fn run_in_repos(
+    spec: &Spec,
+    repos: &[(String, PathBuf)],
+    root: &Path,
+    env: &[(&str, &str)],
+    program: &str,
+) -> Result<Started, String> {
+    let (text, name, dir) = prepare(spec, root)?;
+    let mut placed: Vec<(PathBuf, &String, &PathBuf)> =
+        repos.iter().map(|(r, c)| (place_of(r), r, c)).collect();
+    placed.sort_by_key(|(at, _, _)| at.components().count());
+    for (i, (at, repo, _)) in placed.iter().enumerate() {
+        if let Some((_, other, _)) = placed[..i].iter().find(|(o, _, _)| o == at) {
+            return Err(format!(
+                "{repo} and {other} would both sit at {} in the job directory",
+                at.display()
+            ));
+        }
+    }
+    let reference = format!("refs/heads/{}", spec.branch);
+    let mut bases = Vec::new();
+    for (_, _, checkout) in &placed {
+        let Ok(base) = git(checkout, &["rev-parse", "--verify", "--quiet", &reference]) else {
+            return Err(no_branch(spec, checkout));
+        };
+        bases.push(base);
+    }
+    let tree = dir.join("tree");
+    fs::create_dir_all(&tree).map_err(|e| format!("{}: {e}", tree.display()))?;
+    let mut parts: Vec<Part> = Vec::new();
+    let made = (|| {
+        for ((at, repo, checkout), base) in placed.iter().zip(bases) {
+            let worktree = tree.join(at);
+            if let Some(up) = worktree.parent() {
+                fs::create_dir_all(up).map_err(|e| format!("{}: {e}", up.display()))?;
+            }
+            let shown = worktree.display().to_string();
+            git(checkout, &["worktree", "add", &shown, &spec.branch])?;
+            parts.push(Part {
+                repo: (*repo).clone(),
+                checkout: checkout.display().to_string(),
+                worktree: shown,
+                base,
+            });
+        }
+        provision(&tree, spec.provision.as_deref())
+    })();
+    if let Err(why) = made {
+        remove_parts(&parts, None);
+        let _ = fs::remove_dir_all(&dir);
+        return Err(why);
+    }
+    let meta = Meta {
+        worktree: tree.display().to_string(),
+        parts,
+        ..meta_of(spec, &name)
+    };
+    let mut env = env.to_vec();
+    env.push(("DOCKET_BRANCH", spec.branch.as_str()));
+    begin(&dir, &meta, &text, program, &env, &spec.launch)
+}
+
+/// The record of a job started from `spec`, with no worktree, base or repository yet.
+fn meta_of(spec: &Spec, name: &str) -> Meta {
+    Meta {
+        name: name.to_string(),
+        project: spec.project.clone(),
+        id: spec.id.clone(),
+        branch: spec.branch.clone(),
+        runner: spec.runner.clone(),
+        model: spec.model.clone(),
+        effort: spec.effort.clone(),
+        role: spec.role.clone(),
+        worktree: String::new(),
+        started: now(),
+        base: None,
+        repo: None,
+        parts: Vec::new(),
+    }
+}
+
+fn no_branch(spec: &Spec, checkout: &Path) -> String {
+    format!(
+        "no branch {} in {}: the lead pushes it there before starting the job",
+        spec.branch,
+        checkout.display()
+    )
+}
+
+/// The brief, the name and the directory of a job about to start, which must not be there yet.
+fn prepare(spec: &Spec, root: &Path) -> Result<(String, String, PathBuf), String> {
     if !RUNNERS.contains(&spec.runner.as_str()) {
         return Err(format!(
             "no runner {}: one of {}",
@@ -850,55 +1041,7 @@ pub fn run(
             dir.display()
         ));
     }
-    let reference = format!("refs/heads/{}", spec.branch);
-    let Ok(base) = git(checkout, &["rev-parse", "--verify", "--quiet", &reference]) else {
-        return Err(format!(
-            "no branch {} in {}: the lead pushes it there before starting the job",
-            spec.branch,
-            checkout.display()
-        ));
-    };
-    let stem = slot_stem(&spec.project, spec.repo.as_deref());
-    let stem = stem.as_str();
-    let parent = checkout.parent().unwrap_or(checkout);
-    let worktree = if let Some(slot) = parked_slot(checkout, stem)? {
-        git(&slot, &["checkout", "--quiet", &spec.branch])?;
-        reset_submodules(&slot)?;
-        slot
-    } else {
-        {
-            let worktree = (1..=u32::MAX)
-                .map(|n| parent.join(format!("{stem}-{SLOT}{n}")))
-                .find(|p| !p.exists())
-                .expect("an unbounded range");
-            git(
-                checkout,
-                &[
-                    "worktree",
-                    "add",
-                    &worktree.display().to_string(),
-                    &spec.branch,
-                ],
-            )?;
-            provision(checkout, &worktree, spec.provision.as_deref())?;
-            worktree
-        }
-    };
-    let meta = Meta {
-        name: name.clone(),
-        project: spec.project.clone(),
-        id: spec.id.clone(),
-        branch: spec.branch.clone(),
-        runner: spec.runner.clone(),
-        model: spec.model.clone(),
-        effort: spec.effort.clone(),
-        role: spec.role.clone(),
-        worktree: worktree.display().to_string(),
-        started: now(),
-        base: Some(base),
-        repo: spec.repo.clone(),
-    };
-    begin(&dir, &meta, &text, program, env, &spec.launch)
+    Ok((text, name, dir))
 }
 
 /// The record, the brief and the session of a job whose directory is `dir`, the session started
@@ -942,23 +1085,9 @@ fn begin(
     })
 }
 
-/// The project's provision command, run in the worktree; when it fails the worktree is removed and
-/// the error carries its output.
-fn provision(checkout: &Path, worktree: &Path, cmd: Option<&str>) -> Result<(), String> {
-    let Some(cmd) = cmd.filter(|c| !c.trim().is_empty()) else {
-        return Ok(());
-    };
-    let out = Command::new("sh")
-        .arg("-c")
-        .arg(cmd)
-        .current_dir(worktree)
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| format!("provision: {e}"))?;
-    if out.status.success() {
-        return Ok(());
-    }
-    let _ = git(
+/// A worktree removed from its checkout, whatever it holds.
+fn remove_worktree(checkout: &Path, worktree: &Path) -> Result<String, String> {
+    git(
         checkout,
         &[
             "worktree",
@@ -966,7 +1095,41 @@ fn provision(checkout: &Path, worktree: &Path, cmd: Option<&str>) -> Result<(), 
             "--force",
             &worktree.display().to_string(),
         ],
-    );
+    )
+}
+
+/// The worktrees of a job's repositories removed, the deepest first, and with `branch` that branch
+/// deleted in each checkout. A worktree already gone is pruned from its checkout.
+fn remove_parts(parts: &[Part], branch: Option<&str>) {
+    for p in parts.iter().rev() {
+        let checkout = Path::new(&p.checkout);
+        if Path::new(&p.worktree).is_dir() {
+            let _ = remove_worktree(checkout, Path::new(&p.worktree));
+        } else {
+            let _ = git(checkout, &["worktree", "prune"]);
+        }
+        if let Some(b) = branch {
+            let _ = git(checkout, &["branch", "-D", b]);
+        }
+    }
+}
+
+/// The project's provision command, run in `dir`, the job's worktree or job directory; the error
+/// carries its output.
+fn provision(dir: &Path, cmd: Option<&str>) -> Result<(), String> {
+    let Some(cmd) = cmd.filter(|c| !c.trim().is_empty()) else {
+        return Ok(());
+    };
+    let out = Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .current_dir(dir)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("provision: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),
@@ -974,7 +1137,7 @@ fn provision(checkout: &Path, worktree: &Path, cmd: Option<&str>) -> Result<(), 
     );
     Err(format!(
         "provision failed in {} ({}): {}",
-        worktree.display(),
+        dir.display(),
         out.status,
         text.trim()
     ))
@@ -1081,21 +1244,78 @@ impl Change {
     }
 }
 
+/// A job's change in one of the repositories its item names, against the commit it started from
+/// there.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepoChange {
+    pub repo: String,
+    pub base: String,
+    pub change: Change,
+}
+
+/// A job's change as `docket job diff --json` sends it: one, or one per repository for a job whose
+/// item names several.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Diff {
+    Several(Vec<RepoChange>),
+    One(Change),
+}
+
+impl Diff {
+    /// The change to read, each repository's under a line naming it.
+    #[must_use]
+    pub fn text(&self) -> String {
+        match self {
+            Diff::One(c) => c.text(),
+            Diff::Several(all) => {
+                let mut out = String::new();
+                for r in all {
+                    let _ = writeln!(out, "Repository {}", r.repo);
+                    out.push_str(&r.change.text());
+                }
+                out
+            }
+        }
+    }
+}
+
 /// A job's change against the commit it started from: what it committed and what it left in its
-/// worktree, new files, binary ones and those inside a submodule included.
+/// worktree, new files, binary ones and those inside a submodule included; for a job whose item
+/// names several repositories, the change in each.
 ///
 /// # Errors
 /// The job is still running, has no worktree, or git fails.
-pub fn diff(dir: &Path) -> Result<Change, String> {
+pub fn diff(dir: &Path) -> Result<Diff, String> {
+    let meta: Option<Meta> = read(dir, "meta.json").and_then(|m| serde_json::from_str(&m).ok());
     let r = row(dir, now()).ok_or_else(|| format!("{}: no job here", dir.display()))?;
     if r.state == State::Running {
         return Err(format!("{} is still running", r.name));
+    }
+    let parts = meta.map(|m| m.parts).unwrap_or_default();
+    if !parts.is_empty() {
+        return parts
+            .iter()
+            .map(|p| {
+                let worktree = Path::new(&p.worktree);
+                if !worktree.is_dir() {
+                    return Err(format!("{} has no worktree at {}", r.name, p.worktree));
+                }
+                let change = change(worktree, &p.base).map_err(|e| format!("{}: {e}", p.repo))?;
+                Ok(RepoChange {
+                    repo: p.repo.clone(),
+                    base: p.base.clone(),
+                    change,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()
+            .map(Diff::Several);
     }
     let worktree = Path::new(&r.worktree);
     if !worktree.is_dir() {
         return Err(format!("{} has no worktree at {}", r.name, r.worktree));
     }
-    change(worktree, r.base.as_deref().unwrap_or("HEAD"))
+    change(worktree, r.base.as_deref().unwrap_or("HEAD")).map(Diff::One)
 }
 
 /// The change in a checkout against `base`, staged to be read and never committed: a patch for
@@ -1208,8 +1428,8 @@ pub fn kill(dir: &Path) -> Result<(), String> {
     Err(format!("process group {pgid} outlived SIGKILL"))
 }
 
-/// Remove a job that has ended: its worktree, its branch in the checkout unless kept, and its
-/// directory.
+/// Remove a job that has ended: its worktree, or each of its repositories', its branch in the
+/// checkout unless kept, and its directory.
 ///
 /// # Errors
 /// The job is still running, or git refuses to remove the worktree or the branch.
@@ -1221,6 +1441,18 @@ pub fn remove(dir: &Path, keep_branch: bool) -> Result<(), String> {
             "{} is still running: docket job kill {} first",
             r.name, r.name
         ));
+    }
+    let meta: Option<Meta> = read(dir, "meta.json").and_then(|m| serde_json::from_str(&m).ok());
+    let parts = meta.map(|m| m.parts).unwrap_or_default();
+    if !parts.is_empty() {
+        remove_parts(&parts, (!keep_branch).then_some(r.branch.as_str()));
+        if let Some(left) = parts.iter().find(|p| Path::new(&p.worktree).is_dir()) {
+            return Err(format!(
+                "the worktree of {} at {} could not be removed",
+                left.repo, left.worktree
+            ));
+        }
+        return fs::remove_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()));
     }
     let worktree = Path::new(&r.worktree);
     // A lead job, which earlier versions started from the screen, ran in the checkout itself,

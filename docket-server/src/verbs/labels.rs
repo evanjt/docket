@@ -13,8 +13,6 @@ use docket_core::api::{LabelDone, LabelRequest, LabelRow};
 use docket_core::label::{self, Label};
 use docket_core::member::{Edge, Tie, labels_carried};
 
-use docket_core::item::Item;
-
 use crate::auth::Caller;
 use crate::store::{column, scalar, sql};
 use crate::verbs::{Call, Failure, given};
@@ -224,15 +222,15 @@ pub async fn carrying<C: ConnectionTrait>(
         .collect())
 }
 
-/// The repository each item of a project changes by its labels: the repo label nearest it, its own
-/// before its plan's, by rid. An item with none is left out.
+/// The repositories each item of a project changes by its labels: the repo labels nearest it, its
+/// own before those of the nearest plan with any, by rid. An item with none is left out.
 ///
 /// # Errors
 /// The database.
 pub async fn nearest_repos<C: ConnectionTrait>(
     c: &C,
     slug: &str,
-) -> Result<BTreeMap<i64, String>, DbErr> {
+) -> Result<BTreeMap<i64, Vec<String>>, DbErr> {
     let rows = c
         .query_all_raw(sql(
             "WITH RECURSIVE down(rid, name, depth) AS ( \
@@ -240,18 +238,41 @@ pub async fn nearest_repos<C: ConnectionTrait>(
                 WHERE l.project=? AND l.name LIKE 'repo:%' \
                UNION SELECT i.rid, down.name, down.depth + 1 FROM items i \
                 JOIN down ON i.parent_rid=down.rid WHERE down.depth < 1000) \
-             SELECT rid, name FROM down ORDER BY depth DESC, name DESC",
+             SELECT rid, name, depth FROM down ORDER BY depth, name",
             vec![slug.into()],
         ))
         .await?;
-    let mut out = BTreeMap::new();
+    let mut nearest: BTreeMap<i64, (i32, Vec<String>)> = BTreeMap::new();
     for r in rows {
         let name: String = r.try_get_by_index(1)?;
-        if let Some(repo) = label::repo_named(&name) {
-            out.insert(r.try_get_by_index(0)?, repo.to_string());
+        let depth: i32 = r.try_get_by_index(2)?;
+        let Some(repo) = label::repo_named(&name) else {
+            continue;
+        };
+        let (at, repos) = nearest
+            .entry(r.try_get_by_index(0)?)
+            .or_insert((depth, Vec::new()));
+        if *at == depth && !repos.iter().any(|x| x == repo) {
+            repos.push(repo.to_string());
         }
     }
-    Ok(out)
+    Ok(nearest.into_iter().map(|(rid, (_, r))| (rid, r)).collect())
+}
+
+/// The repositories an item changes: those its own repo labels name, else those of the nearest
+/// plan above it whose labels name any.
+///
+/// # Errors
+/// The database.
+pub async fn repos<C: ConnectionTrait>(c: &C, rid: i64) -> Result<Vec<String>, DbErr> {
+    for at in chain(c, rid).await? {
+        let mine = own(c, at).await?;
+        let found = label::repos_of(&mine);
+        if !found.is_empty() {
+            return Ok(found.into_iter().map(str::to_string).collect());
+        }
+    }
+    Ok(Vec::new())
 }
 
 /// The items carrying the label `name` when one is given: what a read narrowed to a label keeps.
@@ -310,28 +331,14 @@ pub async fn listed<C: ConnectionTrait>(c: &C, slug: &str) -> Result<Vec<Label>,
         .collect()
 }
 
-/// A label given by name, a repo label written as `--repo` writes it. An item changes one
-/// repository, so a repo label other than the one it was given itself is refused.
-async fn one_repo<C: ConnectionTrait>(c: &C, r: &Item, name: &str) -> Result<String, Failure> {
+/// A label given by name, a repo label written as `--repo` writes it. An item may change several
+/// repositories, each a label of its own.
+fn repo_written(name: &str) -> Result<String, Failure> {
     if !label::is_repo(name) {
         return Ok(name.to_string());
     }
-    let Some(name) = label::of_repo(name.strip_prefix(label::REPO).unwrap_or_default())? else {
-        return Err(Failure::Refused(
-            "a repo label names a path: repo:PATH".to_string(),
-        ));
-    };
-    let mine = own(c, r.rid).await?;
-    if let Some(other) = mine.iter().find(|l| label::is_repo(l) && **l != name) {
-        return Err(Failure::Refused(format!(
-            "{} changes {}, and an item changes one repository: docket edit {} --set repo=PATH moves it, \
-             and work in a second repository is an item of its own",
-            r.id,
-            label::repo_named(other).unwrap_or("."),
-            r.id
-        )));
-    }
-    Ok(name)
+    label::of_repo(name.strip_prefix(label::REPO).unwrap_or_default())?
+        .ok_or_else(|| Failure::Refused("a repo label names a path: repo:PATH".to_string()))
 }
 
 #[derive(Deserialize)]
@@ -390,7 +397,7 @@ pub async fn label(
     .await?;
     match req.action.as_str() {
         "add" => {
-            let name = one_repo(&call.tx.conn, &r, &name).await?;
+            let name = repo_written(&name)?;
             give(&call.tx.conn, &call.slug, r.rid, &name).await?;
             if req.about.is_some() {
                 let about = given(req.about.as_deref()).map(str::to_string);

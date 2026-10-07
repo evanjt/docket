@@ -58,12 +58,18 @@ impl Ctx {
         })
     }
 
-    /// The branch acting: `--branch`, else the checkout's HEAD, else main.
+    /// The branch acting: `--branch`, else the checkout's HEAD, else `DOCKET_BRANCH`, which a job
+    /// whose directory holds several repositories runs under, else main.
     #[must_use]
     pub fn branch(&self) -> String {
         self.branch_flag
             .clone()
             .or_else(|| local::branch(&self.cwd))
+            .or_else(|| {
+                std::env::var("DOCKET_BRANCH")
+                    .ok()
+                    .filter(|b| !b.is_empty())
+            })
             .unwrap_or_else(|| "main".to_string())
     }
 
@@ -267,6 +273,21 @@ impl Ctx {
                     self.roots.file().display()
                 ))
             })
+    }
+}
+
+impl Ctx {
+    /// A root taken off this machine's roots file; whether one was there.
+    ///
+    /// # Errors
+    /// The file cannot be written.
+    pub fn unbind_root(&mut self, path: &str) -> Result<bool> {
+        self.roots.unbind(path).map_err(|e| {
+            Fail::refused(format!(
+                "docket: cannot write {}: {e}",
+                self.roots.file().display()
+            ))
+        })
     }
 }
 

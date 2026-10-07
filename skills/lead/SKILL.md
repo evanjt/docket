@@ -22,12 +22,19 @@ starts from it and every merge goes back into it.
 
 A project whose root holds several sibling repositories is led from under its
 root. Each item carries the repository it changes, a path under the root
-(`docket new --repo PATH`, `docket edit ID --set repo=PATH`, or its plan's);
-one naming none takes the `checkout` fact. `dispatch` and `collect` take the
+(`docket new --repo PATH`, `docket edit ID --repo PATH`, or its plan's); give
+`--repo` once for each repository the item changes, and `@OWNER/NAME` for
+another project's root; one naming none takes the `checkout` fact. `dispatch` and `collect` take the
 base from and commit in that repository, on each machine the one under its own
 root, and you merge the job's branch there. `docket next --repo PATH` lists one
-repository's items. An item changes one repository: work in a second is an
-item of its own.
+repository's items. An item can name several repositories, each a `repo:`
+label (`docket label add ID repo:PATH`): its job gets one directory laid out
+like the root, a worktree of each on one branch, and is placed only on a
+machine that has them all. `collect` lands every repository or none, and
+prints `REPO@SHA` for each: merge the branch in each repository and close
+with those words. A job's `OBSERVE [REPO] text` line keeps its repository when
+`collect` appends it; when you file a ticket from it, give the ticket that
+`--repo`.
 
     docket skills
     docket machines

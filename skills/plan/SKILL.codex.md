@@ -27,6 +27,11 @@ words and date, or the item it grew from), **Principles** (numbered, each
 checkable by code or a test), **Scope** and **Done when**. `docket search` the
 goal first and link what already covers part of it.
 
+Name every repository an item changes with `--repo PATH`, once for each: `docket new T "..." --repo PATH`.
+Use `--repo @OWNER/NAME` for another project's root, and `docket edit ID --repo PATH` to change them
+later. An item naming none takes its plan's repositories when it has a parent, else the `checkout`
+fact; an item filed with no parent names its own.
+
 ## Its tickets
 
 `docket new T "the change" --body -` per change that lands on its own (`B` for

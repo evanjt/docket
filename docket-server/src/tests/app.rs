@@ -87,7 +87,8 @@ async fn test_show_matches_the_json_of_docket_show() {
         "complexity": null, "release": null, "area": "general",
         "type": "task", "labels": ["group:g", "single"], "body": "Body text",
         "opened_at": "o1", "updated_at": "u1",
-        "group": "g", "repo": null, "word": "ready", "priority": "high", "superseded_by": null,
+        "group": "g", "repo": null, "repos": [], "word": "ready", "priority": "high",
+        "superseded_by": null,
         "related": ["CON1"], "parent": "PK1", "origin": [], "children": [],
         "cites": [{"path": "src/a.rs", "line": 7, "kind": "cites_file"}]
         }"#,

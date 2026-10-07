@@ -88,7 +88,11 @@ pub fn realpath(path: &Path) -> String {
 
 /// The project's repositories on this machine: each root with each of its repos, as directories.
 #[must_use]
-pub fn repo_dirs(roots: &[String], repos: &[String]) -> Vec<PathBuf> {
+pub fn repo_dirs(
+    all: &[docket_client::roots::Root],
+    roots: &[String],
+    repos: &[String],
+) -> Vec<PathBuf> {
     let rels: Vec<String> = if repos.is_empty() {
         vec![".".into()]
     } else {
@@ -97,7 +101,9 @@ pub fn repo_dirs(roots: &[String], repos: &[String]) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
     for root in roots {
         for rel in &rels {
-            let d = expand(root, rel);
+            let Ok(d) = resolve_repo(all, root, rel) else {
+                continue;
+            };
             if d.is_dir() && !out.contains(&d) {
                 out.push(d);
             }
@@ -117,6 +123,38 @@ pub fn expand(root: &str, rel: &str) -> PathBuf {
         return PathBuf::from(rel);
     }
     Path::new(root).join(rel)
+}
+
+/// The directory a repo value names: a path under `root`, the filing project's root, or, for
+/// `@OWNER/NAME[/PATH]`, a path under a root bound to that project in `roots` on this machine, the
+/// shortest existing one, else the shortest.
+///
+/// # Errors
+/// The named project has no root on this machine; the message names `docket bind`.
+pub fn resolve_repo(
+    roots: &[docket_client::roots::Root],
+    root: &str,
+    rel: &str,
+) -> Result<PathBuf, String> {
+    let Some((slug, sub)) = docket_core::label::foreign(rel) else {
+        return Ok(expand(root, rel));
+    };
+    let mut bound: Vec<&str> = roots
+        .iter()
+        .filter(|r| r.project == slug)
+        .map(|r| r.path.as_str())
+        .collect();
+    bound.sort_by_key(|p| p.len());
+    let Some(other) = bound
+        .iter()
+        .find(|p| Path::new(p).is_dir())
+        .or(bound.first())
+    else {
+        return Err(format!(
+            "{slug} is not bound on this machine: clone it and run docket bind {slug} from its root"
+        ));
+    };
+    Ok(expand(other, sub))
 }
 
 #[cfg(test)]

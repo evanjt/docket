@@ -70,6 +70,11 @@ the first passed over.
 A choice only the owner can make is a question with every option and its
 evidence (`docket new Q ... --body -`); it does not hold the audit.
 
+Name every repository an item changes with `--repo PATH`, once for each: `docket new T "..." --repo PATH`.
+Use `--repo @OWNER/NAME` for another project's root, and `docket edit ID --repo PATH` to change them
+later. An item naming none takes its plan's repositories when it has a parent, else the `checkout`
+fact; an item filed with no parent names its own.
+
 ## 5. Close the plan
 
     docket close A3 "audited: principles 1-5 checked at <sha>, tickets' tests pass; gaps T30, T31; observed: <each normal or low gap>"

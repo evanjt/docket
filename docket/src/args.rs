@@ -176,10 +176,11 @@ pub enum Cmd {
         /// the group it is taken with: the label group:NAME
         #[arg(long)]
         group: Option<String>,
-        /// the repository it changes, a path under the project root: the label repo:PATH; under a
-        /// plan with one, the plan's
+        /// a repository it changes, a path under the project root or @OWNER/NAME for another
+        /// project's: the label repo:PATH; give it once for each repository; under a plan with
+        /// one, the plan's
         #[arg(long, value_name = "PATH")]
-        repo: Option<String>,
+        repo: Vec<String>,
         /// the area it is filed in; under a plan it is the plan's, and naming another is refused
         #[arg(long, value_name = "AREA")]
         area: Option<String>,
@@ -384,6 +385,10 @@ pub enum Cmd {
         /// the area it and every item under it move to; refused on an item under a plan, whose area is the plan's
         #[arg(long, value_name = "AREA")]
         area: Option<String>,
+        /// the repositories it changes, replacing those it has: once for each, a path under the
+        /// project root or @OWNER/NAME; "" takes them away
+        #[arg(long, value_name = "PATH")]
+        repo: Vec<String>,
         #[arg(long, value_name = "TEXT")]
         append: Option<String>,
         #[arg(long, value_name = "FILE|-")]
@@ -686,6 +691,9 @@ pub enum Cmd {
         #[arg(long)]
         root: Option<String>,
     },
+    /// take a directory (this one by default) off this machine's roots
+    #[command(hide = true)]
+    Unbind { path: Option<String> },
 }
 
 /// `docket dep`: an item's dependencies, added or removed.
@@ -786,10 +794,11 @@ pub enum JobCmd {
         effort: Option<String>,
         #[arg(long, value_parser = JOB_ROLES, default_value = "build")]
         role: String,
-        /// the repository the item changes, a path under this machine's root; none takes the
-        /// checkout fact
+        /// a repository the item changes, a path under this machine's root or @OWNER/NAME for
+        /// another project's; several make a job directory holding a worktree of each; none takes
+        /// the checkout fact
         #[arg(long, value_name = "PATH")]
-        repo: Option<String>,
+        repo: Vec<String>,
     },
     /// every job on this machine, or the one named: running, done, failed or lost, and its report
     Status { job: Option<String> },

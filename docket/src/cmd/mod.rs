@@ -102,6 +102,7 @@ pub fn run(ctx: &mut Ctx, cmd: Option<&Cmd>) -> Result<i32> {
         Cmd::Stale { open_only, prune } => audit::stale(ctx, *open_only, *prune),
         Cmd::Squash { messages, cap } => squash::squash(ctx, messages.as_deref(), *cap),
         Cmd::Bind { slug, root } => write::bind(ctx, slug.as_ref(), root.as_ref()),
+        Cmd::Unbind { path } => write::unbind(ctx, path.as_ref()),
         Cmd::Skills {
             what,
             key,
@@ -223,7 +224,7 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
                 theme: theme.as_ref(),
                 release: release.as_ref(),
                 group: group.as_ref(),
-                repo: repo.as_ref(),
+                repo,
                 area: area.as_ref(),
                 parent: parent.as_ref(),
             },
@@ -452,6 +453,7 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             release,
             carry,
             area,
+            repo,
             append,
             body,
         } => write::edit(
@@ -462,6 +464,7 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
                 release: release.as_ref(),
                 carry: *carry,
                 area: area.as_ref(),
+                repo,
                 append: append.as_ref(),
                 body: body.as_ref(),
             },

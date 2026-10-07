@@ -275,8 +275,16 @@ struct Machine {
 
 impl Machine {
     fn new() -> Self {
-        let tmp = tempfile::tempdir().unwrap();
-        let co = tmp.path().join("p");
+        let m = Self {
+            tmp: tempfile::tempdir().unwrap(),
+        };
+        m.repo("p");
+        m
+    }
+
+    /// A repository at `name` in the machine's directory, with one commit and the lead's branch.
+    fn repo(&self, name: &str) -> std::path::PathBuf {
+        let co = self.tmp.path().join(name);
         fs::create_dir_all(&co).unwrap();
         for args in [
             vec!["init", "-q", "-b", "main"],
@@ -298,7 +306,7 @@ impl Machine {
                 .unwrap();
             assert!(ok.success());
         }
-        Self { tmp }
+        co
     }
 
     fn checkout(&self) -> std::path::PathBuf {
@@ -387,6 +395,86 @@ fn test_a_job_in_a_named_repository_takes_a_slot_named_for_it_and_records_it() {
     );
     let r = row(&started.dir, now()).unwrap();
     assert_eq!(r.repo.as_deref(), Some("toys/kites"));
+}
+
+#[test]
+fn test_a_repository_sits_in_a_job_directory_where_it_sits_under_the_root() {
+    assert_eq!(place_of("kites"), Path::new("kites"));
+    assert_eq!(place_of("toys/kites"), Path::new("toys/kites"));
+    assert_eq!(place_of("@acme/lib"), Path::new("lib"));
+    assert_eq!(place_of("@acme/lib/core"), Path::new("lib/core"));
+    assert_eq!(place_of("."), Path::new(""));
+}
+
+#[test]
+fn test_a_job_in_several_repositories_holds_a_worktree_of_each_on_its_branch_in_one_directory() {
+    let m = Machine::new();
+    let lanterns = m.repo("lanterns");
+    let spec = Spec {
+        provision: Some("echo once >> provisioned".into()),
+        ..Machine::spec("lead/t14-1")
+    };
+    let program = m.runner(r#"printf '%s %s\n' "$PWD" "$DOCKET_BRANCH" > ran"#);
+    let repos = [
+        ("toys/kites".to_string(), m.checkout()),
+        ("@acme/lanterns".to_string(), lanterns.clone()),
+    ];
+    let mut started = run_in_repos(&spec, &repos, &m.state(), &[], &program).unwrap();
+    started.child.wait().unwrap();
+    let tree = started.dir.join("tree");
+    assert_eq!(started.worktree, tree);
+    assert_eq!(
+        fs::read_to_string(tree.join("provisioned")).unwrap(),
+        "once\n"
+    );
+    let ran = fs::read_to_string(tree.join("ran")).unwrap();
+    assert!(ran.ends_with(" lead/t14-1\n"), "{ran}");
+    for at in ["toys/kites", "lanterns"] {
+        let branch = git(&tree.join(at), &["branch", "--show-current"]).unwrap();
+        assert_eq!(branch, "lead/t14-1", "{at}");
+    }
+    let r = row(&started.dir, now()).unwrap();
+    assert_eq!(
+        r.repos,
+        ["@acme/lanterns", "toys/kites"],
+        "the shallower first, as the directory was made"
+    );
+    fs::write(tree.join("lanterns/new.txt"), "lit\n").unwrap();
+    let Diff::Several(changes) = diff(&started.dir).unwrap() else {
+        panic!("one change for a job in several repositories")
+    };
+    assert_eq!(changes.len(), 2);
+    assert!(changes[0].change.patch.contains("new.txt"), "{changes:?}");
+    assert!(changes[1].change.is_empty());
+
+    remove(&started.dir, false).unwrap();
+    assert!(!started.dir.exists());
+    for co in [m.checkout(), lanterns] {
+        assert_eq!(git(&co, &["worktree", "list"]).unwrap().lines().count(), 1);
+        assert_eq!(git(&co, &["branch", "--list", "lead/t14-1"]).unwrap(), "");
+    }
+}
+
+#[test]
+fn test_a_job_whose_repositories_sit_at_one_place_is_refused_and_leaves_nothing() {
+    let m = Machine::new();
+    let other = m.repo("other");
+    let repos = [
+        ("lib".to_string(), m.checkout()),
+        ("@acme/lib".to_string(), other),
+    ];
+    let program = m.runner("true");
+    let Err(why) = run_in_repos(
+        &Machine::spec("lead/t14-1"),
+        &repos,
+        &m.state(),
+        &[],
+        &program,
+    ) else {
+        panic!("started two repositories at one place")
+    };
+    assert!(why.contains("both sit at lib"), "{why}");
+    assert!(rows(&m.state(), now()).is_empty());
 }
 
 #[test]
@@ -575,6 +663,22 @@ fn test_every_brief_triages_a_filing_by_what_it_is() {
 }
 
 #[test]
+fn test_an_observation_names_the_repository_it_is_about_in_brackets() {
+    assert_eq!(
+        observation("[@acme/lib] the cache never expires"),
+        (Some("@acme/lib"), "the cache never expires")
+    );
+    assert_eq!(observation("[web] one"), (Some("web"), "one"));
+    assert_eq!(observation("no repo here"), (None, "no repo here"));
+    assert_eq!(observation("[../out] x"), (None, "[../out] x"));
+    assert_eq!(observation("[] x"), (None, "[] x"));
+    assert_eq!(
+        observed("j", &["[web] one".into(), "two".into()]),
+        "**Observations, from the job j.**\n\n- [web] one\n- two"
+    );
+}
+
+#[test]
 fn test_observations_are_every_observe_line_and_read_as_a_list() {
     let text = "OBSERVE the retry sleeps a fixed second\nNOTE built it\nOBSERVE  the log names no host \nOBSERVE \nDONE";
     assert_eq!(
@@ -680,6 +784,7 @@ fn test_removing_a_lead_job_leaves_the_checkout_and_its_branch() {
         started: now(),
         base: None,
         repo: None,
+        parts: Vec::new(),
     };
     fs::write(dir.join("meta.json"), serde_json::to_string(&meta).unwrap()).unwrap();
     fs::write(dir.join("exit"), "0").unwrap();

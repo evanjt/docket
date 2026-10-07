@@ -17,8 +17,8 @@ use docket_core::machine::{Limit, Machine};
 
 use crate::ctx::Ctx;
 use crate::dispatch::{
-    Here, Via, branch_for, choose, commit_change, ended_in, git, gone, limited_runners, nonce,
-    push_to_machine, read_machines_now, role_for, runner_counts,
+    Here, Via, branch_for, commit_change, ended_in, git, gone, limited_runners, nonce,
+    push_to_machine, ranked, read_machines_now, role_for, runner_counts,
 };
 use crate::fail::{Fail, Result};
 use crate::job::{self, Change};
@@ -55,22 +55,9 @@ pub fn dispatch(ctx: &mut Ctx, ask: &Ask) -> Result<i32> {
     }
     let ready = ready_row(ctx, &id)?;
     let role = role_for(ready.as_ref(), ask.role, &id).map_err(Fail::refused)?;
-    let (model, m) = place(
-        ctx,
-        ask,
-        &item,
-        &role,
-        &runner_counts(ready.as_ref()),
-        &here,
-    )?;
-    let m = &m;
-    let via = Via::of(m, &here);
-    let named = item["repo"].as_str();
-    let checkout = via
-        .docket(&where_args(&slug, named))
-        .map_err(Fail::refused)?;
-    let repo = lead_repo(ctx, &slug, named)?;
-    let base = git(&repo, &["rev-parse", "HEAD"]).map_err(Fail::refused)?;
+    let named = repos_named(&item);
+    let (model, m, pushes) = placed(ctx, ask, &item, &role, ready.as_ref(), &named)?;
+    let via = Via::of(&m, &here);
     let branch = branch_for(&id, nonce());
     let name = job::name_of(&branch);
     let common = Common {
@@ -91,23 +78,22 @@ pub fn dispatch(ctx: &mut Ctx, ask: &Ask) -> Result<i32> {
             effort: model.effort.clone(),
         },
     )?;
-    let url = via.git_url(&checkout);
     let started = start(
         &via,
-        &repo,
-        &url,
-        &base,
+        &pushes,
         &Job {
             slug: &slug,
             id: &id,
             branch: &branch,
             role: &role,
             model: &model,
-            repo: named,
+            repos: &named,
         },
     );
     if let Err(why) = started {
-        let _ = push_to_machine(&repo, &url, &format!(":refs/heads/{branch}"));
+        for p in &pushes {
+            let _ = push_to_machine(&p.repo, &p.url, &format!(":refs/heads/{branch}"));
+        }
         give_back(
             ctx,
             common,
@@ -119,6 +105,8 @@ pub fn dispatch(ctx: &mut Ctx, ask: &Ask) -> Result<i32> {
             m.name
         )));
     }
+    let base = pushes.first().map(|p| p.base.clone()).unwrap_or_default();
+    let from = from_line(&named, &pushes);
     if ctx.json {
         let out = serde_json::json!({
             "id": id, "machine": m.name, "branch": branch, "job": name, "base": base,
@@ -127,9 +115,8 @@ pub fn dispatch(ctx: &mut Ctx, ask: &Ask) -> Result<i32> {
         println!("{out}");
     } else {
         println!(
-            "dispatched {id} to {}: {role} on {branch} from {}, {} {}{}, job {name}",
+            "dispatched {id} to {}: {role} on {branch} from {from}, {} {}{}, job {name}",
             m.name,
-            &base[..base.len().min(10)],
             model.runner,
             model.model,
             model
@@ -140,6 +127,98 @@ pub fn dispatch(ctx: &mut Ctx, ask: &Ask) -> Result<i32> {
         );
     }
     Ok(0)
+}
+
+/// The model a job runs on, the machine it is placed on, and the base of each repository it names,
+/// taken from the lead's repository of it, to push to that machine's checkout.
+fn placed(
+    ctx: &mut Ctx,
+    ask: &Ask,
+    item: &Value,
+    role: &str,
+    ready: Option<&Value>,
+    named: &[Option<String>],
+) -> Result<(Model, Machine, Vec<Push>)> {
+    let slug = ctx.project()?;
+    let here = ctx.host()?;
+    let id = item["id"].as_str().unwrap_or_default();
+    let mut bases = Vec::new();
+    for r in named {
+        let repo = lead_repo(ctx, &slug, r.as_deref())?;
+        let base = git(&repo, &["rev-parse", "HEAD"]).map_err(Fail::refused)?;
+        bases.push((repo, base));
+    }
+    let (model, machines) = place(ctx, ask, item, role, &runner_counts(ready), &here)?;
+    let (m, checkouts) = resolving(&machines, &here, &slug, id, named)?;
+    let via = Via::of(&m, &here);
+    let pushes = bases
+        .into_iter()
+        .zip(&checkouts)
+        .map(|((repo, base), checkout)| Push {
+            url: via.git_url(checkout),
+            repo,
+            base,
+        })
+        .collect();
+    Ok((model, m, pushes))
+}
+
+/// The base a dispatch names: the first ten characters of its sha, or `REPO@SHA` for each
+/// repository of an item naming several.
+fn from_line(named: &[Option<String>], pushes: &[Push]) -> String {
+    let short = |sha: &str| sha[..sha.len().min(10)].to_string();
+    if pushes.len() == 1 {
+        return short(&pushes[0].base);
+    }
+    let each: Vec<String> = named
+        .iter()
+        .zip(pushes)
+        .map(|(r, p)| format!("{}@{}", r.as_deref().unwrap_or("."), short(&p.base)))
+        .collect();
+    each.join(" ")
+}
+
+/// The repositories an item changes, as the server reads them; one `None`, the `checkout` fact's,
+/// for an item naming none.
+fn repos_named(item: &Value) -> Vec<Option<String>> {
+    let mut out: Vec<Option<String>> = item["repos"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(|r| Some(r.to_string()))
+        .collect();
+    if out.is_empty() {
+        out.push(item["repo"].as_str().map(str::to_string));
+    }
+    out
+}
+
+/// The first of `machines` on which every repository of `named` resolves, with its checkout of
+/// each, so a job is placed only where it can run.
+fn resolving(
+    machines: &[Machine],
+    here: &str,
+    slug: &str,
+    id: &str,
+    named: &[Option<String>],
+) -> Result<(Machine, Vec<String>)> {
+    let mut why = Vec::new();
+    for m in machines {
+        let via = Via::of(m, here);
+        let found: std::result::Result<Vec<String>, String> = named
+            .iter()
+            .map(|r| via.docket(&where_args(slug, r.as_deref())))
+            .collect();
+        match found {
+            Ok(checkouts) => return Ok((m.clone(), checkouts)),
+            Err(e) => why.push(format!("{}: {}", m.name, first_line(&e))),
+        }
+    }
+    Err(Fail::refused(format!(
+        "no machine that can take {id} has every repository it names: {}",
+        why.join("; ")
+    )))
 }
 
 /// Refuses a dispatch while the project's mode is drain or pause.
@@ -160,7 +239,7 @@ fn place(
     role: &str,
     runs: &BTreeMap<String, usize>,
     here: &str,
-) -> Result<(Model, Machine)> {
+) -> Result<(Model, Vec<Machine>)> {
     let slug = ctx.project()?;
     let facts = ctx.api.facts(&slug)?;
     let machines = machines(ctx)?;
@@ -175,7 +254,7 @@ fn place(
     )?;
     refuse_a_running_group(ctx, item, ask.force)?;
     let running = running(&live_claims(ctx, true)?);
-    let m = pick(
+    let picked = pick(
         &machines,
         &Pick {
             running: &running,
@@ -185,7 +264,7 @@ fn place(
             now: &now,
         },
     )?;
-    Ok((model, m.clone()))
+    Ok((model, picked.into_iter().cloned().collect()))
 }
 
 /// The claim of a job that never started given back, its attempt ended as failed.
@@ -348,55 +427,28 @@ pub fn collect(ctx: &mut Ctx, id: &str, discard: bool) -> Result<i32> {
             "{name} is still running on {on}: docket jobs --wait"
         )));
     }
-    // The repository the job recorded it ran for; a machine whose docket records none sends no
-    // field, and the item's says.
-    let named = match row.get("repo") {
-        Some(r) => r.as_str(),
-        None => item["repo"].as_str(),
+    let several: Vec<String> = row["repos"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect();
+    let ran = Ran {
+        via: &via,
+        slug: &slug,
+        name,
+        on,
+        branch,
     };
-    let checkout = via
-        .docket(&where_args(&slug, named))
-        .map_err(Fail::refused)?;
-    let repo = lead_repo(ctx, &slug, named)?;
-    let same = via == Via::Here && same_repo(&repo, Path::new(&checkout));
-    let committed = if discard {
-        remove(&via, &slug, name, same)?;
-        None
-    } else if let Some(base) = row["base"].as_str() {
-        let ran = Ran {
-            via: &via,
-            slug: &slug,
-            name,
-            on,
-            branch,
-            repo: &repo,
-            same,
-        };
-        take(ctx, &ran, &row, base)?
+    let (committed, commits) = if several.is_empty() {
+        land_one(ctx, &ran, &item, &row, discard)?
     } else {
-        if !same {
-            git(
-                &repo,
-                &[
-                    "fetch",
-                    &via.git_url(&checkout),
-                    &format!("+refs/heads/{branch}:refs/heads/{branch}"),
-                ],
-            )
-            .map_err(Fail::refused)?;
-        }
-        remove(&via, &slug, name, same)?;
-        None
+        land_several(ctx, &ran, &several, &row, discard)?
     };
     append_observations(ctx, &id, name, &row)?;
     report_usage(ctx, &slug, &id, branch, &row);
     record_limits(ctx, &[with_machine(&row, on)]);
-    let reference = format!("refs/heads/{branch}");
-    let commits = if git(&repo, &["rev-parse", "--verify", "--quiet", &reference]).is_ok() {
-        git(&repo, &["log", "--oneline", &format!("HEAD..{branch}")]).map_err(Fail::refused)?
-    } else {
-        String::new()
-    };
     let said = Collected {
         id: &id,
         branch,
@@ -409,6 +461,261 @@ pub fn collect(ctx: &mut Ctx, id: &str, discard: bool) -> Result<i32> {
     };
     said.print(ctx.json);
     Ok(0)
+}
+
+/// A job in one repository landed: its change committed here on the job's branch, the job
+/// cleared. Returns the short sha, `None` for an empty change, and the commits the branch holds
+/// past this repository's HEAD.
+fn land_one(
+    ctx: &mut Ctx,
+    ran: &Ran,
+    item: &Value,
+    row: &Value,
+    discard: bool,
+) -> Result<(Option<String>, String)> {
+    let (via, slug, name, branch) = (ran.via, ran.slug, ran.name, ran.branch);
+    // The repository the job recorded it ran for; a machine whose docket records none sends no
+    // field, and the item's says.
+    let named = match row.get("repo") {
+        Some(r) => r.as_str(),
+        None => item["repo"].as_str(),
+    };
+    let checkout = via
+        .docket(&where_args(slug, named))
+        .map_err(Fail::refused)?;
+    let repo = lead_repo(ctx, slug, named)?;
+    let same = *via == Via::Here && same_repo(&repo, Path::new(&checkout));
+    let committed = if discard {
+        remove(via, slug, name, same)?;
+        None
+    } else if let Some(base) = row["base"].as_str() {
+        take(ctx, ran, &repo, same, row, base)?
+    } else {
+        if !same {
+            git(
+                &repo,
+                &[
+                    "fetch",
+                    &via.git_url(&checkout),
+                    &format!("+refs/heads/{branch}:refs/heads/{branch}"),
+                ],
+            )
+            .map_err(Fail::refused)?;
+        }
+        remove(via, slug, name, same)?;
+        None
+    };
+    Ok((committed, commits_past_head(&repo, branch)?))
+}
+
+/// The commits `branch` holds past the repository's HEAD, one line each; none when it is absent.
+fn commits_past_head(repo: &Path, branch: &str) -> Result<String> {
+    let reference = format!("refs/heads/{branch}");
+    if git(repo, &["rev-parse", "--verify", "--quiet", &reference]).is_err() {
+        return Ok(String::new());
+    }
+    git(repo, &["log", "--oneline", &format!("HEAD..{branch}")]).map_err(Fail::refused)
+}
+
+/// One repository of a job whose item names several, as a collect reaches it here.
+struct Side {
+    repo: String,
+    /// The lead's repository of it, where the commit is made.
+    local: PathBuf,
+    /// Whether the job's worktree of it belongs to that repository.
+    same: bool,
+}
+
+/// One repository's change committed here, on no branch yet: the commit made, `None` for an empty
+/// change, which leaves the branch at `base`.
+struct Landing<'a> {
+    side: &'a Side,
+    base: String,
+    made: Option<crate::dispatch::Made>,
+}
+
+impl Landing<'_> {
+    /// The job's branch moved to the commit made, or to the base for an empty change.
+    fn keep(&self, branch: &str) -> std::result::Result<(), String> {
+        match &self.made {
+            Some(m) => m.keep(&self.side.local, branch),
+            None => git(&self.side.local, &["branch", "-f", branch, &self.base]).map(|_| ()),
+        }
+    }
+}
+
+/// A job in several repositories landed in all of them or none: each repository's change is
+/// committed here first, no branch moving, then every branch is moved, then the job cleared. A
+/// change that cannot be committed, or a branch that cannot be moved, leaves every branch where it
+/// was and the job where it ran. Returns `REPO@SHA` for each repository committed in.
+fn land_several(
+    ctx: &mut Ctx,
+    ran: &Ran,
+    repos: &[String],
+    row: &Value,
+    discard: bool,
+) -> Result<(Option<String>, String)> {
+    let (via, slug, name, branch) = (ran.via, ran.slug, ran.name, ran.branch);
+    let sides = sides_of(ctx, ran, repos)?;
+    let same = sides.iter().any(|s| s.same);
+    if discard {
+        remove(via, slug, name, same)?;
+        return Ok((None, String::new()));
+    }
+    let landings = commit_all(ctx, ran, &sides, row)?;
+    move_all(ran, &landings)?;
+    remove(via, slug, name, same)?;
+    // A branch checked out in the job's own worktree moves once that worktree is gone.
+    for l in landings.iter().filter(|l| l.side.same) {
+        l.keep(branch).map_err(|why| {
+            let sha = l.made.as_ref().map_or(l.base.as_str(), |m| m.sha.as_str());
+            Fail::refused(format!(
+                "{why}: the change in {} is {sha}, git branch -f {branch} {sha} there",
+                l.side.repo
+            ))
+        })?;
+    }
+    let mut landed = Vec::new();
+    let mut commits = Vec::new();
+    for l in &landings {
+        if let Some(m) = &l.made {
+            let short =
+                git(&l.side.local, &["rev-parse", "--short", &m.sha]).map_err(Fail::refused)?;
+            landed.push(format!("{}@{short}", l.side.repo));
+        }
+        for line in commits_past_head(&l.side.local, branch)?.lines() {
+            commits.push(format!("{}: {line}", l.side.repo));
+        }
+    }
+    Ok((
+        (!landed.is_empty()).then(|| landed.join(" ")),
+        commits.join("\n"),
+    ))
+}
+
+/// Each repository of the job as this collect reaches it: the lead's repository of it, and whether
+/// the job's worktree belongs to that repository.
+fn sides_of(ctx: &mut Ctx, ran: &Ran, repos: &[String]) -> Result<Vec<Side>> {
+    let mut sides = Vec::new();
+    for r in repos {
+        let checkout = ran
+            .via
+            .docket(&where_args(ran.slug, Some(r)))
+            .map_err(Fail::refused)?;
+        let local = lead_repo(ctx, ran.slug, Some(r))?;
+        let same = *ran.via == Via::Here && same_repo(&local, Path::new(&checkout));
+        sides.push(Side {
+            repo: r.clone(),
+            local,
+            same,
+        });
+    }
+    Ok(sides)
+}
+
+/// Each repository's change committed here on the commit the job started from there, no branch
+/// moving, after the message and the private names are checked across all of them.
+fn commit_all<'a>(
+    ctx: &mut Ctx,
+    ran: &Ran,
+    sides: &'a [Side],
+    row: &Value,
+) -> Result<Vec<Landing<'a>>> {
+    let (name, on) = (ran.name, ran.on);
+    let said = ran
+        .via
+        .docket(&strings(&["-p", ran.slug, "job", "diff", name, "--json"]))
+        .map_err(Fail::refused)?;
+    let Ok(job::Diff::Several(changes)) = serde_json::from_str::<job::Diff>(&said) else {
+        return Err(Fail::refused(format!(
+            "{name} on {on} did not send a change for each of its repositories: update docket there"
+        )));
+    };
+    let message = proposed(ran, row, changes.iter().map(|c| &c.change))?;
+    let look = crate::cmd::private::read(ctx)?;
+    for c in changes.iter().filter(|c| !c.change.is_empty()) {
+        let found = look.change_hits(&c.change, message);
+        if !found.is_empty() {
+            return Err(Fail::refused(format!(
+                "{name}'s change in {} carries private names and is kept on {on}: {}",
+                c.repo,
+                found.join("; ")
+            )));
+        }
+    }
+    let mut out = Vec::new();
+    for side in sides {
+        let Some(c) = changes.iter().find(|c| c.repo == side.repo) else {
+            return Err(Fail::refused(format!(
+                "{name} on {on} sent no change for {}: the job is kept",
+                side.repo
+            )));
+        };
+        let made = (!c.change.is_empty())
+            .then(|| commit_change(&side.local, &c.base, &c.change, message))
+            .transpose()
+            .map_err(|why| {
+                Fail::refused(format!(
+                    "{name}'s change in {} was not committed here, so none of its repositories \
+                     moved, and the job is kept on {on}: {why}",
+                    side.repo
+                ))
+            })?;
+        out.push(Landing {
+            side,
+            base: c.base.clone(),
+            made,
+        });
+    }
+    Ok(out)
+}
+
+/// The job's branch moved in each repository whose worktree is not the job's own; when one cannot
+/// move, those moved go back to where they were.
+fn move_all(ran: &Ran, landings: &[Landing]) -> Result<()> {
+    let branch = ran.branch;
+    let reference = format!("refs/heads/{branch}");
+    let mut moved: Vec<(&Landing, Option<String>)> = Vec::new();
+    for l in landings.iter().filter(|l| !l.side.same) {
+        let was = git(
+            &l.side.local,
+            &["rev-parse", "--verify", "--quiet", &reference],
+        )
+        .ok();
+        if let Err(why) = l.keep(branch) {
+            for (back, was) in moved {
+                let _ = match was.as_deref() {
+                    Some(sha) => git(&back.side.local, &["branch", "-f", branch, sha]),
+                    None => git(&back.side.local, &["branch", "-D", branch]),
+                };
+            }
+            return Err(Fail::refused(format!(
+                "{why}: no branch moved, the job is kept on {}, collect it again",
+                ran.on
+            )));
+        }
+        moved.push((l, was));
+    }
+    Ok(())
+}
+
+/// The message a job proposed for its change, which a change needs to be committed.
+fn proposed<'a, 'b>(
+    ran: &Ran,
+    row: &'a Value,
+    mut changes: impl Iterator<Item = &'b Change>,
+) -> Result<&'a str> {
+    let message = row["message"]
+        .as_str()
+        .or_else(|| row["note"].as_str())
+        .filter(|m| !m.is_empty());
+    if message.is_none() && changes.any(|c| !c.is_empty()) {
+        return Err(Fail::refused(format!(
+            "{} left a change but proposed no MESSAGE line to commit it with: docket job log {} on {}",
+            ran.name, ran.name, ran.on
+        )));
+    }
+    Ok(message.unwrap_or_default())
 }
 
 /// What a job's end posts to its claim: its times, exit, final report word, tokens and reported
@@ -498,32 +805,29 @@ struct Ran<'a> {
     name: &'a str,
     on: &'a str,
     branch: &'a str,
-    repo: &'a Path,
-    /// Whether the job's worktree belongs to this repository.
-    same: bool,
 }
 
-/// The job's change committed here on `base`, then the job cleared, so a change that cannot be
-/// committed leaves the job where it ran. Returns the short sha, `None` for an empty change.
-fn take(ctx: &mut Ctx, ran: &Ran, row: &Value, base: &str) -> Result<Option<String>> {
-    let (name, on, branch, repo) = (ran.name, ran.on, ran.branch, ran.repo);
-    let message = row["message"]
-        .as_str()
-        .or_else(|| row["note"].as_str())
-        .filter(|m| !m.is_empty());
+/// The job's change committed here in `repo` on `base`, then the job cleared, so a change that
+/// cannot be committed leaves the job where it ran. `same` says the job's worktree belongs to
+/// `repo`. Returns the short sha, `None` for an empty change.
+fn take(
+    ctx: &mut Ctx,
+    ran: &Ran,
+    repo: &Path,
+    same: bool,
+    row: &Value,
+    base: &str,
+) -> Result<Option<String>> {
+    let (name, on, branch) = (ran.name, ran.on, ran.branch);
     let said = ran
         .via
         .docket(&strings(&["-p", ran.slug, "job", "diff", name, "--json"]))
         .map_err(Fail::refused)?;
     let change = read_change(&said);
-    if !change.is_empty() && message.is_none() {
-        return Err(Fail::refused(format!(
-            "{name} left a change but proposed no MESSAGE line to commit it with: docket job log {name} on {on}"
-        )));
-    }
+    let message = proposed(ran, row, std::iter::once(&change))?;
     if !change.is_empty() {
         let look = crate::cmd::private::read(ctx)?;
-        let found = look.change_hits(&change, message.unwrap_or_default());
+        let found = look.change_hits(&change, message);
         if !found.is_empty() {
             return Err(Fail::refused(format!(
                 "{name}'s change carries private names and is kept on {on}: {}",
@@ -532,7 +836,7 @@ fn take(ctx: &mut Ctx, ran: &Ran, row: &Value, base: &str) -> Result<Option<Stri
         }
     }
     let made = (!change.is_empty())
-        .then(|| commit_change(repo, base, &change, message.unwrap_or_default()))
+        .then(|| commit_change(repo, base, &change, message))
         .transpose()
         .map_err(|why| {
             Fail::refused(format!(
@@ -544,13 +848,13 @@ fn take(ctx: &mut Ctx, ran: &Ran, row: &Value, base: &str) -> Result<Option<Stri
         None => git(repo, &["branch", "-f", branch, base]).map(|_| ()),
     };
     // A branch checked out in the job's own worktree cannot be moved until that worktree is gone.
-    if !ran.same {
+    if !same {
         keep().map_err(|why| {
             Fail::refused(format!("{why}: the job is kept on {on}, collect it again"))
         })?;
     }
-    remove(ran.via, ran.slug, name, ran.same)?;
-    if ran.same {
+    remove(ran.via, ran.slug, name, same)?;
+    if same {
         keep().map_err(|why| {
             let sha = made.as_ref().map_or(base, |m| m.sha.as_str());
             Fail::refused(format!(
@@ -663,19 +967,27 @@ struct Job<'a> {
     branch: &'a str,
     role: &'a str,
     model: &'a Model,
-    /// The repository the item names under the project root; none is the `checkout` fact's.
-    repo: Option<&'a str>,
+    /// The repositories the item names; a `None` is the `checkout` fact's.
+    repos: &'a [Option<String>],
 }
 
-/// The base pushed to the machine's checkout as the job's branch, then the job started there.
-fn start(
-    via: &Via,
-    repo: &Path,
-    url: &str,
-    base: &str,
-    job: &Job,
-) -> std::result::Result<String, String> {
-    push_to_machine(repo, url, &format!("{base}:refs/heads/{}", job.branch))?;
+/// One repository's base, pushed from the lead's repository to the machine's checkout at `url`.
+struct Push {
+    repo: PathBuf,
+    base: String,
+    url: String,
+}
+
+/// Each repository's base pushed to the machine's checkout as the job's branch, then the job
+/// started there.
+fn start(via: &Via, pushes: &[Push], job: &Job) -> std::result::Result<String, String> {
+    for p in pushes {
+        push_to_machine(
+            &p.repo,
+            &p.url,
+            &format!("{}:refs/heads/{}", p.base, job.branch),
+        )?;
+    }
     let mut args = strings(&[
         "-p", job.slug, "--branch", job.branch, "job", "run", "--id", job.id, "--runner",
     ]);
@@ -689,7 +1001,7 @@ fn start(
     if let Some(e) = &job.model.effort {
         args.extend(strings(&["--effort", e]));
     }
-    if let Some(r) = job.repo {
+    for r in job.repos.iter().flatten() {
         args.extend(strings(&["--repo", r]));
     }
     via.docket(&args)
@@ -788,9 +1100,9 @@ struct Pick<'a> {
     now: &'a str,
 }
 
-/// The machine asked for, when it has the runner free of a usage limit and a free slot, or the one
-/// `choose` picks.
-fn pick<'a>(machines: &'a [Machine], by: &Pick) -> Result<&'a Machine> {
+/// The machine asked for, when it has the runner free of a usage limit and a free slot, or those
+/// `ranked` orders.
+fn pick<'a>(machines: &'a [Machine], by: &Pick) -> Result<Vec<&'a Machine>> {
     let Pick {
         running,
         on,
@@ -799,12 +1111,14 @@ fn pick<'a>(machines: &'a [Machine], by: &Pick) -> Result<&'a Machine> {
         now,
     } = *by;
     let Some(name) = on else {
-        return choose(machines, running, runner, here, now).ok_or_else(|| {
-            Fail::refused(format!(
+        let all = ranked(machines, running, runner, here, now);
+        if all.is_empty() {
+            return Err(Fail::refused(format!(
                 "no machine has {runner} and a free slot: docket jobs shows what runs{}",
                 limit_note(machines, runner, now)
-            ))
-        });
+            )));
+        }
+        return Ok(all);
     };
     let Some(m) = machines.iter().find(|m| m.name == name) else {
         return Err(Fail::refused(format!("no machine {name}: docket machines")));
@@ -823,7 +1137,7 @@ fn pick<'a>(machines: &'a [Machine], by: &Pick) -> Result<&'a Machine> {
             m.slots
         )));
     }
-    Ok(m)
+    Ok(vec![m])
 }
 
 /// One line per machine whose `runner` is under a usage limit at `now`, to follow a refusal.
@@ -1008,6 +1322,10 @@ fn ready_row(ctx: &mut Ctx, id: &str) -> Result<Option<Value>> {
 /// The lead's repository for an item, the one it merges into: the repository the item names, else
 /// the `checkout` fact's, under the project root the lead stands in, by [`Here::repo`].
 fn lead_repo(ctx: &mut Ctx, slug: &str, named: Option<&str>) -> Result<PathBuf> {
+    if let Some(rel) = named.filter(|r| docket_core::label::foreign(r).is_some()) {
+        let dir = crate::local::resolve_repo(&ctx.roots.roots, "", rel).map_err(Fail::refused)?;
+        return top_of(&dir, rel);
+    }
     let facts = ctx.api.facts(slug)?;
     let default = facts
         .skills
@@ -1033,16 +1351,20 @@ fn lead_repo(ctx: &mut Ctx, slug: &str, named: Option<&str>) -> Result<PathBuf> 
             "docket dispatch and collect run inside the lead's git checkout or under a root of {slug}"
         )));
     };
+    top_of(&dir, named.unwrap_or(default))
+}
+
+/// `dir` when it is the top of a git repository, else a refusal naming `wanted`.
+fn top_of(dir: &Path, wanted: &str) -> Result<PathBuf> {
     let real = |p: &Path| std::fs::canonicalize(p).ok();
-    match git(&dir, &["rev-parse", "--show-toplevel"]) {
-        Ok(top) if real(Path::new(&top)).is_some() && real(Path::new(&top)) == real(&dir) => {
+    match git(dir, &["rev-parse", "--show-toplevel"]) {
+        Ok(top) if real(Path::new(&top)).is_some() && real(Path::new(&top)) == real(dir) => {
             Ok(PathBuf::from(top))
         }
         _ => Err(Fail::refused(format!(
-            "{} is no repository: clone {} there, or name the repository the item changes with \
+            "{} is no repository: clone {wanted} there, or name the repository the item changes with \
              docket edit ID --set repo=PATH",
-            dir.display(),
-            named.unwrap_or(default)
+            dir.display()
         ))),
     }
 }

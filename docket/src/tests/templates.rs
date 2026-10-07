@@ -450,3 +450,21 @@ fn test_every_unclaim_in_a_skill_names_its_outcome() {
         }
     }
 }
+
+#[test]
+fn filing_skills_say_how_to_name_repositories() {
+    for name in ["plan", "work", "lead", "audit"] {
+        let s = SKILLS.iter().find(|s| s.name == name).unwrap();
+        for (copy, text) in [("claude", s.claude), ("codex", s.codex)] {
+            for word in ["--repo", "@OWNER/NAME"] {
+                assert!(text.contains(word), "{name} {copy} skill lacks {word}");
+            }
+            if name == "lead" {
+                assert!(
+                    text.contains("OBSERVE [REPO]"),
+                    "lead {copy} skill lacks OBSERVE [REPO]"
+                );
+            }
+        }
+    }
+}

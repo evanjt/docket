@@ -143,7 +143,7 @@ pub fn require_owner(caller: &Caller, verb: &str) -> Result<(), Failure> {
         return Ok(());
     }
     Err(Failure::Forbidden(format!(
-        "docket {verb} is refused on an agent's key. Put what you found under Observations in your report; the loop files it as a low-priority ticket."
+        "docket {verb} is refused on an agent's key. Put what you found under Observations in your report; the lead adds it to your item, and a finding in another repository takes `OBSERVE [REPO] text`."
     )))
 }
 

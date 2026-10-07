@@ -30,6 +30,10 @@ fix, not even a one-line gap.
    finding outside the plan's area is an observation too, unless critical or
    high: then it is linked `related` and left for planning. A choice only the owner can make is a
    question; it does not hold the audit.
+   Name every repository an item changes with `--repo PATH`, once for each: `docket new T "..." --repo PATH`.
+   Use `--repo @OWNER/NAME` for another project's root, and `docket edit ID --repo PATH` to change them
+   later. An item naming none takes its plan's repositories when it has a parent, else the `checkout`
+   fact; an item filed with no parent names its own.
 5. `docket close A3 "audited: principles 1-5 checked at <sha>; gaps T30, T31;
    observed: ..."`, or `clean` with no gaps. The gaps stay open as tickets.
 

@@ -405,6 +405,171 @@ fn test_an_item_runs_in_the_repository_it_names_on_each_machine() {
     assert_parked(&beta_lanterns);
 }
 
+/// The stand-in agent's change in both sibling repositories of its job directory.
+const EDITS_BOTH: &str = "echo flown >> kites/kites.txt && echo lit >> lanterns/lanterns.txt";
+
+/// Give an item both sibling repositories, from the lead's root.
+fn name_both(w: &World, id: &str) {
+    let root = w.home("alpha").join("src/p");
+    for repo in ["repo:kites", "repo:lanterns"] {
+        let out = w.docket("alpha", &root, &["label", "add", id, repo]);
+        assert!(out.status.success(), "{}", text(&out));
+    }
+}
+
+#[test]
+fn test_an_item_naming_two_repositories_runs_in_one_job_directory_and_lands_in_both() {
+    let mut w = World::with_siblings();
+    w.does = EDITS_BOTH.into();
+    let root = w.home("alpha").join("src/p");
+    name_both(&w, "T1");
+    assert_eq!(
+        w.show("T1")["repos"],
+        serde_json::json!(["kites", "lanterns"])
+    );
+
+    let out = w.docket("alpha", &root, &["dispatch", "T1", "--on", "beta"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let branch = w.show("T1")["claim_branch"].as_str().unwrap().to_string();
+    let beta = w.home("beta").join("src/deep/p");
+    for repo in ["kites", "lanterns"] {
+        let listed = sh(&beta.join(repo), "git worktree list --porcelain");
+        let tree = listed
+            .lines()
+            .filter_map(|l| l.strip_prefix("worktree "))
+            .nth(1)
+            .unwrap_or_else(|| panic!("{repo} has no job worktree: {listed}"))
+            .to_string();
+        assert!(tree.ends_with(&format!("/tree/{repo}")), "{tree}");
+        assert!(
+            listed.contains(&format!("branch refs/heads/{branch}")),
+            "{listed}"
+        );
+    }
+
+    let _ = w.docket("alpha", &root, &["jobs", "--wait", "--every", "1"]);
+    let collected = w.docket("alpha", &root, &["collect", "T1"]);
+    assert!(collected.status.success(), "{}", text(&collected));
+    let said = text(&collected);
+    for (repo, line) in [("kites", "flown"), ("lanterns", "lit")] {
+        let here = root.join(repo);
+        assert_eq!(
+            sh(&here, &format!("git log --format=%s main..{branch}")),
+            "Write the job marker"
+        );
+        assert_eq!(
+            sh(&here, &format!("git show {branch}:{repo}.txt | tail -1")),
+            line
+        );
+        let sha = sh(&here, &format!("git rev-parse --short {branch}"));
+        assert!(said.contains(&format!("{repo}@{sha}")), "{said}");
+        assert_eq!(
+            sh(&beta.join(repo), "git worktree list").lines().count(),
+            1,
+            "the job's worktree of {repo} is gone"
+        );
+        assert_eq!(
+            sh(&beta.join(repo), &format!("git branch --list {branch}")),
+            ""
+        );
+    }
+}
+
+#[test]
+fn test_a_collect_that_cannot_commit_in_one_repository_lands_in_neither() {
+    let mut w = World::with_siblings();
+    w.does = EDITS_BOTH.into();
+    let root = w.home("alpha").join("src/p");
+    name_both(&w, "T2");
+    let out = w.docket("alpha", &root, &["dispatch", "T2", "--on", "beta"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let branch = w.show("T2")["claim_branch"].as_str().unwrap().to_string();
+    let _ = w.docket("alpha", &root, &["jobs", "--wait", "--every", "1"]);
+    let kites = root.join("kites");
+    let head = sh(&kites, "git rev-parse HEAD");
+    let hook = root.join("lanterns/.git/hooks/pre-commit");
+    script(&hook, "#!/bin/sh\necho refused here >&2\nexit 1\n");
+
+    let refused = w.docket("alpha", &root, &["collect", "T2"]);
+    assert!(!refused.status.success(), "{}", text(&refused));
+    assert!(
+        text(&refused).contains("refused here"),
+        "{}",
+        text(&refused)
+    );
+    assert_eq!(sh(&kites, "git rev-parse HEAD"), head);
+    assert_eq!(sh(&kites, &format!("git branch --list {branch}")), "");
+    assert_eq!(
+        sh(
+            &root.join("lanterns"),
+            &format!("git branch --list {branch}")
+        ),
+        ""
+    );
+    assert_eq!(w.show("T2")["claim_branch"], branch.as_str());
+    let beta = w.home("beta").join("src/deep/p");
+    assert_eq!(
+        sh(&beta.join("kites"), "git worktree list").lines().count(),
+        2
+    );
+
+    fs::remove_file(&hook).unwrap();
+    let again = w.docket("alpha", &root, &["collect", "T2"]);
+    assert!(again.status.success(), "{}", text(&again));
+    for repo in ["kites", "lanterns"] {
+        assert_eq!(
+            sh(
+                &root.join(repo),
+                &format!("git log --format=%s main..{branch}")
+            ),
+            "Write the job marker"
+        );
+    }
+}
+
+#[test]
+fn test_a_dispatch_skips_a_machine_where_a_named_repository_does_not_resolve() {
+    let mut w = World::with_siblings();
+    w.does = EDITS_BOTH.into();
+    let root = w.home("alpha").join("src/p");
+    name_both(&w, "T1");
+    fs::remove_dir_all(w.home("beta").join("src/deep/p/lanterns")).unwrap();
+    let more = w.lead(&[
+        "machine",
+        "set",
+        "beta",
+        "--ssh",
+        "beta",
+        "--slots",
+        "4",
+        "--runners",
+        "claude,codex",
+    ]);
+    assert!(more.status.success(), "{}", text(&more));
+
+    let on_beta = w.docket("alpha", &root, &["dispatch", "T1", "--on", "beta"]);
+    assert!(!on_beta.status.success(), "{}", text(&on_beta));
+    assert!(text(&on_beta).contains("lanterns"), "{}", text(&on_beta));
+    assert!(w.show("T1")["claim_branch"].is_null());
+
+    let out = w.docket("alpha", &root, &["dispatch", "T1"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(w.show("T1")["claim_on"], "alpha");
+    let branch = w.show("T1")["claim_branch"].as_str().unwrap().to_string();
+
+    let _ = w.docket("alpha", &root, &["jobs", "--wait", "--every", "1"]);
+    let collected = w.docket("alpha", &root, &["collect", "T1"]);
+    assert!(collected.status.success(), "{}", text(&collected));
+    for repo in ["kites", "lanterns"] {
+        let here = root.join(repo);
+        assert_eq!(
+            sh(&here, &format!("git log --format=%s main..{branch}")),
+            "Write the job marker"
+        );
+        assert_eq!(sh(&here, "git worktree list").lines().count(), 1);
+    }
+}
+
 /// The commands sent over ssh that read a machine's jobs.
 fn status_reads(w: &World) -> usize {
     fs::read_to_string(w.machines.join("ssh.log"))

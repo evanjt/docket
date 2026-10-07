@@ -59,27 +59,50 @@ fn test_a_repository_is_a_path_under_the_root_kept_as_its_label() {
 }
 
 #[test]
-fn test_an_items_repository_is_its_first_repo_label_own_before_its_plans() {
+fn test_a_set_of_labels_names_every_repository_once_in_order() {
     assert_eq!(
-        repo_of(&["ci", "repo:kites", "repo:lanterns"]),
-        Some("kites")
+        repos_of(&["ci", "repo:kites", "repo:lanterns", "repo:kites"]),
+        ["kites", "lanterns"]
     );
-    assert_eq!(repo_of(&["ci", "repo:"]), None);
-    assert_eq!(repo_of::<&str>(&[]), None);
+    assert!(repos_of(&["ci", "repo:"]).is_empty());
+    assert!(repos_of::<&str>(&[]).is_empty());
     assert!(is_repo("repo:kites"));
     assert!(!is_repo("group:kites"));
 }
 
 #[test]
 fn test_an_item_is_in_the_repository_its_nearest_label_names_else_the_default() {
-    let nearest = BTreeMap::from([(1, "kites".to_string()), (2, "lanterns".to_string())]);
-    let all = [1, 2, 3];
+    let nearest = BTreeMap::from([
+        (1, vec!["kites".to_string()]),
+        (2, vec!["lanterns".to_string()]),
+        (4, vec!["kites".to_string(), "lanterns".to_string()]),
+    ]);
+    let all = [1, 2, 3, 4];
     let sorted = |s: HashSet<i64>| {
         let mut v: Vec<i64> = s.into_iter().collect();
         v.sort_unstable();
         v
     };
-    assert_eq!(sorted(in_repo(&all, &nearest, "lanterns/", ".")), [2]);
-    assert_eq!(sorted(in_repo(&all, &nearest, "./kites", "kites")), [1, 3]);
+    assert_eq!(sorted(in_repo(&all, &nearest, "lanterns/", ".")), [2, 4]);
+    assert_eq!(
+        sorted(in_repo(&all, &nearest, "./kites", "kites")),
+        [1, 3, 4]
+    );
     assert_eq!(sorted(in_repo(&all, &nearest, ".", ".")), [3]);
+}
+
+#[test]
+fn test_repo_path_names_another_project_by_slug() {
+    assert_eq!(
+        repo_path("@acme/lib").unwrap().as_deref(),
+        Some("@acme/lib")
+    );
+    assert_eq!(
+        repo_path("@acme/lib/./crates/x/").unwrap().as_deref(),
+        Some("@acme/lib/crates/x")
+    );
+    assert!(repo_path("@acme/lib/../x").is_err());
+    assert!(repo_path("@").is_err());
+    assert_eq!(project_named("@acme/lib/crates"), Some("acme/lib"));
+    assert_eq!(project_named("web"), None);
 }

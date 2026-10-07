@@ -57,6 +57,8 @@ messages never name a docket item, project, person or machine. A comment states 
 tests use invented names. `docket private` is refused on a job's key: the lead checks the change and
 its message for private names when it collects, and keeps the job when one is found.
 
+An `OBSERVE` line about a repository other than the job's starts `OBSERVE [REPO] text`, REPO a path under the root or `@OWNER/NAME`; it keeps that repository when the lead adds it.
+
 End with your report as the last lines of your final message:
 
     OBSERVE something seen on the way, below the bar for an item (a line each, as many as there are)

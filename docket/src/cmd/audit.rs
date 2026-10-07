@@ -229,7 +229,7 @@ fn repo_dirs(ctx: &Ctx, slug: &str, project: &Value) -> Vec<PathBuf> {
         .flatten()
         .filter_map(|r| r.as_str().map(str::to_string))
         .collect();
-    local::repo_dirs(&ctx.roots.of(slug), &repos)
+    local::repo_dirs(&ctx.roots.roots, &ctx.roots.of(slug), &repos)
 }
 
 pub struct Target<'a> {

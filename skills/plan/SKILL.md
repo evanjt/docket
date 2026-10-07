@@ -65,6 +65,11 @@ Every item names its area, or files under its plan with `--parent`, beside its r
 `docket new T "the change" --parent A3 --release current`. Without either the write is refused,
 and the refusal lists the project's areas. A plan names its area: `docket new A "the plan" --area NAME`.
 
+Name every repository an item changes with `--repo PATH`, once for each: `docket new T "..." --repo PATH`.
+Use `--repo @OWNER/NAME` for another project's root, and `docket edit ID --repo PATH` to change them
+later. An item naming none takes its plan's repositories when it has a parent, else the `checkout`
+fact; an item filed with no parent names its own.
+
 Then:
 
     docket parent T14 T15 T16 A3        # an item has one parent, and it is a plan

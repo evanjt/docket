@@ -53,6 +53,11 @@ same plan before the close: `docket new T "..." --body -`, `docket parent T22
 A3`, `docket link T22 origin T14`, `docket edit T14 --append "Closed short of
 its fix: ..."`.
 
+Name every repository an item changes with `--repo PATH`, once for each: `docket new T "..." --repo PATH`.
+Use `--repo @OWNER/NAME` for another project's root, and `docket edit ID --repo PATH` to change them
+later. An item naming none takes its plan's repositories when it has a parent, else the `checkout`
+fact; an item filed with no parent names its own.
+
 ## Choices
 
 A routine choice of implementation is a line in the close note, never a

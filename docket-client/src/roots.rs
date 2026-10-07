@@ -68,6 +68,21 @@ impl Roots {
         fs::write(&self.file, render(&self.roots))
     }
 
+    /// The root at a path taken off the file; whether one was there.
+    ///
+    /// # Errors
+    /// The file cannot be written.
+    pub fn unbind(&mut self, path: &str) -> std::io::Result<bool> {
+        let want = path.trim_end_matches('/');
+        let before = self.roots.len();
+        self.roots.retain(|r| r.path.trim_end_matches('/') != want);
+        if self.roots.len() == before {
+            return Ok(false);
+        }
+        fs::write(&self.file, render(&self.roots))?;
+        Ok(true)
+    }
+
     #[must_use]
     pub fn file(&self) -> &Path {
         &self.file
@@ -113,6 +128,36 @@ pub fn bound(roots: &[Root], real: &str) -> Option<String> {
         }
     }
     best.map(|(_, project)| project.to_string())
+}
+
+fn within(outer: &str, inner: &str) -> bool {
+    let (o, i) = (outer.trim_end_matches('/'), inner.trim_end_matches('/'));
+    i.starts_with(&format!("{o}/"))
+}
+
+/// The root of a project that holds, or lies inside, a path; the path itself does not count.
+#[must_use]
+pub fn nested(roots: &[Root], project: &str, path: &str) -> Option<String> {
+    roots
+        .iter()
+        .filter(|r| r.project == project)
+        .find(|r| within(&r.path, path) || within(path, &r.path))
+        .map(|r| r.path.clone())
+}
+
+/// Each (outer, inner) pair of one project's roots where the inner lies inside the outer.
+#[must_use]
+pub fn nests(roots: &[Root], project: &str) -> Vec<(String, String)> {
+    let mine: Vec<&Root> = roots.iter().filter(|r| r.project == project).collect();
+    let mut out = Vec::new();
+    for o in &mine {
+        for i in &mine {
+            if within(&o.path, &i.path) {
+                out.push((o.path.clone(), i.path.clone()));
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]

@@ -44,6 +44,8 @@ The repository may be public while the docket is private: code, tests, comments 
 messages never name a docket item, project, person or machine. A comment states the rule itself and
 tests use invented names, and you commit nothing.
 
+An `OBSERVE` line about a repository other than the job's starts `OBSERVE [REPO] text`, REPO a path under the root or `@OWNER/NAME`; it keeps that repository when the lead adds it.
+
 End with your report as the last lines of your final message:
 
     OBSERVE a normal or low gap, or a finding outside the plan (a line each, as many as there are)

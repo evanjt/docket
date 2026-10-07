@@ -59,7 +59,7 @@ fn test_item_json_orders_columns_extras_and_derived() {
     let out = dumps_line(&item_json(&v, &["score"], &["snippet"]));
     assert!(out.starts_with("{\"project\": \"p\", \"key\": null, \"num\": null, \"id\": \"T1\""));
     assert!(out.ends_with(
-        "\"claim_on\": null, \"score\": -1.5, \"group\": null, \"repo\": null, \"word\": \"ready\", \
+        "\"claim_on\": null, \"score\": -1.5, \"group\": null, \"repo\": null, \"repos\": null, \"word\": \"ready\", \
          \"superseded_by\": null, \"priority\": null, \"snippet\": \"s\"}"
     ));
 }

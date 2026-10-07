@@ -115,7 +115,15 @@ fn facts(r: &Row, about: &Value) -> Vec<String> {
     if let Some(area) = r.area.as_deref() {
         facts.push(format!("area: {area}"));
     }
-    if let Some(repo) = about["repo"].as_str() {
+    let repos: Vec<&str> = about["repos"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    if repos.len() > 1 {
+        facts.push(format!("repos: {}", repos.join(", ")));
+    } else if let Some(repo) = about["repo"].as_str() {
         facts.push(format!("repo: {repo}"));
     }
     let tier = about["priority"].as_str().unwrap_or("normal");
@@ -405,8 +413,12 @@ pub fn projects(ctx: &mut Ctx) -> Result<i32> {
             n("dropped"),
             p["last_event"].as_str().unwrap_or("-")
         );
-        for r in roots {
+        for r in &roots {
             println!("    {r}");
+        }
+        let slug = p["slug"].as_str().unwrap_or_default();
+        for (outer, inner) in docket_client::roots::nests(&ctx.roots.roots, slug) {
+            println!("    nested: {inner} is inside {outer}; `docket unbind` one");
         }
     }
     Ok(0)

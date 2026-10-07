@@ -96,24 +96,25 @@ pub fn nonce() -> u32 {
     (nanos ^ std::process::id().rotate_left(16)) % 100_000
 }
 
-/// The machine to start a job on: one with the runner, not under a usage limit of it at `now`, and
-/// a free slot, the most free first, this machine first among equals, then by name. `running`
-/// counts the jobs running on each machine.
+/// The machines a job may start on, in the order they are tried: those with the runner, not under
+/// a usage limit of it at `now`, and a free slot, the most free first, this machine first among
+/// equals, then by name. `running` counts the jobs running on each machine.
 #[must_use]
-pub fn choose<'a>(
+pub fn ranked<'a>(
     machines: &'a [Machine],
     running: &BTreeMap<String, usize>,
     runner: &str,
     here: &str,
     now: &str,
-) -> Option<&'a Machine> {
-    machines
+) -> Vec<&'a Machine> {
+    let mut out: Vec<(&Machine, usize)> = machines
         .iter()
         .filter(|m| m.runners.iter().any(|r| r == runner) && m.limited(runner, now).is_none())
         .map(|m| (m, free(m, running)))
         .filter(|(_, free)| *free > 0)
-        .min_by_key(|(m, free)| (std::cmp::Reverse(*free), m.name != here, m.name.clone()))
-        .map(|(m, _)| m)
+        .collect();
+    out.sort_by_key(|(m, free)| (std::cmp::Reverse(*free), m.name != here, m.name.clone()));
+    out.into_iter().map(|(m, _)| m).collect()
 }
 
 /// The runners under a usage limit at `now` on every machine that has them, each with the earliest

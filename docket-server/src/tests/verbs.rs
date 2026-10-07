@@ -2875,13 +2875,13 @@ async fn test_an_items_repository_is_a_label_its_plan_passes_down_and_next_reads
     )
     .await;
     assert_eq!(s.item("T1").await["repo"], "kites", "tags leave the repo");
-    let why = s
-        .refused(
-            "label",
-            json!({ "id": "T1", "name": "repo:lanterns", "action": "add" }),
-        )
-        .await;
-    assert!(why.contains("changes kites"), "{why}");
+    s.ok(
+        "label",
+        json!({ "id": "T1", "name": "repo:./lanterns/", "action": "add" }),
+    )
+    .await;
+    assert_eq!(s.item("T1").await["repos"], json!(["kites", "lanterns"]));
+    assert_eq!(s.item("T2").await["repos"], json!(["lanterns"]));
     let why = s
         .refused(
             "new",
@@ -2902,7 +2902,7 @@ async fn test_an_items_repository_is_a_label_its_plan_passes_down_and_next_reads
         }
     };
     assert_eq!(next("kites").await, ["T1"]);
-    assert_eq!(next("lanterns").await, ["T2"]);
+    assert_eq!(next("lanterns").await, ["T1", "T2"]);
     assert_eq!(
         next(".").await,
         ["T3"],
@@ -2918,6 +2918,34 @@ async fn test_an_items_repository_is_a_label_its_plan_passes_down_and_next_reads
     )
     .await;
     assert_eq!(s.item("T1").await["labels"], json!(["slow"]));
+}
+
+#[tokio::test]
+async fn test_an_item_names_several_repositories_on_new_and_edit() {
+    let s = Scratch::new().await;
+    s.ok(
+        "new",
+        json!({ "key": "T", "title": "Oil the hinges", "repo": "kites, @acme/lib ,kites" }),
+    )
+    .await;
+    let item = s.item("T1").await;
+    assert_eq!(item["repos"], json!(["@acme/lib", "kites"]));
+    s.ok(
+        "edit",
+        json!({ "id": "T1", "set": [{ "field": "repo", "value": "lanterns,@acme/lib" }] }),
+    )
+    .await;
+    assert_eq!(
+        s.item("T1").await["labels"],
+        json!(["repo:@acme/lib", "repo:lanterns"])
+    );
+    let why = s
+        .refused(
+            "new",
+            json!({ "key": "T", "title": "Climb out", "repo": "kites,../elsewhere" }),
+        )
+        .await;
+    assert!(why.contains("under the project root"), "{why}");
 }
 
 async fn waiting_ids(s: &Scratch, on: &str) -> Vec<String> {

@@ -123,7 +123,7 @@ pub struct New<'a> {
     pub theme: Option<&'a String>,
     pub release: Option<&'a String>,
     pub group: Option<&'a String>,
-    pub repo: Option<&'a String>,
+    pub repo: &'a [String],
     pub area: Option<&'a String>,
     pub parent: Option<&'a String>,
 }
@@ -145,7 +145,7 @@ pub fn new(ctx: &mut Ctx, n: &New) -> Result<i32> {
         theme: n.theme.cloned(),
         release: n.release.filter(|r| !r.is_empty()).cloned(),
         group: n.group.cloned(),
-        repo: n.repo.cloned(),
+        repo: (!n.repo.is_empty()).then(|| n.repo.join(",")),
         area: n.area.cloned(),
         parent: n.parent.cloned(),
     };
@@ -295,7 +295,9 @@ fn claim_sha(ctx: &Ctx, slug: &str, project: &Value, branch: Option<&str>) -> Op
     let spec = format!("refs/heads/{branch}");
     for root in ctx.roots.of(slug) {
         for rel in &rels {
-            let d: PathBuf = local::expand(&root, rel);
+            let Ok(d) = local::resolve_repo(&ctx.roots.roots, &root, rel) else {
+                continue;
+            };
             let sha = local::git(&["rev-parse", "--short", "--verify", "--quiet", &spec], &d);
             if let Some(sha) = sha.filter(|s| !s.is_empty()) {
                 return Some(sha);
@@ -436,6 +438,7 @@ pub struct Edit<'a> {
     pub release: Option<&'a String>,
     pub carry: bool,
     pub area: Option<&'a String>,
+    pub repo: &'a [String],
     pub append: Option<&'a String>,
     pub body: Option<&'a String>,
 }
@@ -451,11 +454,16 @@ pub fn edit(ctx: &mut Ctx, e: &Edit) -> Result<i32> {
         && body.is_none()
         && e.release.is_none()
         && e.area.is_none()
+        && e.repo.is_empty()
     {
         return Err(Fail::refused(
-            "edit needs --set field=value, --release NAME, --area NAME, --append \"text\" or --body FILE|-.",
+            "edit needs --set field=value, --release NAME, --area NAME, --repo PATH, --append \"text\" or --body FILE|-.",
         ));
     }
+    let repos = (!e.repo.is_empty()).then(|| SetField {
+        field: "repo".to_string(),
+        value: e.repo.join(","),
+    });
     let set = e
         .set
         .iter()
@@ -466,6 +474,7 @@ pub fn edit(ctx: &mut Ctx, e: &Edit) -> Result<i32> {
                 value: value.to_string(),
             }
         })
+        .chain(repos)
         .collect();
     let req = EditRequest {
         common,
@@ -554,7 +563,26 @@ pub fn bind(ctx: &mut Ctx, slug: Option<&String>, root: Option<&String>) -> Resu
     ctx.project_row(slug)?;
     let dir = root.map_or_else(|| ctx.cwd.clone(), PathBuf::from);
     let real = local::realpath(Path::new(&dir));
+    if let Some(other) = docket_client::roots::nested(&ctx.roots.roots, slug, &real) {
+        return Err(Fail::refused(format!(
+            "docket: {real} is nested with {other}, already bound to {slug}; run `docket unbind {other}` first"
+        )));
+    }
     ctx.bind_root(&real, slug, "bind")?;
     println!("bound {real} to {slug} on {}", ctx.host()?);
+    Ok(0)
+}
+
+/// Takes the directory (this one by default) off the roots file.
+///
+/// # Errors
+/// The roots file cannot be written, or the directory is not bound.
+pub fn unbind(ctx: &mut Ctx, path: Option<&String>) -> Result<i32> {
+    let dir = path.map_or_else(|| ctx.cwd.clone(), PathBuf::from);
+    let real = local::realpath(Path::new(&dir));
+    if !ctx.unbind_root(&real)? {
+        return Err(Fail::refused(format!("docket: {real} is not a bound root")));
+    }
+    println!("unbound {real} on {}", ctx.host()?);
     Ok(0)
 }

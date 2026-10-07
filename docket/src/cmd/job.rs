@@ -36,7 +36,7 @@ pub fn job(flags: &Flags, what: &JobCmd) -> Result<i32> {
                 model,
                 effort: effort.as_deref(),
                 role,
-                repo: repo.as_deref(),
+                repos: repo,
             },
         ),
         JobCmd::Status { job: name } => {
@@ -107,7 +107,7 @@ struct Asked<'a> {
     model: &'a str,
     effort: Option<&'a str>,
     role: &'a str,
-    repo: Option<&'a str>,
+    repos: &'a [String],
 }
 
 /// `docket job run`: the checkout found, the job started, its name and where it runs printed.
@@ -118,7 +118,7 @@ fn run(flags: &Flags, root: &std::path::Path, asked: &Asked) -> Result<i32> {
         model,
         effort,
         role,
-        repo,
+        repos,
     } = *asked;
     let Some(branch) = flags.branch.clone().filter(|b| !b.is_empty()) else {
         return Err(Fail::refused(
@@ -131,11 +131,19 @@ fn run(flags: &Flags, root: &std::path::Path, asked: &Asked) -> Result<i32> {
     let mut ctx = Ctx::new(flags.json, flags.project.clone(), Some(branch.clone()))?;
     let job_key = agent_key()?;
     let slug = ctx.project()?;
-    let repo = repo
-        .map(|r| docket_core::label::repo_path(r).map_err(|e| Fail::refused(e.0)))
-        .transpose()?
-        .flatten();
-    let checkout = checkout(&mut ctx, &slug, repo.as_deref())?;
+    let mut named: Vec<String> = Vec::new();
+    for r in repos {
+        if let Some(r) = docket_core::label::repo_path(r).map_err(|e| Fail::refused(e.0))?
+            && !named.contains(&r)
+        {
+            named.push(r);
+        }
+    }
+    let repo = (named.len() == 1).then(|| named[0].clone());
+    let mut checkouts = Vec::new();
+    for r in &named {
+        checkouts.push((r.clone(), checkout(&mut ctx, &slug, Some(r))?));
+    }
     let provision = ctx.api.facts(&slug)?.skills.get("provision").cloned();
     let spec = Spec {
         project: slug.clone(),
@@ -158,8 +166,16 @@ fn run(flags: &Flags, root: &std::path::Path, asked: &Asked) -> Result<i32> {
         ("DOCKET_JOB", name.as_str()),
         ("DOCKET_KEY", job_key.as_str()),
     ];
-    let started =
-        job::run(&spec, &checkout, root, &env, &job::program(runner)).map_err(Fail::refused)?;
+    let started = if checkouts.len() > 1 {
+        job::run_in_repos(&spec, &checkouts, root, &env, &job::program(runner))
+    } else {
+        let one = match checkouts.pop() {
+            Some((_, c)) => c,
+            None => checkout(&mut ctx, &slug, None)?,
+        };
+        job::run(&spec, &one, root, &env, &job::program(runner))
+    }
+    .map_err(Fail::refused)?;
     if flags.json {
         let out = serde_json::json!({
             "name": started.name,
@@ -260,8 +276,24 @@ pub fn line(r: &Row) -> String {
 
 /// The project's checkout on this machine: its first root that exists, then the repository `repo`
 /// names under it, else the `checkout` fact's. Each machine resolves the path against its own root,
-/// so roots bound at different depths on different machines name the same repository.
+/// so roots bound at different depths on different machines name the same repository. A
+/// repository not cloned here is refused, so a lead places the job on a machine that has it.
 fn checkout(ctx: &mut Ctx, slug: &str, repo: Option<&str>) -> Result<PathBuf> {
+    let dir = unchecked(ctx, slug, repo)?;
+    if !dir.is_dir() {
+        return Err(Fail::refused(format!(
+            "{} is not on this machine: clone {} there",
+            dir.display(),
+            repo.unwrap_or("the checkout")
+        )));
+    }
+    Ok(dir)
+}
+
+fn unchecked(ctx: &mut Ctx, slug: &str, repo: Option<&str>) -> Result<PathBuf> {
+    if let Some(rel) = repo.filter(|r| docket_core::label::foreign(r).is_some()) {
+        return local::resolve_repo(&ctx.roots.roots, "", rel).map_err(Fail::refused);
+    }
     let roots = ctx.roots.of(slug);
     let Some(root) = roots
         .iter()

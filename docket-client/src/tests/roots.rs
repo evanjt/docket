@@ -39,3 +39,44 @@ fn test_bind_replaces_a_path_and_writes_the_file() {
     assert_eq!(again.of("a/two"), ["/w"]);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn test_nested_names_the_root_of_the_same_project_inside_or_around_a_path() {
+    let roots = [root("/p/x", "a/one"), root("/p/y/", "a/two")];
+    assert_eq!(nested(&roots, "a/one", "/p/x/dev").as_deref(), Some("/p/x"));
+    assert_eq!(nested(&roots, "a/one", "/p").as_deref(), Some("/p/x"));
+    assert_eq!(
+        nested(&roots, "a/two", "/p/y/sub").as_deref(),
+        Some("/p/y/")
+    );
+    assert_eq!(nested(&roots, "a/other", "/p/x/dev"), None);
+    assert_eq!(nested(&roots, "a/one", "/p/xdev"), None);
+    assert_eq!(nested(&roots, "a/one", "/p/x"), None);
+}
+
+#[test]
+fn test_nests_lists_each_nested_pair_of_one_project() {
+    let roots = [
+        root("/p/x", "a/one"),
+        root("/p/x/dev", "a/one"),
+        root("/p/x/dev", "a/two"),
+    ];
+    assert_eq!(
+        nests(&roots, "a/one"),
+        [("/p/x".to_string(), "/p/x/dev".to_string())]
+    );
+    assert!(nests(&roots, "a/two").is_empty());
+}
+
+#[test]
+fn test_unbind_removes_the_line_and_reports_whether_it_was_there() {
+    let dir = std::env::temp_dir().join(format!("docket-unbind-{}", std::process::id()));
+    let file = dir.join("roots");
+    let mut roots = Roots::load(file.clone());
+    roots.bind(root("/w", "a/one")).unwrap();
+    roots.bind(root("/v", "a/one")).unwrap();
+    assert!(roots.unbind("/w/").unwrap());
+    assert!(!roots.unbind("/w").unwrap());
+    assert_eq!(Roots::load(file).of("a/one"), ["/v"]);
+    std::fs::remove_dir_all(dir).unwrap();
+}

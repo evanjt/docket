@@ -58,6 +58,7 @@ pub async fn item_view<C: ConnectionTrait>(c: &C, row: &Item) -> Result<ItemView
         .into_iter()
         .map(|l| l.name)
         .collect();
+    let repos = crate::verbs::labels::repos(c, row.rid).await?;
     let held = HeldFields::of(&row.state, row.held.as_ref());
     Ok(ItemView {
         project: row.project.clone(),
@@ -85,7 +86,8 @@ pub async fn item_view<C: ConnectionTrait>(c: &C, row: &Item) -> Result<ItemView
         release,
         area,
         group: docket_core::label::group_of(&labels).map(str::to_string),
-        repo: docket_core::label::repo_of(&labels).map(str::to_string),
+        repo: repos.first().cloned(),
+        repos,
         labels,
         body: row.body.clone(),
         conflict: 0,

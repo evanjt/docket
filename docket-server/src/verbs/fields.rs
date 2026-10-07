@@ -240,7 +240,7 @@ async fn set_labels(call: &Call, rid: i64, field: &str, value: &str) -> Result<b
             labels::set(c, slug, rid, &names, is_group).await?;
         }
         "repo" => {
-            let names: Vec<String> = label::of_repo(value)?.into_iter().collect();
+            let names = label::of_repos(value)?;
             labels::set(c, slug, rid, &names, label::is_repo).await?;
         }
         "tags" => labels::set(c, slug, rid, &set_tags(value), is_tag).await?,

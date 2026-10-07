@@ -91,52 +91,45 @@ fn test_branch_is_the_lead_prefix_the_id_and_the_number() {
 }
 
 #[test]
-fn test_choose_takes_the_most_free_slots_with_the_runner() {
+fn test_ranked_tries_the_most_free_slots_with_the_runner_first() {
     let ms = [
         machine("alpha", 2, &["claude", "codex"]),
         machine("beta", 4, &["claude"]),
     ];
     let busy = running(&[("alpha", 1), ("beta", 1)]);
-    assert_eq!(
-        choose(&ms, &busy, "claude", "alpha", NOW).unwrap().name,
-        "beta"
-    );
-    assert_eq!(
-        choose(&ms, &busy, "codex", "alpha", NOW).unwrap().name,
-        "alpha"
-    );
+    assert_eq!(ranked(&ms, &busy, "claude", "alpha", NOW)[0].name, "beta");
+    let names: Vec<&str> = ranked(&ms, &busy, "claude", "alpha", NOW)
+        .iter()
+        .map(|m| m.name.as_str())
+        .collect();
+    assert_eq!(names, ["beta", "alpha"]);
+    assert_eq!(ranked(&ms, &busy, "codex", "alpha", NOW).len(), 1);
 }
 
 #[test]
-fn test_choose_never_takes_a_full_machine_or_one_without_the_runner() {
+fn test_ranked_never_takes_a_full_machine_or_one_without_the_runner() {
     let ms = [
         machine("alpha", 1, &["claude"]),
         machine("beta", 2, &["codex"]),
     ];
     let busy = running(&[("alpha", 1)]);
-    assert!(choose(&ms, &busy, "claude", "alpha", NOW).is_none());
-    assert!(choose(&ms, &running(&[("beta", 2)]), "codex", "alpha", NOW).is_none());
+    assert!(ranked(&ms, &busy, "claude", "alpha", NOW).is_empty());
+    assert!(ranked(&ms, &running(&[("beta", 2)]), "codex", "alpha", NOW).is_empty());
 }
 
 #[test]
-fn test_choose_prefers_this_machine_among_equals() {
+fn test_ranked_prefers_this_machine_among_equals() {
     let ms = [
         machine("alpha", 2, &["claude"]),
         machine("beta", 2, &["claude"]),
     ];
     let idle = running(&[]);
-    assert_eq!(
-        choose(&ms, &idle, "claude", "beta", NOW).unwrap().name,
-        "beta"
-    );
-    assert_eq!(
-        choose(&ms, &idle, "claude", "gamma", NOW).unwrap().name,
-        "alpha"
-    );
+    assert_eq!(ranked(&ms, &idle, "claude", "beta", NOW)[0].name, "beta");
+    assert_eq!(ranked(&ms, &idle, "claude", "gamma", NOW)[0].name, "alpha");
 }
 
 #[test]
-fn test_choose_skips_a_machine_whose_runner_is_limited_until_the_reset() {
+fn test_ranked_skips_a_machine_whose_runner_is_limited_until_the_reset() {
     let ms = [
         limited(
             machine("alpha", 2, &["claude", "codex"]),
@@ -146,18 +139,10 @@ fn test_choose_skips_a_machine_whose_runner_is_limited_until_the_reset() {
         machine("beta", 1, &["codex"]),
     ];
     let idle = running(&[]);
+    assert_eq!(ranked(&ms, &idle, "codex", "alpha", NOW)[0].name, "beta");
+    assert_eq!(ranked(&ms, &idle, "claude", "alpha", NOW)[0].name, "alpha");
     assert_eq!(
-        choose(&ms, &idle, "codex", "alpha", NOW).unwrap().name,
-        "beta"
-    );
-    assert_eq!(
-        choose(&ms, &idle, "claude", "alpha", NOW).unwrap().name,
-        "alpha"
-    );
-    assert_eq!(
-        choose(&ms, &idle, "codex", "alpha", "2026-10-07T18:29:00Z")
-            .unwrap()
-            .name,
+        ranked(&ms, &idle, "codex", "alpha", "2026-10-07T18:29:00Z")[0].name,
         "alpha"
     );
 }

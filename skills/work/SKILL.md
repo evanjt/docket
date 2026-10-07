@@ -75,6 +75,11 @@ Never `git stash`;
 use a patch file. Run the project's gates (its `AGENTS.md` names them) before
 merging.
 
+Name every repository an item changes with `--repo PATH`, once for each: `docket new T "..." --repo PATH`.
+Use `--repo @OWNER/NAME` for another project's root, and `docket edit ID --repo PATH` to change them
+later. An item naming none takes its plan's repositories when it has a parent, else the `checkout`
+fact; an item filed with no parent names its own.
+
 ### 4. Merge back and close
 
     docket skills merge        # the merge command; run it and read git's exit code

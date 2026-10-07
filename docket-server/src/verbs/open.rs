@@ -94,7 +94,7 @@ fn files_findings(kind: Kind) -> bool {
 }
 
 /// The labels `--theme NAME`, `--group NAME` and `--repo PATH` give a new item: the theme as it is
-/// named, the group as its group label, the repository as its repo label. A blank name gives none.
+/// named, the group as its group label, each repository, comma-separated, as a repo label. A blank name gives none.
 fn given_labels(
     theme: Option<&str>,
     group: Option<&str>,
@@ -105,8 +105,8 @@ fn given_labels(
     }
     let theme = named(theme).map(str::to_string);
     let group = named(group).map(docket_core::label::of_group);
-    let repo = docket_core::label::of_repo(repo.unwrap_or_default())?;
-    Ok(theme.into_iter().chain(group).chain(repo).collect())
+    let repos = docket_core::label::of_repos(repo.unwrap_or_default())?;
+    Ok(theme.into_iter().chain(group).chain(repos).collect())
 }
 
 /// The plan a new item is filed under, which must be open.

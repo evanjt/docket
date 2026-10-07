@@ -209,7 +209,8 @@ every item left is blocked, parked on the owner or held by another session.
 - Every claim is a running job. A finished build is landed or given back in
   the same pass, never held while more jobs run.
 - Never push. Never `--force` a claim, and never unclaim one you did not make.
-- The work ref is never rewritten and never pushed: `docket squash` builds the published ref from it.
+- Never rewrite the work ref: the squash skill squashes it in place, and only while nothing is
+  claimed.
 - Never kill a running job unless it outruns `job_timeout` minutes: `docket
   job kill NAME` on its machine, then as FAILED.
 - A question is never yours to answer: it waits for the owner.

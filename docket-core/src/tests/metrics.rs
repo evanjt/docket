@@ -1,6 +1,6 @@
 use super::*;
 use crate::fact::{Prices, prices_of};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 const NOW: i64 = 100 * DAY + 100;
 
@@ -473,4 +473,21 @@ fn test_progress_and_throughput_are_worked_out_only_in_the_metrics_module() {
         }
     }
     assert!(owners.is_empty(), "{owners:#?}");
+}
+
+#[test]
+fn test_dates_take_each_items_first_claim_and_latest_close_by_rid() {
+    let firsts = [(7, day(3)), (8, day(8))];
+    let closes = [(7, day(10)), (8, day(11)), (7, day(12))];
+    let dates = Dates::read(&firsts, &closes);
+    assert_eq!(dates.started, HashMap::from([(7, day(3)), (8, day(8))]));
+    assert_eq!(dates.closed, HashMap::from([(7, day(12)), (8, day(11))]));
+}
+
+#[test]
+fn test_an_item_settles_at_its_last_close_or_its_update_and_never_while_open() {
+    let dates = Dates::read(&[], &[(7, day(12))]);
+    assert_eq!(dates.settled(7, false, day(20)), Some(day(12)));
+    assert_eq!(dates.settled(9, false, day(20)), Some(day(20)));
+    assert_eq!(dates.settled(7, true, day(20)), None);
 }

@@ -26,7 +26,19 @@ pub fn job(flags: &Flags, what: &JobCmd) -> Result<i32> {
             model,
             effort,
             role,
-        } => run(flags, &root, id, runner, model, effort.as_deref(), role),
+            repo,
+        } => run(
+            flags,
+            &root,
+            &Asked {
+                id,
+                runner,
+                model,
+                effort: effort.as_deref(),
+                role,
+                repo: repo.as_deref(),
+            },
+        ),
         JobCmd::Status { job: name } => {
             let rows: Vec<Row> = job::rows(&root, job::now())
                 .into_iter()
@@ -45,13 +57,13 @@ pub fn job(flags: &Flags, what: &JobCmd) -> Result<i32> {
             }
             Ok(0)
         }
-        JobCmd::Where => {
+        JobCmd::Where { repo } => {
             if flags.project.as_deref().is_none_or(str::is_empty) {
                 return Err(Fail::refused("docket job where needs -p SLUG"));
             }
             let mut ctx = Ctx::new(flags.json, flags.project.clone(), None)?;
             let slug = ctx.project()?;
-            println!("{}", checkout(&mut ctx, &slug)?.display());
+            println!("{}", checkout(&mut ctx, &slug, repo.as_deref())?.display());
             Ok(0)
         }
         JobCmd::Remove {
@@ -88,16 +100,26 @@ pub fn job(flags: &Flags, what: &JobCmd) -> Result<i32> {
     }
 }
 
+/// What `docket job run` was asked for.
+struct Asked<'a> {
+    id: &'a str,
+    runner: &'a str,
+    model: &'a str,
+    effort: Option<&'a str>,
+    role: &'a str,
+    repo: Option<&'a str>,
+}
+
 /// `docket job run`: the checkout found, the job started, its name and where it runs printed.
-fn run(
-    flags: &Flags,
-    root: &std::path::Path,
-    id: &str,
-    runner: &str,
-    model: &str,
-    effort: Option<&str>,
-    role: &str,
-) -> Result<i32> {
+fn run(flags: &Flags, root: &std::path::Path, asked: &Asked) -> Result<i32> {
+    let Asked {
+        id,
+        runner,
+        model,
+        effort,
+        role,
+        repo,
+    } = *asked;
     let Some(branch) = flags.branch.clone().filter(|b| !b.is_empty()) else {
         return Err(Fail::refused(
             "docket job run needs --branch NAME, the branch the lead pushed here",
@@ -109,7 +131,11 @@ fn run(
     let mut ctx = Ctx::new(flags.json, flags.project.clone(), Some(branch.clone()))?;
     let job_key = agent_key()?;
     let slug = ctx.project()?;
-    let checkout = checkout(&mut ctx, &slug)?;
+    let repo = repo
+        .map(|r| docket_core::label::repo_path(r).map_err(|e| Fail::refused(e.0)))
+        .transpose()?
+        .flatten();
+    let checkout = checkout(&mut ctx, &slug, repo.as_deref())?;
     let provision = ctx.api.facts(&slug)?.skills.get("provision").cloned();
     let spec = Spec {
         project: slug.clone(),
@@ -120,6 +146,7 @@ fn run(
         effort: effort.filter(|e| !e.is_empty()).map(str::to_string),
         role: role.to_string(),
         provision,
+        repo,
         launch: Launch {
             reporter: std::env::current_exe().ok(),
             cap: Cap::detect(),
@@ -231,8 +258,10 @@ pub fn line(r: &Row) -> String {
     )
 }
 
-/// The project's checkout on this machine: its first root that exists, then the `checkout` fact.
-fn checkout(ctx: &mut Ctx, slug: &str) -> Result<PathBuf> {
+/// The project's checkout on this machine: its first root that exists, then the repository `repo`
+/// names under it, else the `checkout` fact's. Each machine resolves the path against its own root,
+/// so roots bound at different depths on different machines name the same repository.
+fn checkout(ctx: &mut Ctx, slug: &str, repo: Option<&str>) -> Result<PathBuf> {
     let roots = ctx.roots.of(slug);
     let Some(root) = roots
         .iter()
@@ -242,6 +271,9 @@ fn checkout(ctx: &mut Ctx, slug: &str) -> Result<PathBuf> {
             "{slug} is not bound on this machine: clone it and run docket bind {slug} from its root"
         )));
     };
+    if let Some(rel) = repo {
+        return Ok(local::expand(root, rel));
+    }
     let facts = ctx.api.get("/facts", &[("project", slug.to_string())])?;
     let rel = facts["skills"]["checkout"]
         .as_str()

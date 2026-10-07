@@ -858,7 +858,7 @@ async fn test_edit_fields_and_body() {
             json!({ "id": "B1", "set": [{ "field": "state", "value": "done" }] })
         )
         .await,
-        "state is not editable; fields are title, complexity, theme, group, tags, turn_note. State and turn move with their own verbs. Also priority: docket priority, release: --release NAME, area: --area NAME."
+        "state is not editable; fields are title, complexity, theme, group, repo, tags, turn_note. State and turn move with their own verbs. Also priority: docket priority, release: --release NAME, area: --area NAME."
     );
     let refused = s
         .refused(
@@ -2845,6 +2845,79 @@ async fn test_a_theme_and_a_group_are_labels_that_next_groups_and_audit_read() {
     )
     .await;
     assert_eq!(s.item("T2").await["labels"], json!(["slow"]));
+}
+
+#[tokio::test]
+async fn test_an_items_repository_is_a_label_its_plan_passes_down_and_next_reads() {
+    let s = Scratch::new().await;
+    s.ok(
+        "new",
+        json!({ "key": "T", "title": "Oil the hinges", "repo": "./kites/" }),
+    )
+    .await;
+    assert_eq!(s.item("T1").await["labels"], json!(["repo:kites"]));
+    assert_eq!(s.item("T1").await["repo"], "kites");
+    s.open("A", "Hang the lanterns").await;
+    s.ok(
+        "edit",
+        json!({ "id": "A1", "set": [{ "field": "repo", "value": "lanterns" }] }),
+    )
+    .await;
+    s.open("T", "Trim the wicks").await;
+    s.ok("parent", json!({ "a": ["T2"], "plan": "A1" })).await;
+    assert_eq!(s.item("T2").await["repo"], "lanterns");
+    s.open("T", "Sweep the yard").await;
+    assert!(s.item("T3").await["repo"].is_null());
+
+    s.ok(
+        "edit",
+        json!({ "id": "T1", "set": [{ "field": "tags", "value": "slow" }] }),
+    )
+    .await;
+    assert_eq!(s.item("T1").await["repo"], "kites", "tags leave the repo");
+    let why = s
+        .refused(
+            "label",
+            json!({ "id": "T1", "name": "repo:lanterns", "action": "add" }),
+        )
+        .await;
+    assert!(why.contains("changes kites"), "{why}");
+    let why = s
+        .refused(
+            "new",
+            json!({ "key": "T", "title": "Climb out", "repo": "../elsewhere" }),
+        )
+        .await;
+    assert!(why.contains("under the project root"), "{why}");
+
+    let next = |repo: &'static str| {
+        let s = &s;
+        async move {
+            let path = format!("/next?project={SLUG}&repo={repo}");
+            let (status, out) = s.send(Method::GET, &path, "ownerkey", None).await;
+            assert_eq!(status, StatusCode::OK, "{path}: {out}");
+            let mut found = ids(&out);
+            found.sort();
+            found
+        }
+    };
+    assert_eq!(next("kites").await, ["T1"]);
+    assert_eq!(next("lanterns").await, ["T2"]);
+    assert_eq!(
+        next(".").await,
+        ["T3"],
+        "an item with none takes the checkout fact"
+    );
+    s.ok("fact", json!({ "key": "checkout", "value": "kites" }))
+        .await;
+    assert_eq!(next("kites").await, ["T1", "T3"]);
+
+    s.ok(
+        "edit",
+        json!({ "id": "T1", "set": [{ "field": "repo", "value": "" }] }),
+    )
+    .await;
+    assert_eq!(s.item("T1").await["labels"], json!(["slow"]));
 }
 
 async fn waiting_ids(s: &Scratch, on: &str) -> Vec<String> {

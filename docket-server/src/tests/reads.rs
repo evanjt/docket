@@ -579,3 +579,72 @@ async fn test_next_and_audit_narrow_to_one_area_ignoring_case() {
     let (status, _) = get("/audit?project=o/a&area=boats").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn test_second_wide_read_waits_for_the_permit() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+    use tokio::sync::{Notify, Semaphore};
+
+    let started = Arc::new(AtomicUsize::new(0));
+    let release = Arc::new(Notify::new());
+    let handler = {
+        let (started, release) = (started.clone(), release.clone());
+        move || {
+            let (started, release) = (started.clone(), release.clone());
+            async move {
+                started.fetch_add(1, Ordering::SeqCst);
+                release.notified().await;
+                "done"
+            }
+        }
+    };
+    let gate = Arc::new(Semaphore::new(1));
+    let router = Router::new()
+        .route("/wide", axum::routing::get(handler))
+        .layer(axum::middleware::from_fn_with_state(gate, super::hold));
+    let request = || Request::builder().uri("/wide").body(Body::empty()).unwrap();
+
+    let first = tokio::spawn(router.clone().oneshot(request()));
+    let second = tokio::spawn(router.clone().oneshot(request()));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(
+        started.load(Ordering::SeqCst),
+        1,
+        "one read holds the permit"
+    );
+
+    release.notify_one();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(started.load(Ordering::SeqCst), 2, "the permit passed on");
+    release.notify_one();
+    first.await.unwrap().unwrap();
+    second.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn test_first_claims_hold_each_items_earliest_claim_and_no_ask() {
+    let s = Scratch::new(2).await;
+    s.seed(
+        r"
+INSERT INTO projects (slug, skills, created_at, updated_at) VALUES ('o/f', '{}', 'c', 'u'),
+  ('o/g', '{}', 'c', 'u');
+INSERT INTO items (rid, project, key, num, title, state, body, opened_at, updated_at) VALUES
+  (601, 'o/f', 'T', 1, 'Claimed twice', 'open', '', 'o1', 'u1'),
+  (602, 'o/f', 'T', 2, 'Only asked', 'open', '', 'o2', 'u2'),
+  (603, 'o/g', 'T', 1, 'Other project', 'open', '', 'o3', 'u3');
+INSERT INTO assignments (rid, assignee, kind, started_at, ended_at, outcome, host) VALUES
+  (601, 'agent', 'claim', '2020-01-03T00:00:00Z', '2020-01-04T00:00:00Z', 'landed', 'h');
+INSERT INTO assignments (rid, assignee, kind, started_at, host) VALUES
+  (601, 'agent', 'claim', '2020-01-05T00:00:00Z', 'h'),
+  (602, 'owner', 'ask', '2020-01-02T00:00:00Z', ''),
+  (603, 'agent', 'claim', '2020-01-04T00:00:00Z', 'h');
+",
+    )
+    .await;
+    let firsts = crate::reads::metrics::first_claims(&s.db, "o/f")
+        .await
+        .unwrap();
+    assert_eq!(firsts, vec![(601, 1_578_009_600)]);
+}

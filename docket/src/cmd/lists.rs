@@ -48,6 +48,7 @@ pub fn next(ctx: &mut Ctx, q: &Queue) -> Result<i32> {
             ("key", q.key.clone()),
             ("label", q.label.clone()),
             ("area", q.area.clone()),
+            ("repo", q.repo.clone()),
             ("release", q.release.clone()),
             ("under", opt_id(q.under.as_ref())?),
             ("role", (!q.role.is_empty()).then(|| q.role.join(","))),

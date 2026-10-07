@@ -9,7 +9,7 @@
     clippy::cast_precision_loss
 )]
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -299,6 +299,39 @@ pub struct Span {
     pub tokens_out: Option<i64>,
     pub cost_reported: Option<f64>,
     pub model: Option<String>,
+}
+
+/// When each item was first claimed and when it was last closed or dropped, by rid.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Dates {
+    /// The start of its earliest claim.
+    pub started: HashMap<i64, i64>,
+    /// The latest of its closes and drops.
+    pub closed: HashMap<i64, i64>,
+}
+
+impl Dates {
+    /// The dates read from each item's first claim and its latest close or drop, each by rid.
+    #[must_use]
+    pub fn read(firsts: &[(i64, i64)], closes: &[(i64, i64)]) -> Self {
+        let mut dates = Dates::default();
+        for &(rid, start) in firsts {
+            let at = dates.started.entry(rid).or_insert(start);
+            *at = (*at).min(start);
+        }
+        for &(rid, close) in closes {
+            let at = dates.closed.entry(rid).or_insert(close);
+            *at = (*at).max(close);
+        }
+        dates
+    }
+
+    /// When an item settled: never while it is open, else at its last close or drop, or at its last
+    /// update when none was recorded.
+    #[must_use]
+    pub fn settled(&self, rid: i64, open: bool, updated: i64) -> Option<i64> {
+        (!open).then(|| self.closed.get(&rid).copied().unwrap_or(updated))
+    }
 }
 
 /// Seconds worked by an agent and by a person, apart from the seconds an item waited on the owner

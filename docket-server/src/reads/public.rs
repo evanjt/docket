@@ -191,6 +191,7 @@ pub async fn public<C: ConnectionTrait>(
         .map(|l| l.name)
         .collect();
     out.insert("group".into(), json!(docket_core::label::group_of(&labels)));
+    out.insert("repo".into(), json!(docket_core::label::repo_of(&labels)));
     out.insert("labels".into(), json!(labels));
     out.insert(
         "priority".into(),

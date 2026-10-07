@@ -81,7 +81,37 @@ impl World {
         Self::build(true)
     }
 
-    fn build(submodule: bool) -> Self {
+    /// A world whose project root holds two sibling repositories, `kites` and `lanterns`, and no
+    /// repository of its own: alpha's root is `src/p`, beta's one directory deeper, `src/deep/p`.
+    fn with_siblings() -> Self {
+        let w = Self::bare();
+        for repo in ["kites", "lanterns"] {
+            let origin = w.machines.join("origins").join(repo);
+            fs::create_dir_all(&origin).unwrap();
+            sh(
+                &origin,
+                &format!(
+                    "git init -q -b main && echo {repo} > {repo}.txt && git add {repo}.txt \
+                     && git -c user.name=o -c user.email=o@example.org commit -q -m 'Start {repo}'"
+                ),
+            );
+        }
+        for (name, root) in [("alpha", "src/p"), ("beta", "src/deep/p")] {
+            let root = w.home(name).join(root);
+            fs::create_dir_all(&root).unwrap();
+            for repo in ["kites", "lanterns"] {
+                let origin = w.machines.join("origins").join(repo);
+                sh(&root, &format!("git clone -q {} {repo}", origin.display()));
+            }
+            let out = w.docket(name, &root, &["bind", "o/p"]);
+            assert!(out.status.success(), "{}", text(&out));
+        }
+        w.set_machines();
+        w
+    }
+
+    /// Two machine homes, each with its key and client file, and nothing cloned.
+    fn bare() -> Self {
         let tmp = tempfile::tempdir().unwrap();
         let machines = tmp.path().join("machines");
         let bin = tmp.path().join("bin");
@@ -100,6 +130,35 @@ impl World {
             ),
             _tmp: tmp,
         };
+        for name in ["alpha", "beta"] {
+            let home = w.home(name);
+            fs::create_dir_all(home.join("src")).unwrap();
+            fs::write(home.join("key"), format!("key-{name}")).unwrap();
+            w.set_client_config(name, &format!("job_key = job-{name}\n"));
+        }
+        w
+    }
+
+    /// Both machines set on the server, two slots each, either runner.
+    fn set_machines(&self) {
+        for name in ["alpha", "beta"] {
+            let out = self.lead(&[
+                "machine",
+                "set",
+                name,
+                "--ssh",
+                name,
+                "--slots",
+                "2",
+                "--runners",
+                "claude,codex",
+            ]);
+            assert!(out.status.success(), "{}", text(&out));
+        }
+    }
+
+    fn build(submodule: bool) -> Self {
+        let w = Self::bare();
         let origin = w.machines.join("origin");
         fs::create_dir_all(&origin).unwrap();
         sh(
@@ -126,9 +185,6 @@ impl World {
         }
         for name in ["alpha", "beta"] {
             let home = w.home(name);
-            fs::create_dir_all(home.join("src")).unwrap();
-            fs::write(home.join("key"), format!("key-{name}")).unwrap();
-            w.set_client_config(name, &format!("job_key = job-{name}\n"));
             sh(
                 &home.join("src"),
                 &format!(
@@ -139,20 +195,7 @@ impl World {
             let out = w.docket(name, &home.join("src/p"), &["bind", "o/p"]);
             assert!(out.status.success(), "{}", text(&out));
         }
-        for name in ["alpha", "beta"] {
-            let out = w.lead(&[
-                "machine",
-                "set",
-                name,
-                "--ssh",
-                name,
-                "--slots",
-                "2",
-                "--runners",
-                "claude,codex",
-            ]);
-            assert!(out.status.success(), "{}", text(&out));
-        }
+        w.set_machines();
         w
     }
 
@@ -308,6 +351,58 @@ fn test_a_lead_dispatches_to_another_machine_and_collects_the_branch() {
         "start",
         "nothing was committed on the job's machine"
     );
+}
+
+#[test]
+fn test_an_item_runs_in_the_repository_it_names_on_each_machine() {
+    let w = World::with_siblings();
+    let lead_root = w.home("alpha").join("src/p");
+    let kites = lead_root.join("kites");
+    let edit = w.docket("alpha", &kites, &["edit", "T1", "--set", "repo=lanterns"]);
+    assert!(edit.status.success(), "{}", text(&edit));
+    assert_eq!(w.show("T1")["repo"], "lanterns");
+
+    let queue = w.docket("alpha", &kites, &["--json", "next", "--repo", "lanterns"]);
+    assert!(queue.status.success(), "{}", text(&queue));
+    let ids: Vec<String> = serde_json::from_slice::<serde_json::Value>(&queue.stdout)
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(ids, ["T1"]);
+
+    let out = w.docket("alpha", &kites, &["dispatch", "T1", "--on", "beta"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let branch = w.show("T1")["claim_branch"].as_str().unwrap().to_string();
+    let beta_lanterns = w.home("beta").join("src/deep/p/lanterns");
+    let worktrees = sh(&beta_lanterns, "git worktree list");
+    assert_eq!(worktrees.lines().count(), 2, "{worktrees}");
+    assert_eq!(
+        sh(
+            &w.home("beta").join("src/deep/p/kites"),
+            "git worktree list"
+        )
+        .lines()
+        .count(),
+        1
+    );
+
+    let _ = w.docket("alpha", &kites, &["jobs", "--wait", "--every", "1"]);
+    let collected = w.docket("alpha", &kites, &["collect", "T1"]);
+    assert!(collected.status.success(), "{}", text(&collected));
+    let lanterns = lead_root.join("lanterns");
+    assert_eq!(
+        sh(&lanterns, &format!("git show {branch}:made-by-job")),
+        branch.replace('/', "-")
+    );
+    assert_eq!(
+        sh(&lanterns, &format!("git log --format=%s main..{branch}")),
+        "Write the job marker"
+    );
+    assert_eq!(sh(&kites, &format!("git branch --list {branch}")), "");
+    assert_parked(&beta_lanterns);
 }
 
 /// The commands sent over ssh that read a machine's jobs.

@@ -115,6 +115,9 @@ fn facts(r: &Row, about: &Value) -> Vec<String> {
     if let Some(area) = r.area.as_deref() {
         facts.push(format!("area: {area}"));
     }
+    if let Some(repo) = about["repo"].as_str() {
+        facts.push(format!("repo: {repo}"));
+    }
     let tier = about["priority"].as_str().unwrap_or("normal");
     if tier != "normal" {
         facts.push(format!("priority: {tier}"));

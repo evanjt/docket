@@ -17,7 +17,7 @@ use docket_core::machine::{Limit, Machine};
 
 use crate::ctx::Ctx;
 use crate::dispatch::{
-    Via, branch_for, choose, commit_change, ended_in, git, gone, limited_runners, nonce,
+    Here, Via, branch_for, choose, commit_change, ended_in, git, gone, limited_runners, nonce,
     push_to_machine, read_machines_now, role_for, runner_counts,
 };
 use crate::fail::{Fail, Result};
@@ -65,10 +65,11 @@ pub fn dispatch(ctx: &mut Ctx, ask: &Ask) -> Result<i32> {
     )?;
     let m = &m;
     let via = Via::of(m, &here);
+    let named = item["repo"].as_str();
     let checkout = via
-        .docket(&strings(&["-p", &slug, "job", "where"]))
+        .docket(&where_args(&slug, named))
         .map_err(Fail::refused)?;
-    let repo = repo()?;
+    let repo = lead_repo(ctx, &slug, named)?;
     let base = git(&repo, &["rev-parse", "HEAD"]).map_err(Fail::refused)?;
     let branch = branch_for(&id, nonce());
     let name = job::name_of(&branch);
@@ -102,6 +103,7 @@ pub fn dispatch(ctx: &mut Ctx, ask: &Ask) -> Result<i32> {
             branch: &branch,
             role: &role,
             model: &model,
+            repo: named,
         },
     );
     if let Err(why) = started {
@@ -346,10 +348,16 @@ pub fn collect(ctx: &mut Ctx, id: &str, discard: bool) -> Result<i32> {
             "{name} is still running on {on}: docket jobs --wait"
         )));
     }
+    // The repository the job recorded it ran for; a machine whose docket records none sends no
+    // field, and the item's says.
+    let named = match row.get("repo") {
+        Some(r) => r.as_str(),
+        None => item["repo"].as_str(),
+    };
     let checkout = via
-        .docket(&strings(&["-p", &slug, "job", "where"]))
+        .docket(&where_args(&slug, named))
         .map_err(Fail::refused)?;
-    let repo = repo()?;
+    let repo = lead_repo(ctx, &slug, named)?;
     let same = via == Via::Here && same_repo(&repo, Path::new(&checkout));
     let committed = if discard {
         remove(&via, &slug, name, same)?;
@@ -364,7 +372,7 @@ pub fn collect(ctx: &mut Ctx, id: &str, discard: bool) -> Result<i32> {
             repo: &repo,
             same,
         };
-        take(&ran, &row, base)?
+        take(ctx, &ran, &row, base)?
     } else {
         if !same {
             git(
@@ -497,7 +505,7 @@ struct Ran<'a> {
 
 /// The job's change committed here on `base`, then the job cleared, so a change that cannot be
 /// committed leaves the job where it ran. Returns the short sha, `None` for an empty change.
-fn take(ran: &Ran, row: &Value, base: &str) -> Result<Option<String>> {
+fn take(ctx: &mut Ctx, ran: &Ran, row: &Value, base: &str) -> Result<Option<String>> {
     let (name, on, branch, repo) = (ran.name, ran.on, ran.branch, ran.repo);
     let message = row["message"]
         .as_str()
@@ -512,6 +520,16 @@ fn take(ran: &Ran, row: &Value, base: &str) -> Result<Option<String>> {
         return Err(Fail::refused(format!(
             "{name} left a change but proposed no MESSAGE line to commit it with: docket job log {name} on {on}"
         )));
+    }
+    if !change.is_empty() {
+        let look = crate::cmd::private::read(ctx)?;
+        let found = look.change_hits(&change, message.unwrap_or_default());
+        if !found.is_empty() {
+            return Err(Fail::refused(format!(
+                "{name}'s change carries private names and is kept on {on}: {}",
+                found.join("; ")
+            )));
+        }
     }
     let made = (!change.is_empty())
         .then(|| commit_change(repo, base, &change, message.unwrap_or_default()))
@@ -645,6 +663,8 @@ struct Job<'a> {
     branch: &'a str,
     role: &'a str,
     model: &'a Model,
+    /// The repository the item names under the project root; none is the `checkout` fact's.
+    repo: Option<&'a str>,
 }
 
 /// The base pushed to the machine's checkout as the job's branch, then the job started there.
@@ -669,7 +689,20 @@ fn start(
     if let Some(e) = &job.model.effort {
         args.extend(strings(&["--effort", e]));
     }
+    if let Some(r) = job.repo {
+        args.extend(strings(&["--repo", r]));
+    }
     via.docket(&args)
+}
+
+/// `docket job where` for the repository an item names, or the `checkout` fact's when it names
+/// none, which a machine whose docket predates `--repo` still answers.
+fn where_args(slug: &str, repo: Option<&str>) -> Vec<String> {
+    let mut args = strings(&["-p", slug, "job", "where"]);
+    if let Some(r) = repo {
+        args.extend(strings(&["--repo", r]));
+    }
+    args
 }
 
 /// The model the job runs on: the one asked for, else the `models` fact's for its role and
@@ -972,14 +1005,46 @@ fn ready_row(ctx: &mut Ctx, id: &str) -> Result<Option<Value>> {
     Ok(rows.as_array().and_then(|a| a.first()).cloned())
 }
 
-/// The repository this command runs in, the one the lead merges into.
-fn repo() -> Result<PathBuf> {
-    let cwd = std::env::current_dir().map_err(|e| Fail::refused(e.to_string()))?;
-    git(&cwd, &["rev-parse", "--show-toplevel"])
-        .map(PathBuf::from)
-        .map_err(|_| {
-            Fail::refused("docket dispatch and collect run inside the lead's git checkout")
-        })
+/// The lead's repository for an item, the one it merges into: the repository the item names, else
+/// the `checkout` fact's, under the project root the lead stands in, by [`Here::repo`].
+fn lead_repo(ctx: &mut Ctx, slug: &str, named: Option<&str>) -> Result<PathBuf> {
+    let facts = ctx.api.facts(slug)?;
+    let default = facts
+        .skills
+        .get("checkout")
+        .map(String::as_str)
+        .filter(|c| !c.is_empty())
+        .unwrap_or(".");
+    let cwd = crate::local::realpath(&ctx.cwd);
+    let (top, _) = crate::local::outermost_repo(&ctx.cwd);
+    let top = top.map(|t| t.display().to_string());
+    let own = git(&ctx.cwd, &["rev-parse", "--show-toplevel"])
+        .ok()
+        .map(PathBuf::from);
+    let here = Here {
+        roots: &ctx.roots.roots,
+        slug,
+        cwd: &cwd,
+        top: top.as_deref(),
+        own: own.as_deref(),
+    };
+    let Some(dir) = here.repo(named, default) else {
+        return Err(Fail::refused(format!(
+            "docket dispatch and collect run inside the lead's git checkout or under a root of {slug}"
+        )));
+    };
+    let real = |p: &Path| std::fs::canonicalize(p).ok();
+    match git(&dir, &["rev-parse", "--show-toplevel"]) {
+        Ok(top) if real(Path::new(&top)).is_some() && real(Path::new(&top)) == real(&dir) => {
+            Ok(PathBuf::from(top))
+        }
+        _ => Err(Fail::refused(format!(
+            "{} is no repository: clone {} there, or name the repository the item changes with \
+             docket edit ID --set repo=PATH",
+            dir.display(),
+            named.unwrap_or(default)
+        ))),
+    }
 }
 
 fn same_repo(a: &Path, b: &Path) -> bool {

@@ -393,6 +393,15 @@ async fn test_shares_flags_idle_claims_and_files_they_share() {
 }
 
 #[tokio::test]
+async fn test_last_forward_reads_only_the_rids_it_judges() {
+    let s = Seeded::new().await;
+    let got = super::last_forward(&s.db.db, "o/p", &[8]).await.unwrap();
+    assert_eq!(got.keys().copied().collect::<Vec<_>>(), [8]);
+    let none = super::last_forward(&s.db.db, "o/p", &[]).await.unwrap();
+    assert!(none.is_empty());
+}
+
+#[tokio::test]
 async fn test_summary_reads_claims_plans_and_due_audits() {
     let s = Seeded::new().await;
     let m = s.ok("/summary?project=o/p").await;

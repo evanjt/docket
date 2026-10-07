@@ -140,6 +140,8 @@ pub struct NextQuery {
     #[serde(alias = "theme")]
     label: Option<String>,
     area: Option<String>,
+    /// Only the items changing this repository, by their repo label, else the `checkout` fact.
+    repo: Option<String>,
     /// A release name or `current`.
     release: Option<String>,
     under: Option<String>,
@@ -236,9 +238,16 @@ pub async fn next(
         None => None,
     };
     let releases = listed.open;
-    let labelled = crate::verbs::labels::narrowed(&db, &q.project, q.label.as_deref())
+    let mut labelled = crate::verbs::labels::narrowed(&db, &q.project, q.label.as_deref())
         .await
         .map_err(|e| internal(&e))?;
+    if let Some(repo) = q.repo.as_deref() {
+        let in_repo = repo_items(&db, &q.project, &board, repo).await?;
+        labelled = Some(match labelled {
+            Some(l) => l.intersection(&in_repo).copied().collect(),
+            None => in_repo,
+        });
+    }
     let filter = Filter {
         roles: &roles,
         priority: q
@@ -261,6 +270,35 @@ pub async fn next(
     Ok(Json(Value::Array(
         shaped(&db, &q.project, &board, picked).await?,
     )))
+}
+
+/// The items of the board changing the repository `repo`: by their nearest repo label, else the
+/// project's `checkout` fact.
+///
+/// # Errors
+/// 400 for a path outside the project root.
+async fn repo_items(
+    db: &DatabaseConnection,
+    slug: &str,
+    board: &Board,
+    repo: &str,
+) -> Result<HashSet<i64>, Failure> {
+    let Some(repo) =
+        docket_core::label::repo_path(repo).map_err(|e| failure(StatusCode::BAD_REQUEST, &e.0))?
+    else {
+        return Err(failure(StatusCode::BAD_REQUEST, "repo names a path"));
+    };
+    let nearest = crate::verbs::labels::nearest_repos(db, slug)
+        .await
+        .map_err(|e| internal(&e))?;
+    let skills = project_of(db, slug).await?.skills;
+    let default = skills["checkout"]
+        .as_str()
+        .filter(|c| !c.is_empty())
+        .or_else(|| docket_core::fact::default_of("checkout"))
+        .unwrap_or(".");
+    let all: Vec<i64> = board.items.iter().map(|r| r.rid).collect();
+    Ok(docket_core::label::in_repo(&all, &nearest, &repo, default))
 }
 
 /// The picked rows in queue order, each carrying its effective tier as its priority, the role it is

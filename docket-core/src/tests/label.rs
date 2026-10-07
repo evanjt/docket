@@ -1,3 +1,5 @@
+use std::collections::{BTreeMap, HashSet};
+
 use super::*;
 
 fn label(name: &str, about: Option<&str>) -> Label {
@@ -39,4 +41,45 @@ fn test_a_group_is_the_label_named_for_it() {
     assert_eq!(group_of(&["ci", "group:sweep"]), Some("sweep"));
     assert_eq!(group_of(&["ci", "group:"]), None);
     assert_eq!(group_of::<&str>(&[]), None);
+}
+
+#[test]
+fn test_a_repository_is_a_path_under_the_root_kept_as_its_label() {
+    assert_eq!(of_repo(" ./kites/ "), Ok(Some("repo:kites".to_string())));
+    assert_eq!(
+        of_repo("toys/kites"),
+        Ok(Some("repo:toys/kites".to_string()))
+    );
+    assert_eq!(of_repo("."), Ok(Some("repo:.".to_string())));
+    assert_eq!(of_repo("  "), Ok(None));
+    assert!(of_repo("/srv/kites").is_err());
+    assert!(of_repo("~/kites").is_err());
+    assert!(of_repo("../kites").is_err());
+    assert!(of_repo("toys/../kites").is_err());
+}
+
+#[test]
+fn test_an_items_repository_is_its_first_repo_label_own_before_its_plans() {
+    assert_eq!(
+        repo_of(&["ci", "repo:kites", "repo:lanterns"]),
+        Some("kites")
+    );
+    assert_eq!(repo_of(&["ci", "repo:"]), None);
+    assert_eq!(repo_of::<&str>(&[]), None);
+    assert!(is_repo("repo:kites"));
+    assert!(!is_repo("group:kites"));
+}
+
+#[test]
+fn test_an_item_is_in_the_repository_its_nearest_label_names_else_the_default() {
+    let nearest = BTreeMap::from([(1, "kites".to_string()), (2, "lanterns".to_string())]);
+    let all = [1, 2, 3];
+    let sorted = |s: HashSet<i64>| {
+        let mut v: Vec<i64> = s.into_iter().collect();
+        v.sort_unstable();
+        v
+    };
+    assert_eq!(sorted(in_repo(&all, &nearest, "lanterns/", ".")), [2]);
+    assert_eq!(sorted(in_repo(&all, &nearest, "./kites", "kites")), [1, 3]);
+    assert_eq!(sorted(in_repo(&all, &nearest, ".", ".")), [3]);
 }

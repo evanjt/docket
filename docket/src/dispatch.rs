@@ -13,6 +13,38 @@ use docket_core::machine::Machine;
 
 use crate::job::Change;
 
+/// Where a lead stands on this machine: the roots bound here, its directory, the outermost
+/// checkout that directory belongs to, and the repository it is in.
+pub struct Here<'a> {
+    pub roots: &'a [docket_client::roots::Root],
+    pub slug: &'a str,
+    pub cwd: &'a str,
+    pub top: Option<&'a str>,
+    pub own: Option<&'a Path>,
+}
+
+impl Here<'_> {
+    /// The lead's repository for an item: the one the item names, else `default`, the `checkout`
+    /// fact, under the root the lead stands in. A lead outside every root, in a worktree of its
+    /// own, keeps that worktree for an item naming none, and finds a named one under the root of
+    /// the checkout its worktree belongs to. `None` when no root is found.
+    #[must_use]
+    pub fn repo(&self, named: Option<&str>, default: &str) -> Option<PathBuf> {
+        let rel = named.unwrap_or(default);
+        let under = |top: Option<&str>| {
+            crate::ctx::root_at(self.roots, self.slug, self.cwd, top)
+                .map(|root| crate::local::expand(&root, rel))
+        };
+        if let Some(dir) = under(None) {
+            return Some(dir);
+        }
+        match (named, self.own) {
+            (None, Some(own)) => Some(own.to_path_buf()),
+            _ => under(self.top),
+        }
+    }
+}
+
 /// The job role to dispatch an item as: the one the lead names, else the role of the item's row in
 /// the ready queue. An item the queue does not offer, and no role named, is refused with why.
 ///

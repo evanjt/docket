@@ -121,7 +121,8 @@ pub async fn problems<C: ConnectionTrait>(
         .into_iter()
         .filter(|(_, w)| w.is_condition() && w.since < cutoff)
         .collect();
-    let last = last_forward(db, slug).await?;
+    let rids: Vec<i64> = waiting.iter().map(|(rid, _)| *rid).collect();
+    let last = last_forward(db, slug, &rids).await?;
     let limit = i64::try_from(now_secs().saturating_sub(30 * 86_400)).unwrap_or(0);
     out.extend(
         waiting
@@ -583,14 +584,18 @@ struct Stamp {
     kind: String,
 }
 
-/// `{rid: epoch}` of the last event that moved each item forward.
+/// `{rid: epoch}` of the last event that moved each of `rids` forward. Nothing is read for no rids.
 async fn last_forward<C: ConnectionTrait>(
     db: &C,
     slug: &str,
+    rids: &[i64],
 ) -> Result<HashMap<i64, i64>, Failure> {
+    if rids.is_empty() {
+        return Ok(HashMap::new());
+    }
     let stamps = Stamp::find_by_statement(sql(
-        "SELECT rid, at, kind FROM events WHERE project=? AND rid IS NOT NULL",
-        vec![slug.into()],
+        "SELECT rid, at, kind FROM events WHERE project=? AND rid = ANY(?)",
+        vec![slug.into(), rids.to_vec().into()],
     ))
     .all(db)
     .await?;
@@ -617,7 +622,8 @@ async fn idle_flags<C: ConnectionTrait>(
     claimed: &[Item],
 ) -> Result<HashMap<i64, String>, Failure> {
     let limit = fact_int(db, model, "stale_claim", 120).await?;
-    let last = last_forward(db, slug).await?;
+    let rids: Vec<i64> = claimed.iter().map(|r| r.rid).collect();
+    let last = last_forward(db, slug, &rids).await?;
     let now = i64::try_from(now_secs()).unwrap_or(0);
     let mut out = HashMap::new();
     for r in claimed {

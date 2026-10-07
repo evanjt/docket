@@ -208,6 +208,7 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             theme,
             release,
             group,
+            repo,
             area,
             parent,
         } => write::new(
@@ -222,6 +223,7 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
                 theme: theme.as_ref(),
                 release: release.as_ref(),
                 group: group.as_ref(),
+                repo: repo.as_ref(),
                 area: area.as_ref(),
                 parent: parent.as_ref(),
             },

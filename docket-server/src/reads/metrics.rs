@@ -1,6 +1,6 @@
 //! `/metrics`: the numbers `docket-core` works out over a release or a plan, served as they come.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use axum::Json;
 use axum::extract::{Query, State};
@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use docket_core::assignment::{Kind as Attempt, Outcome};
 use docket_core::board::Board;
 use docket_core::clock::now as clock_now;
-use docket_core::metrics::{self, Span, Subject, Unshipped, WINDOW};
+use docket_core::metrics::{self, Dates, Span, Subject, Unshipped, WINDOW};
 use docket_core::pace::epoch;
 use docket_core::release::{self, Listed, Release};
 
@@ -86,17 +86,19 @@ pub async fn metrics(
         .and_then(|v| v.as_str())
         .and_then(|v| docket_core::fact::prices_of(v).ok())
         .unwrap_or_default();
-    let spans_of = attempts(&db, &q.project).await?;
-    let counted = subjects(&db, &model, &board, &listed, &order, &spans_of).await?;
+    let dates = Dates::read(
+        &first_claims(&db, &q.project).await?,
+        &closes(&db, &q.project).await?,
+    );
+    let counted = subjects(&board, &listed, &order, &dates);
     let now = at(&clock_now());
     let days = q.days.unwrap_or(WINDOW).clamp(1, 366);
     if q.scope.as_deref() == Some("releases") {
-        let items: Vec<Subject> = counted.iter().map(|(_, s)| s.clone()).collect();
         let held = held_later_ids(&db, &q.project, &board).await?;
         return Ok(Json(json!({
             "project": q.project,
             "scope": "releases",
-            "releases": metrics::release_rows(&items, &unshipped(&order), &held, now, days, SEED),
+            "releases": metrics::release_rows(&counted, &unshipped(&order), &held, now, days, SEED),
         })));
     }
     let plan = q.scope.as_deref() == Some("plan");
@@ -120,23 +122,14 @@ pub async fn metrics(
             .map(|i| i.rid)
             .collect()
     };
-    let items: Vec<Subject> = counted
+    let items: Vec<Subject> = board
+        .items
         .iter()
-        .filter(|(rid, _)| held.contains(rid))
+        .zip(&counted)
+        .filter(|(i, _)| held.contains(&i.rid))
         .map(|(_, s)| s.clone())
         .collect();
-    let spans: Vec<Span> = spans_of
-        .iter()
-        .filter(|(rid, _)| held.contains(rid))
-        .map(|(rid, s)| Span {
-            item: board.by_rid(*rid).map(|i| i.id.clone()).unwrap_or_default(),
-            settled: counted
-                .iter()
-                .find(|(r, _)| r == rid)
-                .and_then(|(_, s)| s.closed_at),
-            ..s.clone()
-        })
-        .collect();
+    let spans = spans_held(attempts(&db, &q.project).await?, &held, &board, &dates);
     let mut out = json!({
         "project": q.project,
         "scope": q.scope.as_deref().unwrap_or("release"),
@@ -156,13 +149,34 @@ pub async fn metrics(
     } else {
         out["release"] = json!(name);
         if let Some(upto) = order.iter().position(|r| r.name == name) {
-            let everything: Vec<Subject> = counted.iter().map(|(_, s)| s.clone()).collect();
             let target = order[upto].target_date.as_deref();
-            let forecast = metrics::forecast(&everything, upto, now, days, SEED, target);
+            let forecast = metrics::forecast(&counted, upto, now, days, SEED, target);
             out["forecast"] = json!(forecast);
         }
     }
     Ok(Json(out))
+}
+
+/// The spans of the held items, each named by its item's id and settled with the item.
+fn spans_held(
+    spans_of: Vec<(i64, Span)>,
+    held: &HashSet<i64>,
+    board: &Board,
+    dates: &Dates,
+) -> Vec<Span> {
+    spans_of
+        .into_iter()
+        .filter(|(rid, _)| held.contains(rid))
+        .map(|(rid, s)| {
+            let item = board.by_rid(rid);
+            Span {
+                item: item.map(|i| i.id.clone()).unwrap_or_default(),
+                settled: item
+                    .and_then(|i| dates.settled(rid, i.state == "open", at(&i.updated_at))),
+                ..s
+            }
+        })
+        .collect()
 }
 
 /// The rids a plan holds at any depth.
@@ -188,55 +202,56 @@ fn unshipped(order: &[Release]) -> Vec<Unshipped> {
         .collect()
 }
 
-/// Every item, by rid, as the metrics read it.
-async fn subjects(
-    db: &DatabaseConnection,
-    model: &crate::entities::project::Model,
-    board: &Board,
-    listed: &Listed,
-    order: &[Release],
-    spans: &[(i64, Span)],
-) -> Result<Vec<(i64, Subject)>, Failure> {
-    let closes: HashMap<i64, i64> = Closed::find_by_statement(sql(
-        "SELECT i.rid, MAX(e.at) AS at FROM events e JOIN items i ON i.rid=e.rid \
-         WHERE e.project=? AND e.kind IN ('closed', 'dropped') GROUP BY i.rid",
-        vec![model.slug.clone().into()],
+/// Every item as the metrics read it, in the board's order.
+fn subjects(board: &Board, listed: &Listed, order: &[Release], dates: &Dates) -> Vec<Subject> {
+    board
+        .items
+        .iter()
+        .map(|i| {
+            let name = listed.name(i.release_id);
+            Subject {
+                release: order.iter().position(|r| Some(r.name.as_str()) == name),
+                opened_at: at(&i.opened_at),
+                closed_at: dates.settled(i.rid, i.state == "open", at(&i.updated_at)),
+                started_at: dates.started.get(&i.rid).copied(),
+                ..board.subject(i)
+            }
+        })
+        .collect()
+}
+
+/// The latest close or drop of each item of the project, by rid.
+async fn closes<C: ConnectionTrait>(db: &C, slug: &str) -> Result<Vec<(i64, i64)>, Failure> {
+    Ok(Closed::find_by_statement(sql(
+        "SELECT rid, MAX(at) AS at FROM events \
+         WHERE project=? AND kind IN ('closed', 'dropped') AND rid IS NOT NULL GROUP BY rid",
+        vec![slug.into()],
     ))
     .all(db)
     .await?
     .into_iter()
     .map(|c| (c.rid, at(&c.at)))
-    .collect();
-    Ok(board
-        .items
-        .iter()
-        .map(|i| {
-            let closed_at = (i.state != "open").then(|| {
-                closes
-                    .get(&i.rid)
-                    .copied()
-                    .unwrap_or_else(|| at(&i.updated_at))
-            });
-            let started_at = spans
-                .iter()
-                .filter(|(rid, s)| *rid == i.rid && s.kind == Attempt::Claim)
-                .map(|(_, s)| s.start)
-                .min();
-            let name = listed.name(i.release_id);
-            let subject = Subject {
-                id: i.id.clone(),
-                word: board.word(i),
-                release: order.iter().position(|r| Some(r.name.as_str()) == name),
-                opened_at: at(&i.opened_at),
-                closed_at,
-                started_at,
-                claimed: i.claim_branch.is_some(),
-                area: i.area_id,
-                holder: board.subject(i).holder,
-            };
-            (i.rid, subject)
-        })
-        .collect())
+    .collect())
+}
+
+/// The start of the earliest claim of each item of the project that was claimed, by rid.
+///
+/// # Errors
+/// A database failure.
+pub async fn first_claims<C: ConnectionTrait>(
+    db: &C,
+    slug: &str,
+) -> Result<Vec<(i64, i64)>, Failure> {
+    Ok(Closed::find_by_statement(sql(
+        "SELECT a.rid, MIN(a.started_at) AS at FROM assignments a JOIN items i ON i.rid=a.rid \
+         WHERE i.project=? AND a.kind='claim' GROUP BY a.rid ORDER BY a.rid",
+        vec![slug.into()],
+    ))
+    .all(db)
+    .await?
+    .into_iter()
+    .map(|c| (c.rid, at(&c.at)))
+    .collect())
 }
 
 /// Every assignment of the project with its item's rid.

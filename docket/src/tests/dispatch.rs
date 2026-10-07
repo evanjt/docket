@@ -523,3 +523,77 @@ fn test_a_branch_pushed_to_a_machine_skips_the_pre_push_hook() {
     git_in(&machine, &["rev-parse", "refs/heads/job"]);
     push_to_machine(&repo, &url, ":refs/heads/job").unwrap();
 }
+
+#[test]
+fn test_a_change_or_message_naming_a_private_term_is_flagged() {
+    use crate::cmd::private::Look;
+    use crate::job::Change;
+    let look = Look::of(vec!["zebrafarm".into()], vec![], &[], vec![]);
+    let change = Change {
+        patch: "+++ b/a.rs\n@@ -0,0 +1 @@\n+// zebrafarm\n".into(),
+        submodules: vec![],
+    };
+    assert!(!look.change_hits(&change, "Tidy").is_empty());
+    assert!(
+        !look
+            .change_hits(&Change::default(), "Tidy zebrafarm")
+            .is_empty()
+    );
+    let clean = Change {
+        patch: "+++ b/a.rs\n@@ -0,0 +1 @@\n+// ok\n".into(),
+        submodules: vec![],
+    };
+    assert!(look.change_hits(&clean, "Tidy").is_empty());
+}
+
+fn root(path: &str) -> docket_client::roots::Root {
+    docket_client::roots::Root {
+        path: path.into(),
+        project: "o/p".into(),
+        how: "bind".into(),
+        bound_at: String::new(),
+    }
+}
+
+#[test]
+fn test_the_leads_repository_is_the_one_the_item_names_under_the_root_it_stands_in() {
+    let roots = [root("/w/p"), root("/elsewhere/p")];
+    let here = Here {
+        roots: &roots,
+        slug: "o/p",
+        cwd: "/w/p/kites/src",
+        top: Some("/w/p/kites"),
+        own: Some(Path::new("/w/p/kites")),
+    };
+    assert_eq!(
+        here.repo(Some("lanterns"), "kites"),
+        Some(PathBuf::from("/w/p/lanterns"))
+    );
+    assert_eq!(here.repo(None, "kites"), Some(PathBuf::from("/w/p/kites")));
+    assert_eq!(here.repo(None, "."), Some(PathBuf::from("/w/p/.")));
+}
+
+#[test]
+fn test_a_lead_outside_its_root_keeps_its_own_repository_unless_the_item_names_one() {
+    let roots = [root("/w/p")];
+    let here = Here {
+        roots: &roots,
+        slug: "o/p",
+        cwd: "/w/p-lead",
+        top: Some("/w/p"),
+        own: Some(Path::new("/w/p-lead")),
+    };
+    assert_eq!(here.repo(None, "."), Some(PathBuf::from("/w/p-lead")));
+    assert_eq!(
+        here.repo(Some("lanterns"), "."),
+        Some(PathBuf::from("/w/p/lanterns"))
+    );
+    let lost = Here {
+        roots: &roots,
+        slug: "o/p",
+        cwd: "/tmp",
+        top: None,
+        own: None,
+    };
+    assert_eq!(lost.repo(Some("lanterns"), "."), None);
+}

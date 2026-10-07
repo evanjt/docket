@@ -63,6 +63,28 @@ pub struct Look {
 }
 
 impl Look {
+    /// A look for these private names, item keys and item titles, with these names allowed.
+    pub fn of(
+        terms: Vec<String>,
+        keys: Vec<String>,
+        titles: &[String],
+        allowed: Vec<String>,
+    ) -> Self {
+        Look {
+            terms,
+            keys,
+            titles: Titles::new(titles),
+            allowed,
+        }
+    }
+
+    /// The hits in a job's change and in the message it would be committed with.
+    pub fn change_hits(&self, change: &crate::job::Change, message: &str) -> Vec<String> {
+        let mut found = self.message_hits("message", message);
+        found.extend(self.diff_hits(&change.text()));
+        found
+    }
+
     /// What one line carries that a public repository must not: a private name, an item title, an
     /// address or token, and in a commit message (`message`) an item id; with `cites`, in a code
     /// comment, an item id.
@@ -183,12 +205,12 @@ pub fn read(ctx: &mut Ctx) -> Result<Look> {
     local.extend(listed("private"));
     let mut allowed = listed("public");
     allowed.extend(origin_names());
-    Ok(Look {
-        terms: terms(&private, &local, &allowed),
-        keys: private.keys,
-        titles: Titles::new(&private.titles),
+    Ok(Look::of(
+        terms(&private, &local, &allowed),
+        private.keys,
+        &private.titles,
         allowed,
-    })
+    ))
 }
 
 /// The names listed one a line in `$XDG_CONFIG_HOME/docket/NAME`, `#` starting a comment: `public`

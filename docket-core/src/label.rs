@@ -1,6 +1,8 @@
 //! A project's labels: a name and a description. An item carries a label it was given, and every item
 //! under it inherits the label when it is read.
 
+use std::collections::{BTreeMap, HashSet};
+
 use serde::{Deserialize, Serialize};
 
 use crate::item::Refused;
@@ -44,6 +46,80 @@ pub fn group_named(label: &str) -> Option<&str> {
 #[must_use]
 pub fn group_of<S: AsRef<str>>(labels: &[S]) -> Option<&str> {
     labels.iter().find_map(|l| group_named(l.as_ref()))
+}
+
+/// What the label naming an item's repository begins with: `--repo PATH` gives `repo:PATH`.
+pub const REPO: &str = "repo:";
+
+/// The label `--repo` gives for a repository, by [`repo_path`]. A blank path gives none.
+///
+/// # Errors
+/// As [`repo_path`].
+pub fn of_repo(path: &str) -> Result<Option<String>, Refused> {
+    Ok(repo_path(path)?.map(|p| format!("{REPO}{p}")))
+}
+
+/// A repository as an item names it: the path under the project root, without a leading `./` or a
+/// trailing `/`, and `.` for the root itself. A blank path is none.
+///
+/// # Errors
+/// The path is absolute, starts at a home directory or climbs out of the root.
+pub fn repo_path(path: &str) -> Result<Option<String>, Refused> {
+    let path = path.trim();
+    if path.is_empty() {
+        return Ok(None);
+    }
+    if path.starts_with('/') || path.starts_with('~') || path.split('/').any(|p| p == "..") {
+        return Err(Refused(format!(
+            "a repo is a path under the project root, such as web or libs/core, not {path}"
+        )));
+    }
+    let parts: Vec<&str> = path
+        .split('/')
+        .filter(|p| !p.is_empty() && *p != ".")
+        .collect();
+    Ok(Some(if parts.is_empty() {
+        ".".to_string()
+    } else {
+        parts.join("/")
+    }))
+}
+
+/// The items of `all` that change the repository `path`: those whose nearest repo label, in
+/// `nearest` by rid, names it, and when `path` is the project's default repository, those with none.
+#[must_use]
+pub fn in_repo(
+    all: &[i64],
+    nearest: &BTreeMap<i64, String>,
+    path: &str,
+    default: &str,
+) -> HashSet<i64> {
+    let same = |a: &str, b: &str| repo_path(a).ok().flatten() == repo_path(b).ok().flatten();
+    all.iter()
+        .copied()
+        .filter(|rid| match nearest.get(rid) {
+            Some(repo) => same(repo, path),
+            None => same(default, path),
+        })
+        .collect()
+}
+
+/// The repository a label names, or `None` for a label that names none.
+#[must_use]
+pub fn repo_named(label: &str) -> Option<&str> {
+    label.strip_prefix(REPO).filter(|r| !r.is_empty())
+}
+
+/// Whether a label names a repository.
+#[must_use]
+pub fn is_repo(label: &str) -> bool {
+    label.starts_with(REPO)
+}
+
+/// The repository among an item's labels, its own before its plans': the first that names one.
+#[must_use]
+pub fn repo_of<S: AsRef<str>>(labels: &[S]) -> Option<&str> {
+    labels.iter().find_map(|l| repo_named(l.as_ref()))
 }
 
 /// The label a name finds among `all`, ignoring case.

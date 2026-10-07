@@ -73,6 +73,10 @@ pub struct ItemView {
     pub opened_at: String,
     pub updated_at: String,
     pub group: Option<String>,
+    /// The repository it changes, relative to the project root: its own `repo:` label, else its
+    /// plan's; none takes the `checkout` fact.
+    #[serde(default)]
+    pub repo: Option<String>,
     pub word: String,
     pub priority: String,
     /// What the item is: task, bug, question, investigation or plan.
@@ -149,6 +153,9 @@ pub struct NewRequest {
     pub release: Option<String>,
     #[serde(default)]
     pub group: Option<String>,
+    /// The repository it changes, relative to the project root: the label `repo:PATH`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
     /// The area it is filed in, by name; under a plan it is the plan's, and naming another is refused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub area: Option<String>,

@@ -54,7 +54,8 @@ this worktree, never committed: the lead commits it on its own machine.
 
 The repository may be public while the docket is private: code, tests, comments and commit
 messages never name a docket item, project, person or machine. A comment states the rule itself and
-tests use invented names. Before you report, `git add -A` and `docket private check --staged`.
+tests use invented names. `docket private` is refused on a job's key: the lead checks the change and
+its message for private names when it collects, and keeps the job when one is found.
 
 End with your report as the last lines of your final message:
 

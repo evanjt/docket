@@ -23,7 +23,7 @@ use axum::response::Redirect;
 use axum::routing::get;
 use sea_orm::{ConnectOptions, Database, DatabaseConnection, DbBackend, DbErr};
 use tokio::net::TcpListener;
-use tokio::sync::watch;
+use tokio::sync::{Semaphore, watch};
 use tower_http::services::{ServeDir, ServeFile};
 use utoipa_axum::router::OpenApiRouter;
 
@@ -35,6 +35,8 @@ use crate::entities::{
 pub use docket_migration::migrate;
 
 const CONNECTIONS: u32 = 8;
+/// The project-wide reads that run at once. Each builds a whole board in memory, so the rest wait.
+const WIDE_READS: usize = 3;
 const PING_AFTER_IDLE: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// The pool's options: a connection is health-checked only after it has idled for `PING_AFTER_IDLE`,
@@ -103,6 +105,7 @@ pub fn web_client(dir: &Path) -> Router {
 }
 
 fn routes(db: &DatabaseConnection, keys: Keys, stopping: watch::Receiver<bool>) -> Router {
+    let gate = Arc::new(Semaphore::new(WIDE_READS));
     let (resources, _) = OpenApiRouter::new()
         .nest("/projects", Project::read_only_router(db))
         .nest("/items", Item::read_only_router(db))
@@ -113,7 +116,7 @@ fn routes(db: &DatabaseConnection, keys: Keys, stopping: watch::Receiver<bool>) 
     Router::new()
         .route("/show/{id}", get(show::show))
         .route("/offers/{id}", get(show::offers))
-        .merge(reads::router())
+        .merge(reads::router(&gate))
         .merge(facts::router())
         .merge(machines::router())
         .merge(lead::router())

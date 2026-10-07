@@ -58,6 +58,7 @@ pub async fn add(
         theme: None,
         release: req.release,
         group: None,
+        repo: None,
         area: req.area,
         parent: req.parent,
     };
@@ -92,15 +93,20 @@ fn files_findings(kind: Kind) -> bool {
     !matches!(kind, Kind::Work | Kind::Concept | Kind::Idea)
 }
 
-/// The labels `--theme NAME` and `--group NAME` give a new item: the theme as it is named, the group
-/// as its group label. A blank name gives none.
-fn given_labels(theme: Option<&str>, group: Option<&str>) -> Vec<String> {
+/// The labels `--theme NAME`, `--group NAME` and `--repo PATH` give a new item: the theme as it is
+/// named, the group as its group label, the repository as its repo label. A blank name gives none.
+fn given_labels(
+    theme: Option<&str>,
+    group: Option<&str>,
+    repo: Option<&str>,
+) -> Result<Vec<String>, Failure> {
     fn named(v: Option<&str>) -> Option<&str> {
         v.map(str::trim).filter(|v| !v.is_empty())
     }
     let theme = named(theme).map(str::to_string);
     let group = named(group).map(docket_core::label::of_group);
-    theme.into_iter().chain(group).collect()
+    let repo = docket_core::label::of_repo(repo.unwrap_or_default())?;
+    Ok(theme.into_iter().chain(group).chain(repo).collect())
 }
 
 /// The plan a new item is filed under, which must be open.
@@ -206,7 +212,11 @@ async fn open_item(
     };
     let area_id = filed_area(&call, req.area.as_deref(), plan.as_ref()).await?;
     let title = req.title.trim().to_string();
-    let labels = given_labels(req.theme.as_deref(), req.group.as_deref());
+    let labels = given_labels(
+        req.theme.as_deref(),
+        req.group.as_deref(),
+        req.repo.as_deref(),
+    )?;
     let num = call.tx.next_num(&call.slug, &key).await?;
     let r = call
         .tx

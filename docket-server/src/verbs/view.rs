@@ -85,6 +85,7 @@ pub async fn item_view<C: ConnectionTrait>(c: &C, row: &Item) -> Result<ItemView
         release,
         area,
         group: docket_core::label::group_of(&labels).map(str::to_string),
+        repo: docket_core::label::repo_of(&labels).map(str::to_string),
         labels,
         body: row.body.clone(),
         conflict: 0,

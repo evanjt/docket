@@ -41,7 +41,7 @@ pub const COLUMNS: [&str; 28] = [
 ];
 
 /// What `--json` adds after the stored columns and any a query selected.
-pub const DERIVED: [&str; 4] = ["group", "word", "superseded_by", "priority"];
+pub const DERIVED: [&str; 5] = ["group", "repo", "word", "superseded_by", "priority"];
 
 /// One item in the `--json` shape: the columns, then `extra` columns a query selected, the derived
 /// fields, and `tail` fields set after.

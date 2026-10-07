@@ -129,6 +129,10 @@ pub struct Meta {
     /// The commit the job started from, which its diff is taken against.
     #[serde(default)]
     pub base: Option<String>,
+    /// The repository the item named, under the project root, which the lead commits the change
+    /// in; none is the `checkout` fact's.
+    #[serde(default)]
+    pub repo: Option<String>,
 }
 
 /// The brief for a role, filled in for one item on one branch.
@@ -584,6 +588,8 @@ pub struct Row {
     pub observations: Vec<String>,
     /// The commit the job started from.
     pub base: Option<String>,
+    /// The repository the item named, under the project root; none is the `checkout` fact's.
+    pub repo: Option<String>,
     /// The final message in full: the result of a Claude session, the last message file of Codex.
     pub last: Option<String>,
     /// The reset of the usage limit the job reported, as a stamp.
@@ -649,6 +655,7 @@ pub fn row(dir: &Path, at: u64) -> Option<Row> {
         message: last.as_deref().and_then(message),
         observations: last.as_deref().map(observations).unwrap_or_default(),
         base: meta.base,
+        repo: meta.repo,
         last,
         limit,
         worktree: meta.worktree,
@@ -712,6 +719,8 @@ pub struct Spec {
     pub role: String,
     /// A shell command run in the new worktree before the session starts.
     pub provision: Option<String>,
+    /// The repository the item names, under the project root; none is the `checkout` fact's.
+    pub repo: Option<String>,
     pub launch: Launch,
 }
 
@@ -725,6 +734,19 @@ pub struct Started {
 
 /// What a reusable worktree is named after the project: `<stem>-slot1`, `<stem>-slot2`.
 const SLOT: &str = "slot";
+
+/// What a job's worktrees are named after: the project's last word, then the repository the item
+/// names with `/` as `-`, so the slots of sibling repositories beside one another stay apart.
+fn slot_stem(project: &str, repo: Option<&str>) -> String {
+    let stem = project.rsplit('/').next().unwrap_or(project);
+    match repo
+        .map(|r| r.trim_matches('/'))
+        .filter(|r| !r.is_empty() && *r != ".")
+    {
+        Some(r) => format!("{stem}-{}", r.replace('/', "-")),
+        None => stem.to_string(),
+    }
+}
 
 /// A slot worktree of the checkout with no job on it: its head is detached. Reusing it keeps the
 /// build output and dependencies the ignored files hold, which a fresh worktree would rebuild.
@@ -836,7 +858,8 @@ pub fn run(
             checkout.display()
         ));
     };
-    let stem = spec.project.rsplit('/').next().unwrap_or(&spec.project);
+    let stem = slot_stem(&spec.project, spec.repo.as_deref());
+    let stem = stem.as_str();
     let parent = checkout.parent().unwrap_or(checkout);
     let worktree = if let Some(slot) = parked_slot(checkout, stem)? {
         git(&slot, &["checkout", "--quiet", &spec.branch])?;
@@ -873,6 +896,7 @@ pub fn run(
         worktree: worktree.display().to_string(),
         started: now(),
         base: Some(base),
+        repo: spec.repo.clone(),
     };
     begin(&dir, &meta, &text, program, env, &spec.launch)
 }

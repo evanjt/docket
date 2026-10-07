@@ -38,7 +38,8 @@ fn test_each_brief_names_its_item_and_branch_and_nothing_local() {
 fn test_each_brief_keeps_the_private_docket_out_of_the_repository() {
     for role in ["build", "plan"] {
         let text = brief(role, "T14", "lead/t14-7").unwrap();
-        assert!(text.contains("docket private check --staged"), "{role}");
+        assert!(!text.contains("private check"), "{role}");
+        assert!(text.contains("the lead checks the change"), "{role}");
     }
     assert!(
         brief("audit", "A3", "lead/a3-7")
@@ -326,6 +327,7 @@ impl Machine {
             effort: Some("high".into()),
             role: "build".into(),
             provision: None,
+            repo: None,
             launch: Launch {
                 reporter: None,
                 cap: Cap::Rlimit(u32::MAX),
@@ -368,6 +370,23 @@ fn test_run_starts_the_session_in_its_worktree_and_reads_its_report() {
     assert_eq!((r.id.as_str(), r.project.as_str()), ("T14", "o/sample"));
     let brief = fs::read_to_string(started.dir.join("brief.md")).unwrap();
     assert!(brief.contains("T14") && brief.contains("lead/t14-1"));
+}
+
+#[test]
+fn test_a_job_in_a_named_repository_takes_a_slot_named_for_it_and_records_it() {
+    let m = Machine::new();
+    let spec = Spec {
+        repo: Some("toys/kites".into()),
+        ..Machine::spec("lead/t14-1")
+    };
+    let mut started = run(&spec, &m.checkout(), &m.state(), &[], &m.runner(REPORTS)).unwrap();
+    started.child.wait().unwrap();
+    assert_eq!(
+        started.worktree,
+        m.tmp.path().join("sample-toys-kites-slot1")
+    );
+    let r = row(&started.dir, now()).unwrap();
+    assert_eq!(r.repo.as_deref(), Some("toys/kites"));
 }
 
 #[test]
@@ -660,6 +679,7 @@ fn test_removing_a_lead_job_leaves_the_checkout_and_its_branch() {
         worktree: m.checkout().display().to_string(),
         started: now(),
         base: None,
+        repo: None,
     };
     fs::write(dir.join("meta.json"), serde_json::to_string(&meta).unwrap()).unwrap();
     fs::write(dir.join("exit"), "0").unwrap();

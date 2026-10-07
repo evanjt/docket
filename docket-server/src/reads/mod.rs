@@ -12,21 +12,53 @@ pub mod queue;
 pub(crate) mod rows;
 pub mod search;
 
+use std::sync::Arc;
+
 use axum::Router;
+use axum::extract::{Request, State};
+use axum::middleware::{Next, from_fn_with_state};
+use axum::response::Response;
 use axum::routing::get;
 use sea_orm::DatabaseConnection;
+use tokio::sync::Semaphore;
 
-/// Every list route; each takes the project as `?project=SLUG`.
-pub fn router() -> Router<DatabaseConnection> {
+/// Every list route; each takes the project as `?project=SLUG`. The reads that build a whole board
+/// or more share `gate`: one waits for a permit before it touches the database.
+pub fn router(gate: &Arc<Semaphore>) -> Router<DatabaseConnection> {
+    wide(gate).merge(narrow())
+}
+
+/// A project-wide read holds a permit from before its first query until it has answered, so the
+/// reads in flight, and the rows they hold, stay bounded however many requests arrive. A request that
+/// waits holds no rows.
+pub(crate) async fn hold(
+    State(gate): State<Arc<Semaphore>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let _permit = gate.acquire().await;
+    next.run(request).await
+}
+
+/// The reads that load a whole board, or the whole queue, for one request.
+fn wide(gate: &Arc<Semaphore>) -> Router<DatabaseConnection> {
     Router::new()
         .route("/next", get(queue::next))
+        .route("/metrics", get(metrics::metrics))
+        .route("/status", get(queue::status))
+        .route("/summary", get(board::summary))
+        .route("/check", get(board::check))
+        .route("/graph", get(board::graph))
+        .layer(from_fn_with_state(Arc::clone(gate), hold))
+}
+
+fn narrow() -> Router<DatabaseConnection> {
+    Router::new()
         .route("/next/halt", get(queue::halt))
         .route("/releases", get(crate::verbs::releases::list))
         .route("/areas", get(crate::verbs::areas::list))
         .route("/labels", get(crate::verbs::labels::list))
         .route("/changelog", get(changelog::changelog_of))
-        .route("/metrics", get(metrics::metrics))
-        .route("/status", get(queue::status))
         .route("/todo", get(lists::todo))
         .route("/todo/waiting", get(lists::todo_waiting))
         .route("/wip", get(lists::wip))
@@ -43,9 +75,6 @@ pub fn router() -> Router<DatabaseConnection> {
         .route("/dump", get(dump::dump))
         .route("/whoami", get(board::whoami))
         .route("/counts", get(board::counts))
-        .route("/summary", get(board::summary))
-        .route("/check", get(board::check))
-        .route("/graph", get(board::graph))
         .route("/shares", get(board::shares))
         .route("/held", get(board::held))
         .route("/log/{id}", get(detail::log))

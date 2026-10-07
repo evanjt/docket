@@ -1,3 +1,4 @@
+import { aborted, current } from './reads';
 import type {
   Offers,
   Area, Count, Deps, Derived, EventRow, Facts, Graph, LeadState, Machine, Problem, ProjectRow, ReleaseCounts, Row, Shown, Status, Summary, Whole, Whoami,
@@ -69,11 +70,16 @@ export function query(params: Record<string, string | number | undefined | null>
   return s ? `?${s}` : '';
 }
 
-export async function get<T>(path: string, params: Record<string, string | number | undefined | null> = {}): Promise<T> {
+export async function get<T>(
+  path: string,
+  params: Record<string, string | number | undefined | null> = {},
+  signal: AbortSignal | undefined = current(),
+): Promise<T> {
   let resp: Response;
   try {
-    resp = await fetch(`${BASE}${path}${query(params)}`, { headers: headers() });
-  } catch {
+    resp = await fetch(`${BASE}${path}${query(params)}`, { headers: headers(), signal });
+  } catch (e) {
+    if (aborted(e)) throw e;
     throw new Refused(0, 'the server could not be reached');
   }
   return answer<T>(resp);
@@ -104,12 +110,17 @@ const PAGE = 1000;
 /** Every row of a stored list matching a filter, a page at a time: the list routes page by default. */
 export async function all<T>(path: string, filter: object, sort: string, most = Infinity): Promise<T[]> {
   const out: T[] = [];
+  const signal = current();
   while (out.length < most) {
-    const page = await get<T[]>(path, {
-      filter: JSON.stringify(filter),
-      sort,
-      range: `[${out.length},${out.length + PAGE - 1}]`,
-    });
+    const page = await get<T[]>(
+      path,
+      {
+        filter: JSON.stringify(filter),
+        sort,
+        range: `[${out.length},${out.length + PAGE - 1}]`,
+      },
+      signal,
+    );
     out.push(...page);
     if (page.length < PAGE) return out;
   }

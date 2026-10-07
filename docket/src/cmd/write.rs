@@ -123,6 +123,7 @@ pub struct New<'a> {
     pub theme: Option<&'a String>,
     pub release: Option<&'a String>,
     pub group: Option<&'a String>,
+    pub repo: Option<&'a String>,
     pub area: Option<&'a String>,
     pub parent: Option<&'a String>,
 }
@@ -144,6 +145,7 @@ pub fn new(ctx: &mut Ctx, n: &New) -> Result<i32> {
         theme: n.theme.cloned(),
         release: n.release.filter(|r| !r.is_empty()).cloned(),
         group: n.group.cloned(),
+        repo: n.repo.cloned(),
         area: n.area.cloned(),
         parent: n.parent.cloned(),
     };

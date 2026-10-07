@@ -2,7 +2,7 @@ use super::*;
 
 use crate::scratch::Scratch;
 
-const MIGRATIONS: [&str; 27] = [
+const MIGRATIONS: [&str; 28] = [
     "m20261001_000001_schema",
     "m20261002_000001_machines_and_leads",
     "m20261005_000001_owner_facts",
@@ -30,6 +30,7 @@ const MIGRATIONS: [&str; 27] = [
     "m20261006_220000_remapped_events",
     "m20261006_233349_items_area_not_null",
     "m20261006_235900_outcome_ended",
+    "m20261007_073521_events_close_index",
 ];
 
 /// The migrations to apply to stand just before the one named.
@@ -184,7 +185,8 @@ async fn test_the_assignments_migration_rebuilds_each_items_attempts_from_its_ev
         MIGRATIONS[MIGRATIONS
             .iter()
             .position(|m| *m == "m20261005_000004_assignments")
-            .unwrap()..MIGRATIONS.len() - 2]
+            .unwrap()
+            ..steps_before("m20261006_233349_items_area_not_null") as usize]
     );
     let rows = s
         .db
@@ -1130,4 +1132,25 @@ async fn test_the_area_column_refuses_an_insert_with_none() {
         )
         .await;
     assert!(none.is_err());
+}
+
+#[tokio::test]
+async fn test_the_closes_of_a_project_read_from_an_index_on_its_events_by_kind() {
+    let s = Scratch::bare(2).await;
+    migrate(&s.db).await.unwrap();
+    let index = s
+        .db
+        .query_one_raw(statement(
+            "SELECT indexdef FROM pg_indexes WHERE tablename='events' AND indexname='events_project_kind'",
+            vec![],
+        ))
+        .await
+        .unwrap()
+        .map(|r| r.try_get_by_index::<String>(0).unwrap());
+    assert!(
+        index
+            .as_deref()
+            .is_some_and(|d| d.ends_with("(project, kind, rid, at)")),
+        "{index:?}"
+    );
 }

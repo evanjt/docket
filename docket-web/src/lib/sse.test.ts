@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { concerns, paced, parse } from './sse';
+import { concerns, paced, parse, settled } from './sse';
 
 describe('parse', () => {
   it('reads named events and keeps an unfinished one', () => {
@@ -69,5 +69,37 @@ describe('paced', () => {
     expect(fire).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(1_000);
     expect(fire).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('settled', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('fires once after a quiet second', () => {
+    vi.useFakeTimers();
+    const fire = vi.fn();
+    const change = settled(1_000, 5_000, fire);
+    change();
+    change();
+    vi.advanceTimersByTime(999);
+    expect(fire).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(fire).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes at the ceiling when changes never stop', () => {
+    vi.useFakeTimers();
+    const fire = vi.fn();
+    const change = settled(1_000, 5_000, fire);
+    for (let t = 0; t < 2_000; t += 100) {
+      change();
+      vi.advanceTimersByTime(100);
+    }
+    expect(fire).not.toHaveBeenCalled();
+    for (let t = 0; t < 3_000; t += 100) {
+      change();
+      vi.advanceTimersByTime(100);
+    }
+    expect(fire).toHaveBeenCalledTimes(1);
   });
 });

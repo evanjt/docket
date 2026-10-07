@@ -24,6 +24,15 @@ Run from the project's checkout, on the branch the work merges into, with a
 clean tree (`git status --short` prints nothing). Note the branch: every job
 starts from it and every merge goes back into it.
 
+A project whose root holds several sibling repositories is led from under its
+root. Each item carries the repository it changes, a path under the root
+(`docket new --repo PATH`, `docket edit ID --set repo=PATH`, or its plan's);
+one naming none takes the `checkout` fact. `dispatch` and `collect` take the
+base from and commit in that repository, on each machine the one under its own
+root, and you merge the job's branch there. `docket next --repo PATH` lists one
+repository's items. An item changes one repository: work in a second is an
+item of its own.
+
     docket skills
     docket machines
     docket lead take --session lead-$RANDOM

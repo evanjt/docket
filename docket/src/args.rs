@@ -50,6 +50,10 @@ pub struct Queue {
     /// only items in this area, by name
     #[arg(long)]
     pub area: Option<String>,
+    /// only items changing this repository, a path under the project root: their repo label, else
+    /// the checkout fact
+    #[arg(long, value_name = "PATH")]
+    pub repo: Option<String>,
     /// only items of this release, a name or current
     #[arg(long)]
     pub release: Option<String>,
@@ -172,6 +176,10 @@ pub enum Cmd {
         /// the group it is taken with: the label group:NAME
         #[arg(long)]
         group: Option<String>,
+        /// the repository it changes, a path under the project root: the label repo:PATH; under a
+        /// plan with one, the plan's
+        #[arg(long, value_name = "PATH")]
+        repo: Option<String>,
         /// the area it is filed in; under a plan it is the plan's, and naming another is refused
         #[arg(long, value_name = "AREA")]
         area: Option<String>,
@@ -778,11 +786,19 @@ pub enum JobCmd {
         effort: Option<String>,
         #[arg(long, value_parser = JOB_ROLES, default_value = "build")]
         role: String,
+        /// the repository the item changes, a path under this machine's root; none takes the
+        /// checkout fact
+        #[arg(long, value_name = "PATH")]
+        repo: Option<String>,
     },
     /// every job on this machine, or the one named: running, done, failed or lost, and its report
     Status { job: Option<String> },
-    /// the checkout of -p SLUG on this machine, where a lead pushes a job's branch
-    Where,
+    /// the checkout of -p SLUG on this machine, where a lead pushes a job's branch: the repository
+    /// --repo names under this machine's root, else the checkout fact's
+    Where {
+        #[arg(long, value_name = "PATH")]
+        repo: Option<String>,
+    },
     /// a finished job's change against the commit it started from, the change inside each
     /// submodule included, for the lead to commit on its own machine
     Diff { job: String },

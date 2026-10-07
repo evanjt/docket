@@ -20,7 +20,15 @@ use crate::verbs::view::{item_view, item_views};
 use crate::verbs::{Call, Failure};
 use crate::verbs::{areas, labels};
 
-const EDITABLE: [&str; 6] = ["title", "complexity", "theme", "group", "tags", "turn_note"];
+const EDITABLE: [&str; 7] = [
+    "title",
+    "complexity",
+    "theme",
+    "group",
+    "repo",
+    "tags",
+    "turn_note",
+];
 
 /// Set how soon items are worked.
 ///
@@ -208,12 +216,14 @@ async fn move_area(call: &mut Call, r: &Item, given: &str) -> Result<(Field, Str
     Ok((Field::AreaId(to), format!("area {label}")))
 }
 
-/// `--set theme=`, `group=` and `tags=`, which are labels: the theme is given as a label, the group
-/// becomes the item's one group label (blank takes it away), and the tags become the item's own
-/// labels other than its group's. False for any other field.
+/// `--set theme=`, `group=`, `repo=` and `tags=`, which are labels: the theme is given as a label,
+/// the group becomes the item's one group label and the repository its one repo label (blank takes
+/// either away), and the tags become the item's own labels other than its group's and repo's. False
+/// for any other field.
 async fn set_labels(call: &Call, rid: i64, field: &str, value: &str) -> Result<bool, Failure> {
     let (c, slug, value) = (&call.tx.conn, call.slug.as_str(), value.trim());
     let is_group = |name: &str| name.starts_with(label::GROUP);
+    let is_tag = |name: &str| !is_group(name) && !label::is_repo(name);
     match field {
         "theme" if value.is_empty() => {
             return Err(Failure::Refused(
@@ -229,7 +239,11 @@ async fn set_labels(call: &Call, rid: i64, field: &str, value: &str) -> Result<b
                 .collect();
             labels::set(c, slug, rid, &names, is_group).await?;
         }
-        "tags" => labels::set(c, slug, rid, &set_tags(value), |n| !is_group(n)).await?,
+        "repo" => {
+            let names: Vec<String> = label::of_repo(value)?.into_iter().collect();
+            labels::set(c, slug, rid, &names, label::is_repo).await?;
+        }
+        "tags" => labels::set(c, slug, rid, &set_tags(value), is_tag).await?,
         _ => return Ok(false),
     }
     Ok(true)

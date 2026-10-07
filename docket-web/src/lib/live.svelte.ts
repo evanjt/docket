@@ -1,26 +1,24 @@
 import { BASE, Refused, headers } from './api';
 import { here } from './here.svelte';
-import { concerns, paced, parse } from './sse';
+import { reading, aborted, supersede } from './reads';
+import { concerns, paced, parse, settled } from './sse';
 
 /** Bumped after every change the server reports, and after every write from this page. */
 export const live = $state({ version: 0, graph: 0, connected: false });
 
-const SETTLE_MS = 250;
+const SETTLE_MS = 1000;
+const CEILING_MS = 5000;
 const GRAPH_MS = 60_000;
 const RETRY_MS = [1000, 2000, 5000, 10000];
 
 const reloadGraph = paced(GRAPH_MS, () => live.graph++);
-let timer: ReturnType<typeof setTimeout> | undefined;
 
-/** Reads again everything on screen, once a burst of changes has settled. */
-export function refresh() {
-  clearTimeout(timer);
-  timer = setTimeout(() => {
-    clock.now = Date.now() / 1000;
-    live.version++;
-    reloadGraph();
-  }, SETTLE_MS);
-}
+/** Reads again everything on screen, once a burst of changes has settled, and at least every `CEILING_MS`. */
+export const refresh = settled(SETTLE_MS, CEILING_MS, () => {
+  clock.now = Date.now() / 1000;
+  live.version++;
+  reloadGraph();
+});
 
 /** Follows `/changes` until `signal` aborts, reconnecting after a drop. */
 export async function follow(signal: AbortSignal) {
@@ -78,9 +76,11 @@ export function resource<T>(
     loading: true,
   });
   let ticket = 0;
+  const next = supersede();
   $effect(() => {
     void version();
-    const pending = fetcher();
+    const signal = next();
+    const pending = reading(signal, fetcher);
     const mine = ++ticket;
     if (!pending) {
       state.loading = false;
@@ -95,11 +95,12 @@ export function resource<T>(
         state.loading = false;
       },
       (e: unknown) => {
-        if (mine !== ticket) return;
+        if (mine !== ticket || aborted(e)) return;
         state.error = e instanceof Refused || e instanceof Error ? e.message : String(e);
         state.loading = false;
       },
     );
+    return next.stop;
   });
   return state;
 }

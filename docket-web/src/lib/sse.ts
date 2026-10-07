@@ -57,3 +57,23 @@ export function paced(interval: number, fire: () => void): () => void {
     }, wait);
   };
 }
+
+/**
+ * Calls `fire` once changes have been quiet for `quiet` ms, or `ceiling` ms after the first unanswered
+ * change, so a constant stream of changes still fires.
+ */
+export function settled(quiet: number, ceiling: number, fire: () => void): () => void {
+  let quietTimer: ReturnType<typeof setTimeout> | undefined;
+  let ceilingTimer: ReturnType<typeof setTimeout> | undefined;
+  const go = () => {
+    clearTimeout(quietTimer);
+    clearTimeout(ceilingTimer);
+    quietTimer = ceilingTimer = undefined;
+    fire();
+  };
+  return () => {
+    clearTimeout(quietTimer);
+    quietTimer = setTimeout(go, quiet);
+    ceilingTimer ??= setTimeout(go, ceiling);
+  };
+}

@@ -464,10 +464,8 @@ pub fn item_from(
     mut fields: Map<String, Value>,
     body: String,
 ) -> Result<ItemDump, String> {
-    for k in ["related"] {
-        if fields.get(k).is_some_and(Value::is_null) {
-            fields.remove(k);
-        }
+    if fields.get("related").is_some_and(Value::is_null) {
+        fields.remove("related");
     }
     if !fields.get("id").is_some_and(Value::is_string) {
         return Err("item file has no id".to_string());

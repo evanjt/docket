@@ -28,7 +28,7 @@ fn test_matches_by_slug_remote_or_last_component() {
     let urls = vec!["git@host:acme/web.git".to_string()];
     assert_eq!(matches(&p, None, &urls, "elsewhere"), vec!["acme/web"]);
     assert_eq!(matches(&p, None, &[], "web"), vec!["acme/web", "other/web"]);
-    assert!(matches(&p, Some("new/thing"), &[], "thing").is_empty());
+    assert_eq!(matches(&p, Some("new/thing"), &[], "thing").len(), 0);
 }
 
 #[test]

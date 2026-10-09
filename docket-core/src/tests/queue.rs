@@ -65,7 +65,7 @@ fn test_next_never_lists_a_retired_plan_kind() {
         key: Some("PK"),
         ..Filter::default()
     };
-    assert!(next(&items, &[], &packages, 10).is_empty());
+    assert_eq!(next(&items, &[], &packages, 10).len(), 0);
 }
 
 #[test]
@@ -176,7 +176,7 @@ fn test_next_filters_by_label_and_under() {
         labelled: Some(&none),
         ..Filter::default()
     };
-    assert!(next(&items, &[], &unlabelled, 10).is_empty());
+    assert_eq!(next(&items, &[], &unlabelled, 10).len(), 0);
     let under: HashSet<i64> = [3].into_iter().collect();
     let below = Filter {
         under: Some(&under),
@@ -600,7 +600,7 @@ fn test_next_narrows_to_one_item_when_it_is_ready() {
         ..Filter::default()
     };
     assert_eq!(ids(next(&items, &[], &one(2), 10)), vec![2]);
-    assert!(next(&items, &[], &one(3), 10).is_empty());
+    assert_eq!(next(&items, &[], &one(3), 10).len(), 0);
 }
 
 #[test]

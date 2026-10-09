@@ -47,11 +47,7 @@ fn test_cursor_is_kept_in_local_config_and_forgotten() {
     assert_eq!(cursor(work.path()).unwrap(), None);
     set_cursor(work.path(), 42).unwrap();
     assert_eq!(cursor(work.path()).unwrap(), Some(42));
-    assert!(
-        git(work.path(), &["status", "--porcelain"])
-            .unwrap()
-            .is_empty()
-    );
+    assert_eq!(git(work.path(), &["status", "--porcelain"]).unwrap(), "");
     forget_cursor(work.path()).unwrap();
     forget_cursor(work.path()).unwrap();
     assert_eq!(cursor(work.path()).unwrap(), None);

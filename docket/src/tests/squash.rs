@@ -18,5 +18,5 @@ fn test_submodule_paths_are_the_repos_under_the_checkout_less_its_path() {
         vec!["vendor/glaze", "tools/wheel"]
     );
     assert_eq!(submodule_paths(&repos, "vendor"), vec!["glaze"]);
-    assert!(submodule_paths(&repos, "studio").is_empty());
+    assert_eq!(submodule_paths(&repos, "studio").len(), 0);
 }

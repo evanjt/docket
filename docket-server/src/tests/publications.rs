@@ -151,5 +151,5 @@ async fn test_a_publication_names_full_shas_and_only_plans_of_its_project() {
         None,
     )
     .await;
-    assert!(shas(&listed).is_empty());
+    assert_eq!(shas(&listed).len(), 0);
 }

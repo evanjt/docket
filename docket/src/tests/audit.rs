@@ -124,7 +124,7 @@ fn test_sections_are_found_by_word_and_open_counts_the_flow_words() {
     assert_eq!(section(&sections, "done")[0]["id"], "T5");
     assert_eq!(section(&sections, "blocked").len(), 2);
     assert_eq!(open_count(&sections), 5);
-    assert!(section(&sections, "inbox").is_empty());
+    assert_eq!(section(&sections, "inbox").len(), 0);
 }
 
 fn file(path: &str, lines: usize) -> (String, usize) {
@@ -209,9 +209,9 @@ fn test_index_lists_tracked_files_and_not_worktrees_or_untracked_copies() {
 
     let roots = vec![root.to_string_lossy().into_owned()];
     let mut index = Index::default();
-    assert!(!index.find(&roots, "src/kept.ts").0.is_empty());
-    assert!(index.find(&roots, "src/gone.ts").0.is_empty());
-    assert!(index.find(&roots, "src/loose.ts").0.is_empty());
+    assert_ne!(index.find(&roots, "src/kept.ts").0.len(), 0);
+    assert_eq!(index.find(&roots, "src/gone.ts").0.len(), 0);
+    assert_eq!(index.find(&roots, "src/loose.ts").0.len(), 0);
 }
 
 #[test]
@@ -278,8 +278,11 @@ fn test_misattributed_lists_done_items_whose_commit_closes_another_item() {
 fn test_area_lines_give_the_description_then_the_priority() {
     let area = json!({"name": "kites", "description": "Things that fly", "priority": "high"});
     assert_eq!(area_lines(&area), ["Things that fly", "priority: high"]);
-    assert!(area_lines(&json!({"name": "kites", "description": "", "priority": null})).is_empty());
-    assert!(area_lines(&Value::Null).is_empty());
+    assert_eq!(
+        area_lines(&json!({"name": "kites", "description": "", "priority": null})).len(),
+        0
+    );
+    assert_eq!(area_lines(&Value::Null).len(), 0);
 }
 
 #[test]

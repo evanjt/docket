@@ -197,7 +197,7 @@ async fn test_next_rows_carry_their_role_and_what_they_unblock() {
 async fn test_next_narrows_by_key_priority_under_label_and_complexity() {
     assert_eq!(ids("/next?label=roadmap").await, ["T9"]);
     assert_eq!(ids("/next?theme=Roadmap").await, ["T9"]);
-    assert!(ids("/next?label=road").await.is_empty());
+    assert_eq!(ids("/next?label=road").await.len(), 0);
     assert_eq!(
         ids("/next?key=t").await,
         ["T2", "T1", "T3", "T5", "T8", "T9"]
@@ -227,7 +227,7 @@ async fn test_owner_lists_todo_questions_research() {
     assert_eq!(ids("/questions").await, ["Q1"]);
     assert_eq!(ids("/questions?label=SYNC").await, ["Q1"]);
     assert_eq!(ids("/questions?theme=sync").await, ["Q1"]);
-    assert!(ids("/questions?theme=road").await.is_empty());
+    assert_eq!(ids("/questions?theme=road").await.len(), 0);
     assert_eq!(ids("/research").await, ["Q2"]);
     let (_, todo) = get("/todo").await;
     assert_eq!(todo[0]["owner_group"], "derived");
@@ -278,7 +278,7 @@ async fn test_state_lists_waiting_wip_done_dropped_groups() {
     assert_eq!(ids("/waiting?on=item").await, ["T6"]);
     assert_eq!(get("/waiting?on=x").await.0, StatusCode::BAD_REQUEST);
     assert_eq!(ids("/wip").await, ["T7"]);
-    assert!(ids("/wip?host=other").await.is_empty());
+    assert_eq!(ids("/wip?host=other").await.len(), 0);
     assert_eq!(ids("/done").await, ["T11", "T4"]);
     assert_eq!(ids("/done?n=1&key=t").await, ["T11"]);
     assert_eq!(ids("/dropped").await, ["T10"]);
@@ -411,8 +411,8 @@ async fn test_search_ranks_with_snippets_and_refuses_bad_queries() {
 async fn test_similar_matches_title_words_and_cited_files_and_skips_itself() {
     assert_eq!(ids("/similar/T11").await, ["T1"]);
     assert_eq!(ids("/similar/t11?state=open").await, ["T1"]);
-    assert!(ids("/similar/T11?state=done").await.is_empty());
-    assert!(ids("/similar/T4").await.is_empty());
+    assert_eq!(ids("/similar/T11?state=done").await.len(), 0);
+    assert_eq!(ids("/similar/T4").await.len(), 0);
     assert_eq!(get("/similar/T99").await.0, StatusCode::NOT_FOUND);
     let (_, rows) = get("/similar/T11").await;
     assert!(rows[0].get("snippet").is_none());

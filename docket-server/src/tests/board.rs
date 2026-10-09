@@ -533,7 +533,10 @@ async fn test_audit_by_label_lists_every_row_carrying_it_alone() {
         ids(&s.ok("/audit?project=o/t&theme=beta").await["rows"]),
         ["T4"]
     );
-    assert!(ids(&s.ok("/audit?project=o/t&label=kite_").await["rows"]).is_empty());
+    assert_eq!(
+        ids(&s.ok("/audit?project=o/t&label=kite_").await["rows"]).len(),
+        0
+    );
 }
 
 #[tokio::test]

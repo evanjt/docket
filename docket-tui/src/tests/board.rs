@@ -70,9 +70,12 @@ fn test_children_and_owner_counts() {
 #[test]
 fn test_empty_board_has_nothing_under_way() {
     let b = docket_core::board::Board::default();
-    assert!(b.plans_under_way().is_empty());
-    assert!(b.due_audits().is_empty());
-    assert!(b.with_word("ready").is_empty());
+    assert_eq!(
+        b.plans_under_way(),
+        [] as [(&docket_core::rows::ItemRow, docket_core::api::Progress); 0]
+    );
+    assert_eq!(b.due_audits(), [] as [&docket_core::rows::ItemRow; 0]);
+    assert_eq!(b.with_word("ready"), [] as [&docket_core::rows::ItemRow; 0]);
     assert_eq!(b.on_owner(), 0);
 }
 

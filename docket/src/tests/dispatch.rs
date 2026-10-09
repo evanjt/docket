@@ -113,8 +113,11 @@ fn test_ranked_never_takes_a_full_machine_or_one_without_the_runner() {
         machine("beta", 2, &["codex"]),
     ];
     let busy = running(&[("alpha", 1)]);
-    assert!(ranked(&ms, &busy, "claude", "alpha", NOW).is_empty());
-    assert!(ranked(&ms, &running(&[("beta", 2)]), "codex", "alpha", NOW).is_empty());
+    assert_eq!(ranked(&ms, &busy, "claude", "alpha", NOW).len(), 0);
+    assert_eq!(
+        ranked(&ms, &running(&[("beta", 2)]), "codex", "alpha", NOW).len(),
+        0
+    );
 }
 
 #[test]
@@ -518,17 +521,16 @@ fn test_a_change_or_message_naming_a_private_term_is_flagged() {
         patch: "+++ b/a.rs\n@@ -0,0 +1 @@\n+// zebrafarm\n".into(),
         submodules: vec![],
     };
-    assert!(!look.change_hits(&change, "Tidy").is_empty());
-    assert!(
-        !look
-            .change_hits(&Change::default(), "Tidy zebrafarm")
-            .is_empty()
+    assert_ne!(look.change_hits(&change, "Tidy").len(), 0);
+    assert_ne!(
+        look.change_hits(&Change::default(), "Tidy zebrafarm").len(),
+        0
     );
     let clean = Change {
         patch: "+++ b/a.rs\n@@ -0,0 +1 @@\n+// ok\n".into(),
         submodules: vec![],
     };
-    assert!(look.change_hits(&clean, "Tidy").is_empty());
+    assert_eq!(look.change_hits(&clean, "Tidy").len(), 0);
 }
 
 fn root(path: &str) -> docket_client::roots::Root {

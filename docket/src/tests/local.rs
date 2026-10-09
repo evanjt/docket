@@ -15,7 +15,10 @@ fn test_repo_dirs_defaults_to_the_root_and_skips_missing() {
         repo_dirs(&[], std::slice::from_ref(&root), &[]),
         vec![here.join(".")]
     );
-    assert!(repo_dirs(&[], &[root], &["no-such-dir-here".into()]).is_empty());
+    assert_eq!(
+        repo_dirs(&[], &[root], &["no-such-dir-here".into()]).len(),
+        0
+    );
 }
 
 fn root(path: &str, project: &str) -> docket_client::roots::Root {

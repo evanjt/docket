@@ -64,8 +64,8 @@ fn test_a_set_of_labels_names_every_repository_once_in_order() {
         repos_of(&["ci", "repo:kites", "repo:lanterns", "repo:kites"]),
         ["kites", "lanterns"]
     );
-    assert!(repos_of(&["ci", "repo:"]).is_empty());
-    assert!(repos_of::<&str>(&[]).is_empty());
+    assert_eq!(repos_of(&["ci", "repo:"]).len(), 0);
+    assert_eq!(repos_of::<&str>(&[]).len(), 0);
     assert!(is_repo("repo:kites"));
     assert!(!is_repo("group:kites"));
 }

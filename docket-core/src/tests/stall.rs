@@ -131,7 +131,7 @@ fn test_an_item_on_two_dependencies_is_free_only_when_both_are_satisfied() {
     targets.insert(a, Target::Done);
     assert_eq!(holders(&[a, b], &targets), [b]);
     targets.insert(b, Target::Done);
-    assert!(holders(&[a, b], &targets).is_empty());
+    assert_eq!(holders(&[a, b], &targets).len(), 0);
 }
 
 #[test]
@@ -192,7 +192,7 @@ fn test_an_inversion_that_stood_before_the_write_is_not_introduced_by_it() {
     let rank = BTreeMap::from([(1, 0), (2, 1), (3, 0)]);
     let moved = BTreeMap::from([(3, 1)]);
     assert_eq!(order::violations(&held, &rank, &moved), [(1, 2)]);
-    assert!(order::introduced(&held, &rank, &moved).is_empty());
+    assert_eq!(order::introduced(&held, &rank, &moved).len(), 0);
 }
 
 #[test]

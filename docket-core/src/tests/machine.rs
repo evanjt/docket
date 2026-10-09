@@ -125,7 +125,7 @@ fn test_check_refuses_each_value_a_machine_cannot_hold() {
 fn test_runners_read_from_a_comma_list() {
     assert_eq!(runners_of("claude, codex"), ["claude", "codex"]);
     assert_eq!(runners_of("codex"), ["codex"]);
-    assert!(runners_of(" , ").is_empty());
+    assert_eq!(runners_of(" , ").len(), 0);
 }
 
 #[test]

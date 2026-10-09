@@ -51,5 +51,8 @@ fn test_items_lists_ids_sorted_as_text() {
         write(dir.path(), rel, "x").unwrap();
     }
     assert_eq!(items(dir.path(), "o/p").unwrap(), vec!["T10", "T9"]);
-    assert!(items(dir.path(), "o/none").unwrap().is_empty());
+    assert_eq!(
+        items(dir.path(), "o/none").unwrap(),
+        [] as [std::string::String; 0]
+    );
 }

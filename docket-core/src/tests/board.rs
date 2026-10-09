@@ -106,7 +106,7 @@ fn test_the_plan_count_takes_open_and_audit_due_from_the_word() {
 #[test]
 fn test_a_plan_whose_tickets_are_all_closed_is_not_listed_as_under_way() {
     let closed = plan_with_grandchild("done");
-    assert!(closed.plans_under_way().is_empty());
+    assert_eq!(closed.plans_under_way().len(), 0);
     let open = plan_with_grandchild("open");
     assert_eq!(open.plans_under_way().len(), 1);
 }

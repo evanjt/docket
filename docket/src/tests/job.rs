@@ -474,7 +474,7 @@ fn test_a_job_whose_repositories_sit_at_one_place_is_refused_and_leaves_nothing(
         panic!("started two repositories at one place")
     };
     assert!(why.contains("both sit at lib"), "{why}");
-    assert!(rows(&m.state(), now()).is_empty());
+    assert_eq!(rows(&m.state(), now()).len(), 0);
 }
 
 #[test]
@@ -686,7 +686,7 @@ fn test_observations_are_every_observe_line_and_read_as_a_list() {
         ["the retry sleeps a fixed second", "the log names no host"]
     );
     assert_eq!(report(text).1, Some("built it".into()));
-    assert!(observations("NOTE x\nDONE").is_empty());
+    assert_eq!(observations("NOTE x\nDONE").len(), 0);
     assert_eq!(
         observed("lead-t14-7", &["one".into(), "two".into()]),
         "**Observations, from the job lead-t14-7.**\n\n- one\n- two"
@@ -741,7 +741,7 @@ fn test_run_refuses_and_leaves_nothing_when_provisioning_fails() {
         "{why}"
     );
     assert!(!m.tmp.path().join("sample-slot1").exists());
-    assert!(rows(&m.state(), now()).is_empty());
+    assert_eq!(rows(&m.state(), now()).len(), 0);
 }
 
 #[test]

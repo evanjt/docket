@@ -104,7 +104,7 @@ fn test_typed_rows_read_every_route_the_tui_uses() {
     assert_eq!(api.list("todo", "o/p").unwrap()[0].id, "Q1");
     assert_eq!(api.list("questions", "o/p").unwrap()[0].id, "Q1");
     assert_eq!(api.search("o/p", "sync", 5).unwrap()[0].id, "T1");
-    assert!(api.group("o/p", "none").unwrap().is_empty());
+    assert_eq!(api.group("o/p", "none").unwrap().len(), 0);
 
     let shown = api.show("o/p", "T1").unwrap();
     assert_eq!(shown.row.word, "ready");
@@ -217,7 +217,7 @@ fn test_facts_read_and_set_through_their_routes() {
 #[test]
 fn test_machines_and_the_lead_claim_round_trip() {
     let api = served();
-    assert!(api.machines().unwrap().machines.is_empty());
+    assert_eq!(api.machines().unwrap().machines.len(), 0);
     let req = MachineRequest {
         set: docket_core::machine::Set {
             name: "alpha".into(),
@@ -247,7 +247,7 @@ fn test_machines_and_the_lead_claim_round_trip() {
 #[test]
 fn test_a_publication_round_trips_and_a_second_with_its_sha_is_refused() {
     let api = served();
-    assert!(api.publications("o/p").unwrap().publications.is_empty());
+    assert_eq!(api.publications("o/p").unwrap().publications.len(), 0);
     let req = PublicationRequest {
         common: Common {
             project: "o/p".into(),

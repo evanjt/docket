@@ -58,15 +58,15 @@ fn test_hits_match_whole_words_in_any_case() {
     let t = strings(&["alpha", "widgets"]);
     assert_eq!(hits(&t, "ssh alpha-1 and Widgets"), ["alpha", "widgets"]);
     assert_eq!(hits(&t, "at alpha.local"), ["alpha"]);
-    assert!(hits(&t, "the alphabet of widgetsmith").is_empty());
+    assert_eq!(hits(&t, "the alphabet of widgetsmith").len(), 0);
 }
 
 #[test]
 fn test_a_name_with_a_capital_is_matched_as_written() {
     let t = strings(&["ORBIT", "Ada"]);
-    assert!(hits(&t, "an orbit of the orbit log").is_empty());
+    assert_eq!(hits(&t, "an orbit of the orbit log").len(), 0);
     assert_eq!(hits(&t, "ORBIT/webapp by Ada"), ["ORBIT", "Ada"]);
-    assert!(hits(&t, "ada and orbit").is_empty());
+    assert_eq!(hits(&t, "ada and orbit").len(), 0);
 }
 
 #[test]
@@ -76,7 +76,7 @@ fn test_ids_finds_keys_followed_by_a_number() {
         ids(&keys, "// A3 principle 2, as PK12 said (T9)"),
         ["A3", "PK12", "T9"]
     );
-    assert!(ids(&keys, "// sha256 and AT7 and A and T-1").is_empty());
+    assert_eq!(ids(&keys, "// sha256 and AT7 and A and T-1").len(), 0);
 }
 
 #[test]
@@ -87,8 +87,11 @@ fn test_message_ids_find_a_branch_name_in_any_case() {
         ["t14"]
     );
     assert_eq!(message_ids(&keys, "Closes T9 and pk12"), ["T9", "pk12"]);
-    assert!(message_ids(&keys, "Merge the job; sha256, t-1, utf8").is_empty());
-    assert!(ids(&keys, "lead/t14-123").is_empty());
+    assert_eq!(
+        message_ids(&keys, "Merge the job; sha256, t-1, utf8").len(),
+        0
+    );
+    assert_eq!(ids(&keys, "lead/t14-123").len(), 0);
 }
 
 #[test]
@@ -109,7 +112,7 @@ fn test_titles_are_found_when_long_enough_to_be_an_items_own() {
         t.hits("// The sync loses a record when two devices write at once."),
         ["The sync loses a record when two devices write at once"]
     );
-    assert!(t.hits("Fix it now").is_empty());
+    assert_eq!(t.hits("Fix it now").len(), 0);
 }
 
 #[test]
@@ -125,7 +128,7 @@ fn test_shapes_find_private_addresses_and_tokens() {
     );
     assert_eq!(shapes(&format!("{inside} but not 172.32.0.1")), [inside]);
     assert_eq!(shapes(&format!("token {token}")), [token]);
-    assert!(shapes("version 1.10.0.4, 8.8.8.8 and 203.0.113.7").is_empty());
+    assert_eq!(shapes("version 1.10.0.4, 8.8.8.8 and 203.0.113.7").len(), 0);
 }
 
 #[test]
@@ -139,7 +142,7 @@ fn test_theme_group_and_release_names_are_not_terms() {
     let sent = r#"{"projects":[],"owners":[],"machines":[],"hosts":[],"keys":[],
         "themes":["Lanterns"],"groups":["harbour-lights"],"releases":["2.4","saffron"]}"#;
     let p: Private = serde_json::from_str(sent).unwrap();
-    assert!(terms(&p, &[], &[]).is_empty());
+    assert_eq!(terms(&p, &[], &[]).len(), 0);
 }
 
 #[test]
@@ -155,23 +158,26 @@ fn test_agent_in_a_message_is_a_tool_name_a_session_link_or_an_attribution_trail
     ] {
         assert!(!agent_in_message(&[], line).is_empty(), "{line}");
     }
-    assert!(agent_in_message(&[], "Add shelf sorting").is_empty());
-    assert!(agent_in_message(&[], "Sort the claudette shelf").is_empty());
+    assert_eq!(agent_in_message(&[], "Add shelf sorting").len(), 0);
+    assert_eq!(agent_in_message(&[], "Sort the claudette shelf").len(), 0);
 }
 
 #[test]
 fn test_a_public_name_allows_a_tool_name_but_not_a_link() {
     let allowed = ["claude".to_string()];
-    assert!(agent_in_message(&allowed, "Parse the Claude config").is_empty());
+    assert_eq!(
+        agent_in_message(&allowed, "Parse the Claude config").len(),
+        0
+    );
     let link = format!("https://{}.ai/code/session_01abc", "claude");
-    assert!(!agent_in_message(&allowed, &link).is_empty());
+    assert_ne!(agent_in_message(&allowed, &link).len(), 0);
 }
 
 #[test]
 fn test_agent_in_an_added_line_is_a_session_link_or_a_trailer_not_a_tool_name() {
     let link = format!("see https://{}.ai/code/session_01abc", "claude");
-    assert!(!agent_in_line(&link).is_empty());
-    assert!(agent_in_line("Claude is a name in prose").is_empty());
+    assert_ne!(agent_in_line(&link).len(), 0);
+    assert_eq!(agent_in_line("Claude is a name in prose").len(), 0);
 }
 
 #[test]

@@ -38,7 +38,7 @@ fn test_interleaved_plans_cut_where_the_later_one_finishes() {
     assert_eq!(groups[0].finished, ["A1"]);
     assert_eq!(groups[0].partial, ["A2"]);
     assert_eq!(groups[1].finished, ["A2"]);
-    assert!(groups[1].partial.is_empty());
+    assert_eq!(groups[1].partial.len(), 0);
     assert_eq!(groups[0].date, "2026-01-03T00:00:00Z");
 }
 
@@ -63,7 +63,7 @@ fn test_a_plan_open_at_the_tip_rides_in_the_last_group_as_partial() {
     let groups = cut(&snaps, &open(&[("A1", 0), ("A2", 2)]), None);
     assert_eq!(ends(&groups), ["s1", "s3"]);
     assert_eq!(groups[1].partial, ["A2"]);
-    assert!(groups[1].finished.is_empty());
+    assert_eq!(groups[1].finished.len(), 0);
 }
 
 #[test]
@@ -100,5 +100,5 @@ fn test_groups_never_reorder_snapshots() {
 
 #[test]
 fn test_no_snapshots_give_no_groups() {
-    assert!(cut(&[], &open(&[]), Some(1)).is_empty());
+    assert_eq!(cut(&[], &open(&[]), Some(1)).len(), 0);
 }

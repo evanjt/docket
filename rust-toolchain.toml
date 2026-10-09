@@ -1,0 +1,5 @@
+# The toolchain CI, the container build and every checkout compile with. Bumping it is a
+# deliberate commit, taken with the lints a new release adds.
+[toolchain]
+channel = "1.99.0"
+components = ["clippy", "rustfmt"]

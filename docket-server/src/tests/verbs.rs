@@ -1223,10 +1223,10 @@ async fn test_a_plans_audit_comes_due_once_and_closes_in_one_round() {
     s.open("T", "Port the mixer").await;
     s.ok("parent", json!({ "a": ["B1", "T1"], "plan": "A1" }))
         .await;
-    assert!(next(&s, "audit").await.is_empty());
+    assert_eq!(next(&s, "audit").await.len(), 0);
     s.ok("close", json!({ "id": "B1", "resolution": "abc1234" }))
         .await;
-    assert!(next(&s, "audit").await.is_empty());
+    assert_eq!(next(&s, "audit").await.len(), 0);
     s.ok("close", json!({ "id": "T1", "resolution": "def5678" }))
         .await;
     assert_eq!(next(&s, "audit").await, vec!["A1"]);
@@ -1245,7 +1245,7 @@ async fn test_a_plans_audit_comes_due_once_and_closes_in_one_round() {
     s.ok("close", json!({ "id": "B2", "resolution": "0a1b2c3" }))
         .await;
     assert_eq!(s.item("A1").await["state"], "done");
-    assert!(next(&s, "audit").await.is_empty());
+    assert_eq!(next(&s, "audit").await.len(), 0);
 }
 
 #[tokio::test]
@@ -1254,7 +1254,7 @@ async fn test_a_new_plan_is_the_plan_roles_until_it_opens_work() {
     plan(&s).await;
     s.open("I", "How many ovens the bakery has").await;
     assert_eq!(next(&s, "plan").await, vec!["A1", "I1"]);
-    assert!(next(&s, "audit").await.is_empty());
+    assert_eq!(next(&s, "audit").await.len(), 0);
     s.open("B", "Port the proofer").await;
     s.ok("parent", json!({ "a": ["B1"], "plan": "A1" })).await;
     assert_eq!(next(&s, "plan").await, vec!["I1"]);
@@ -2113,7 +2113,7 @@ async fn test_the_claim_and_the_owners_turn_are_read_from_the_open_assignment() 
     let held = read("held").await;
     assert_eq!(held[0]["held"]["Claim"]["branch"], "audit/t-1");
     assert_eq!(held[1]["held"]["Ask"]["note"], "plug it in at the bench");
-    assert!(next(&s, "work").await.is_empty());
+    assert_eq!(next(&s, "work").await.len(), 0);
     assert_eq!(s.word("T1").await, "in progress");
     assert_eq!(s.word("B1").await, "waiting on owner");
     assert_eq!(s.item("T2").await["wait_on"], "condition");
@@ -2149,7 +2149,7 @@ async fn test_the_claim_and_the_owners_turn_are_read_from_the_open_assignment() 
     assert_eq!(s.word("B1").await, "ready");
     s.ok("release", json!({ "id": "T1", "outcome": "ended" }))
         .await;
-    assert!(ids(&read("wip").await).is_empty());
+    assert_eq!(ids(&read("wip").await).len(), 0);
 }
 
 async fn asked(s: &Scratch, key: &str, title: &str, extra: Value) -> String {
@@ -2991,7 +2991,7 @@ async fn test_a_wait_is_read_from_its_dependency_and_never_from_the_wait_columns
         .await;
     assert_eq!(ids(&out["released"]), vec!["T1"]);
     assert_eq!(s.word("T1").await, "ready");
-    assert!(waiting_ids(&s, "").await.is_empty());
+    assert_eq!(waiting_ids(&s, "").await.len(), 0);
 }
 
 #[tokio::test]
@@ -3088,7 +3088,7 @@ async fn test_remap_carries_closing_shas_through_a_map_and_records_each() {
     assert_eq!(kinds(s.events("B1").await), 1);
     assert_eq!(kinds(s.events("B4").await), 0);
     let again = s.ok("remap", json!({ "map": map })).await;
-    assert!(again["rows"].as_array().unwrap().is_empty());
+    assert_eq!(again["rows"].as_array().unwrap().len(), 0);
     assert_eq!(kinds(s.events("B1").await), 1);
 }
 

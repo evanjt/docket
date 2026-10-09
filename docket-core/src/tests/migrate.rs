@@ -309,7 +309,7 @@ fn test_a_project_with_no_release_sends_every_item_to_the_backlog() {
         i.theme = None;
     }
     let c = plan(&Rows::of(&page)[0], Rules::default());
-    assert!(c.releases.is_empty());
+    assert_eq!(c.releases.len(), 0);
     assert_eq!(
         risky(&c, |k| matches!(k, Case::NoRelease { .. }))[0].case,
         Case::NoRelease { open: 17 }
@@ -1076,7 +1076,7 @@ fn test_an_open_item_with_a_stored_area_and_no_other_tie_is_placed_in_it() {
     let c = plan(&rows, Rules::default());
     assert_eq!(area_of(&c, "T5").as_deref(), Some("kites"));
     assert_eq!(c.placed.unplaced, 0);
-    assert!(risky(&c, |k| matches!(k, Case::Unplaced { .. })).is_empty());
+    assert_eq!(risky(&c, |k| matches!(k, Case::Unplaced { .. })).len(), 0);
     assert!(c.writable().is_ok(), "{:?}", c.writable());
 }
 

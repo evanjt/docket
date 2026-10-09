@@ -132,7 +132,10 @@ fn test_ctrl_e_hands_the_line_to_the_editor_and_its_text_is_sent() {
     typed(&mut a, "Use");
     ctrl(&mut a, 'e');
     assert_eq!(a.editor.as_deref(), Some("Use"));
-    assert!(a.source.sent().is_empty());
+    assert_eq!(
+        a.source.sent(),
+        [] as [(std::string::String, serde_json::Value); 0]
+    );
     a.editor = None;
     a.edited(Some("Use S3.\n\nThe read path is hot.\n".into()));
     let (_, body) = only(&a);
@@ -145,7 +148,10 @@ fn test_an_editor_left_empty_sends_nothing() {
     press(&mut a, KeyCode::Char('r'));
     ctrl(&mut a, 'e');
     a.edited(Some("  \n".into()));
-    assert!(a.source.sent().is_empty());
+    assert_eq!(
+        a.source.sent(),
+        [] as [(std::string::String, serde_json::Value); 0]
+    );
     assert!(a.prompt.is_none());
 }
 
@@ -161,7 +167,10 @@ fn test_esc_drops_a_typed_line_and_leaves_the_page() {
         "yours",
         "Esc dropped the line, not the page"
     );
-    assert!(a.source.sent().is_empty());
+    assert_eq!(
+        a.source.sent(),
+        [] as [(std::string::String, serde_json::Value); 0]
+    );
 }
 
 #[test]
@@ -268,7 +277,10 @@ fn test_a_link_line_without_a_kind_and_an_id_sends_nothing() {
     press(&mut a, KeyCode::Char('L'));
     typed(&mut a, "CON1");
     press(&mut a, KeyCode::Enter);
-    assert!(a.source.sent().is_empty());
+    assert_eq!(
+        a.source.sent(),
+        [] as [(std::string::String, serde_json::Value); 0]
+    );
     assert!(foot(&mut a).contains("link takes a kind and an id"));
 }
 
@@ -421,7 +433,10 @@ fn test_palette_opens_a_read_and_refuses_a_bad_line_without_a_request() {
     press(&mut a, KeyCode::Char(':'));
     typed(&mut a, "rate");
     press(&mut a, KeyCode::Enter);
-    assert!(a.source.sent().is_empty());
+    assert_eq!(
+        a.source.sent(),
+        [] as [(std::string::String, serde_json::Value); 0]
+    );
     assert!(
         foot(&mut a).contains("rate needs level"),
         "{}",
@@ -448,7 +463,10 @@ fn test_a_write_key_with_nothing_selected_sends_nothing() {
     for c in ['a', 'r', 'R', 'p', 'd', '!', 'c', 'L', 'F', 'x', ':'] {
         press(&mut a, KeyCode::Char(c));
     }
-    assert!(a.source.sent().is_empty());
+    assert_eq!(
+        a.source.sent(),
+        [] as [(std::string::String, serde_json::Value); 0]
+    );
     assert!(a.prompt.is_none());
     assert_eq!(a.page.title(), "home");
 }

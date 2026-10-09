@@ -372,5 +372,5 @@ fn test_browser_rows_show_their_area_and_an_area_filter_keeps_only_its_rows() {
         b.entries.iter().map(|e| e.id.clone()).collect()
     };
     assert_eq!(ids(&mut a, "Lanterns"), ["T3"]);
-    assert!(ids(&mut a, "kites").is_empty());
+    assert_eq!(ids(&mut a, "kites"), [] as [std::string::String; 0]);
 }

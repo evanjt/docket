@@ -115,7 +115,7 @@ fn test_installed_lists_directories_holding_a_skill_sorted() {
         }
     }
     assert_eq!(installed(&dir), ["alpha", "zeta"]);
-    assert!(installed(&dir.join("missing")).is_empty());
+    assert_eq!(installed(&dir.join("missing")).len(), 0);
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

@@ -135,7 +135,7 @@ fn test_parse_refusals_say_what_is_wrong() {
 fn test_split_keeps_quoted_runs_whole() {
     assert_eq!(split(r#"a "b c" 'd' e"#).unwrap(), ["a", "b c", "d", "e"]);
     assert_eq!(split(r#"x "" y"#).unwrap(), ["x", "", "y"]);
-    assert!(split("   ").unwrap().is_empty());
+    assert_eq!(split("   ").unwrap(), [] as [std::string::String; 0]);
 }
 
 #[test]

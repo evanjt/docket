@@ -24,7 +24,10 @@ fn test_parse_takes_complexity_and_an_empty_line_is_no_filter() {
     let f = Filter::parse("complexity:low").unwrap();
     assert_eq!(q(&f), [("complexity", "low".to_string())]);
     assert_eq!(Filter::parse("  ").unwrap(), Filter::default());
-    assert!(q(&Filter::default()).is_empty());
+    assert_eq!(
+        q(&Filter::default()),
+        [] as [(&str, std::string::String); 0]
+    );
     assert_eq!(Filter::default().label(), "");
 }
 

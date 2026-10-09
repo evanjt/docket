@@ -204,7 +204,10 @@ fn test_postgres_url_reads_either_scheme() {
 async fn test_migrate_applies_once_then_nothing() {
     let s = Scratch::bare(2).await;
     assert_eq!(migrate(&s.db).await.unwrap(), MIGRATIONS);
-    assert!(migrate(&s.db).await.unwrap().is_empty());
+    assert_eq!(
+        migrate(&s.db).await.unwrap(),
+        [] as [std::string::String; 0]
+    );
     let tables = s
         .db
         .query_one_raw(statement(

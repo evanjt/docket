@@ -31,7 +31,7 @@ fn test_bind_replaces_a_path_and_writes_the_file() {
     let dir = std::env::temp_dir().join(format!("docket-roots-{}", std::process::id()));
     let file = dir.join("roots");
     let mut roots = Roots::load(file.clone());
-    assert!(roots.roots.is_empty());
+    assert_eq!(roots.roots.len(), 0);
     roots.bind(root("/w", "a/one")).unwrap();
     roots.bind(root("/w", "a/two")).unwrap();
     let again = Roots::load(file);
@@ -65,7 +65,7 @@ fn test_nests_lists_each_nested_pair_of_one_project() {
         nests(&roots, "a/one"),
         [("/p/x".to_string(), "/p/x/dev".to_string())]
     );
-    assert!(nests(&roots, "a/two").is_empty());
+    assert_eq!(nests(&roots, "a/two").len(), 0);
 }
 
 #[test]
@@ -94,7 +94,7 @@ fn test_rename_moves_every_root_of_the_project_and_keeps_the_rest() {
     let again = Roots::load(file);
     assert_eq!(again.of("a/new"), ["/w/one", "/w/two"]);
     assert_eq!(again.of("a/other"), ["/w/three"]);
-    assert!(again.of("a/old").is_empty());
+    assert_eq!(again.of("a/old").len(), 0);
     assert!(
         again
             .roots

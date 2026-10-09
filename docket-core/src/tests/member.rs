@@ -71,7 +71,7 @@ fn test_an_item_under_a_labelled_plan_carries_the_label() {
     assert_eq!(labels_carried(&ties, &own, 2), ["slow", "area:sync"]);
     assert_eq!(labels_carried(&ties, &own, 1), ["area:sync"]);
     assert_eq!(labels_carried(&ties, &own, 4), ["lone"]);
-    assert!(labels_carried(&ties, &own, 5).is_empty());
+    assert_eq!(labels_carried(&ties, &own, 5).len(), 0);
 }
 
 fn totals(rows: &[(i64, Option<i64>, bool)]) -> Vec<(i64, u64, u64)> {

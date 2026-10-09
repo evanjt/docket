@@ -5,7 +5,7 @@
 # Compiles stub crates so the dependency build lands in a layer that only
 # invalidates when a Cargo.toml or Cargo.lock changes. Every workspace member's
 # Cargo.toml is copied, or cargo refuses to load the workspace.
-FROM rust:1.98-alpine AS cacher
+FROM rust:1.99-alpine AS cacher
 WORKDIR /build
 # musl-dev and gcc are for ring, which rustls pulls in.
 RUN apk --no-cache upgrade && \
@@ -39,7 +39,7 @@ RUN mkdir -p docket/src docket-client/src docket-core/src docket-dump/src docket
            target/release/docket-server
 
 # ---- Stage 2: build ------------------------------------------------------
-FROM rust:1.98-alpine AS builder
+FROM rust:1.99-alpine AS builder
 WORKDIR /build
 RUN apk --no-cache upgrade && \
     apk add --no-cache musl-dev gcc make perl

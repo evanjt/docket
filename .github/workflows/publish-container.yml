@@ -36,6 +36,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Rust toolchain named by rust-toolchain.toml
+        run: rustup toolchain install && rustup show active-toolchain
+
       - name: Check formatting
         run: cargo fmt --check
 

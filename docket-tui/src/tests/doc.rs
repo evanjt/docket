@@ -11,7 +11,7 @@ fn test_ids_in_finds_whole_ids_only() {
     let text = "See T1, PK1 and B14x; not SHA256x or abc12 or T, but CON1.";
     let found: Vec<&str> = ids_in(text).into_iter().map(|(a, b)| &text[a..b]).collect();
     assert_eq!(found, ["T1", "PK1", "CON1"]);
-    assert!(ids_in("").is_empty());
+    assert_eq!(ids_in(""), [] as [(usize, usize); 0]);
 }
 
 #[test]

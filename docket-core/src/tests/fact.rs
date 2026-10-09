@@ -33,7 +33,10 @@ fn test_gaps_name_the_mode_and_a_missing_models() {
 
 #[test]
 fn test_gaps_empty_when_a_lead_can_dispatch() {
-    assert!(gaps(&skills(&[("models", "medium=claude:m")]), &skills(&[])).is_empty());
+    assert_eq!(
+        gaps(&skills(&[("models", "medium=claude:m")]), &skills(&[])).len(),
+        0
+    );
 }
 
 #[test]

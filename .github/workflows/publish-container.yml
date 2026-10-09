@@ -11,6 +11,13 @@ on:
   pull_request:
   workflow_dispatch:
 
+# One run per ref at a time. A new push to a pull request cancels its run in progress. On main a run
+# in progress finishes and the newest push waits behind it, so an older image never deploys after a
+# newer one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/docket-server

@@ -152,8 +152,11 @@ pub enum Cmd {
     Show { id: String },
     /// one item's events, the conversation on it
     Log { id: String },
-    /// every project, its counts and its roots here
-    Projects,
+    /// every project, its counts and its roots here; rename moves one to a new slug
+    Projects {
+        #[command(subcommand)]
+        what: Option<ProjectsCmd>,
+    },
     /// open an item; the id is allocated inside the transaction
     New {
         key: String,
@@ -714,6 +717,24 @@ pub enum DepCmd {
         on: Vec<String>,
         #[arg(long)]
         force: bool,
+    },
+}
+
+/// `docket projects`: a project moved to a new slug.
+#[derive(Subcommand, Debug)]
+pub enum ProjectsCmd {
+    /// move a project to a new slug: every item, event, release, area, label and publication
+    /// follows, the labels naming it as @OLD are renamed, and this machine's roots are rewritten;
+    /// refused under a lead, a running job or, without --force, a claim
+    Rename {
+        old: String,
+        new: String,
+        /// rename under open claims; a running job still refuses
+        #[arg(long)]
+        force: bool,
+        /// print what would move and write nothing
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 

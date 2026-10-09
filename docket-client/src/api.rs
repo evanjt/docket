@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use docket_core::api::{
     Common, FactRequest, FactSet, Facts, LeadRequest, LeadState, MachineRequest, Machines,
-    PublicationRequest, Publications,
+    ProjectRenameRequest, ProjectRenamed, PublicationRequest, Publications,
 };
 use docket_core::assignment::Held;
 use docket_core::metrics::ReleaseRow;
@@ -356,6 +356,14 @@ impl Api {
     /// As `get`.
     pub fn show(&self, slug: &str, id: &str) -> Result<Shown> {
         self.get(&format!("/show/{id}"), &of(slug))
+    }
+
+    /// `projects rename`: the project of `req` moved to its new slug.
+    ///
+    /// # Errors
+    /// A refusal, the network, or an answer of another shape.
+    pub fn rename_project(&self, req: &ProjectRenameRequest) -> Result<ProjectRenamed> {
+        self.post("projects-rename", req)
     }
 
     /// The facts a project sets, and when the loop last ticked for it.

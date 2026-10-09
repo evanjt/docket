@@ -83,6 +83,24 @@ impl Roots {
         Ok(true)
     }
 
+    /// Every root of one project moved to another slug, the path, how and when kept; how many moved.
+    ///
+    /// # Errors
+    /// The file cannot be written.
+    pub fn rename(&mut self, old: &str, new: &str) -> std::io::Result<usize> {
+        let mut moved = 0;
+        for r in &mut self.roots {
+            if r.project == old {
+                r.project = new.to_string();
+                moved += 1;
+            }
+        }
+        if moved > 0 {
+            fs::write(&self.file, render(&self.roots))?;
+        }
+        Ok(moved)
+    }
+
     #[must_use]
     pub fn file(&self) -> &Path {
         &self.file

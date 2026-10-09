@@ -11,6 +11,7 @@ pub mod lead;
 pub mod lists;
 pub mod machines;
 pub mod private;
+pub mod projects;
 pub mod published;
 pub mod releases;
 pub mod show;
@@ -61,7 +62,7 @@ pub fn run(ctx: &mut Ctx, cmd: Option<&Cmd>) -> Result<i32> {
         Cmd::Groups { name } => lists::groups(ctx, name.as_ref()),
         Cmd::Show { id } => show::show(ctx, id),
         Cmd::Log { id } => show::log(ctx, id),
-        Cmd::Projects => show::projects(ctx),
+        Cmd::Projects { what } => projects::projects(ctx, what.as_ref()),
         Cmd::Search {
             words,
             key,

@@ -80,3 +80,26 @@ fn test_unbind_removes_the_line_and_reports_whether_it_was_there() {
     assert_eq!(Roots::load(file).of("a/one"), ["/v"]);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn test_rename_moves_every_root_of_the_project_and_keeps_the_rest() {
+    let dir = std::env::temp_dir().join(format!("docket-roots-rename-{}", std::process::id()));
+    let file = dir.join("roots");
+    let mut roots = Roots::load(file.clone());
+    roots.bind(root("/w/one", "a/old")).unwrap();
+    roots.bind(root("/w/two", "a/old")).unwrap();
+    roots.bind(root("/w/three", "a/other")).unwrap();
+    assert_eq!(roots.rename("a/old", "a/new").unwrap(), 2);
+    assert_eq!(roots.rename("a/old", "a/new").unwrap(), 0);
+    let again = Roots::load(file);
+    assert_eq!(again.of("a/new"), ["/w/one", "/w/two"]);
+    assert_eq!(again.of("a/other"), ["/w/three"]);
+    assert!(again.of("a/old").is_empty());
+    assert!(
+        again
+            .roots
+            .iter()
+            .all(|r| r.how == "bind" && r.bound_at == "t")
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}

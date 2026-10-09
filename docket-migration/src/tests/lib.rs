@@ -2,7 +2,7 @@ use super::*;
 
 use crate::scratch::Scratch;
 
-const MIGRATIONS: [&str; 28] = [
+const MIGRATIONS: [&str; 29] = [
     "m20261001_000001_schema",
     "m20261002_000001_machines_and_leads",
     "m20261005_000001_owner_facts",
@@ -31,7 +31,80 @@ const MIGRATIONS: [&str; 28] = [
     "m20261006_233349_items_area_not_null",
     "m20261006_235900_outcome_ended",
     "m20261007_073521_events_close_index",
+    "m20261009_073000_project_rename",
 ];
+
+/// A project with one row in every table that references its slug, as the tree stands just before
+/// the migration that lets the slug change.
+const ONE_ROW_EACH: &str = "\
+    INSERT INTO projects (slug, created_at, updated_at) VALUES ('garden/shed', 'c', 'u'); \
+    INSERT INTO roots (host, path, project, bound_at, how) VALUES ('bench', '/srv/shed', 'garden/shed', 'b', 'bind'); \
+    INSERT INTO areas (id, project, name, position) VALUES (1, 'garden/shed', 'tools', 1); \
+    INSERT INTO items (rid, project, key, num, title, state, opened_at, updated_at, area_id) VALUES \
+      (1, 'garden/shed', 'T', 1, 'Oil the hinges', 'open', 'o', 'u', 1); \
+    INSERT INTO events (uid, project, rid, at, host, kind) VALUES ('e1', 'garden/shed', 1, 't1', 'bench', 'opened'); \
+    INSERT INTO leads (project, host, session, since, renewed_at) VALUES ('garden/shed', 'bench', 's', 'a', 'r'); \
+    INSERT INTO releases (project, name, position) VALUES ('garden/shed', '1.0.0', 1); \
+    INSERT INTO labels (project, name) VALUES ('garden/shed', 'slow-path'); \
+    INSERT INTO publications (project, published_sha, work_sha, created_at) VALUES \
+      ('garden/shed', repeat('a', 40), repeat('b', 40), 'c')";
+
+const RENAME: &str = "UPDATE projects SET slug='other/name' WHERE slug='garden/shed'";
+
+async fn rows_named(s: &Scratch, table: &str, slug: &str) -> i64 {
+    s.db.query_one_raw(statement(
+        &format!("SELECT COUNT(*) FROM {table} WHERE project=?"),
+        vec![slug.into()],
+    ))
+    .await
+    .unwrap()
+    .unwrap()
+    .try_get_by_index::<i64>(0)
+    .unwrap()
+}
+
+#[tokio::test]
+async fn test_the_rename_migration_lets_every_referencing_row_follow_the_slug() {
+    let s = Scratch::bare(2).await;
+    Migrator::up(&s.db, Some(steps_before("m20261009_073000_project_rename")))
+        .await
+        .unwrap();
+    s.seed(ONE_ROW_EACH).await;
+    assert!(
+        s.db.execute_unprepared(RENAME).await.is_err(),
+        "the plain foreign keys refuse the change before the migration"
+    );
+    assert!(
+        s.db.execute_unprepared(
+            "INSERT INTO events (uid, project, at, host, kind, note) VALUES \
+                 ('e2', 'garden/shed', 't2', 'bench', 'renamed', 'from garden/shed')"
+        )
+        .await
+        .is_err(),
+        "renamed is not an event kind before the migration"
+    );
+    Migrator::up(&s.db, Some(1)).await.unwrap();
+    s.db.execute_unprepared(RENAME).await.unwrap();
+    for table in [
+        "roots",
+        "items",
+        "events",
+        "leads",
+        "releases",
+        "areas",
+        "labels",
+        "publications",
+    ] {
+        assert_eq!(rows_named(&s, table, "other/name").await, 1, "{table}");
+        assert_eq!(rows_named(&s, table, "garden/shed").await, 0, "{table}");
+    }
+    s.db.execute_unprepared(
+        "INSERT INTO events (uid, project, at, host, kind, note) VALUES \
+         ('e2', 'other/name', 't2', 'bench', 'renamed', 'from garden/shed')",
+    )
+    .await
+    .unwrap();
+}
 
 /// The migrations to apply to stand just before the one named.
 fn steps_before(name: &str) -> u32 {

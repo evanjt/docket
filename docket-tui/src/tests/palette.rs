@@ -290,7 +290,7 @@ fn server_routes() -> Vec<String> {
 }
 
 /// Routes that are not the owner's to run from the screen, and why.
-const NOT_FOR_THE_SCREEN: [&str; 4] = [
+const NOT_FOR_THE_SCREEN: [&str; 5] = [
     // an agent's job report, posted by `docket job`
     "job-report",
     // a checkout resolving its project, posted by every client command
@@ -299,6 +299,8 @@ const NOT_FOR_THE_SCREEN: [&str; 4] = [
     "publication",
     // a history rewrite's sha map, posted by `docket admin remap`
     "remap",
+    // a project's move to a new slug, posted by `docket projects rename`; the screen is opened on a slug
+    "projects-rename",
 ];
 
 #[test]

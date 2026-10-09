@@ -43,3 +43,23 @@ fn test_filing_under_any_key_but_the_five_is_refused_and_each_type_key_files() {
         );
     }
 }
+
+#[test]
+fn test_slug_valid_takes_one_or_two_plain_words() {
+    for ok in ["shed", "garden/shed", "garden-1/shed_2.0", "_x/y"] {
+        assert!(slug_valid(ok).is_ok(), "{ok}");
+    }
+    for bad in [
+        "",
+        "/shed",
+        "garden/",
+        "garden/shed/door",
+        ".git/shed",
+        "garden/.shed",
+        "garden shed",
+        "@garden/shed",
+    ] {
+        let err = slug_valid(bad).unwrap_err().0;
+        assert!(err.contains("OWNER/NAME"), "{bad}: {err}");
+    }
+}

@@ -3099,6 +3099,240 @@ async fn test_remap_is_the_owners() {
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
+/// How many rows of a table carry the slug.
+async fn rows_of(s: &Scratch, table: &str, slug: &str) -> i64 {
+    use sea_orm::ConnectionTrait;
+    s.db.db
+        .query_one_raw(docket_migration::statement(
+            &format!("SELECT COUNT(*) FROM {table} WHERE project=?"),
+            vec![slug.into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get_by_index::<i64>(0)
+        .unwrap()
+}
+
+/// One row in every table that carries a slug, and a second project whose labels name this one.
+const ROWS_TO_MOVE: &str = "\
+    INSERT INTO projects (slug, created_at, updated_at) VALUES ('peer/app', 'c', 'u'); \
+    INSERT INTO labels (project, name) VALUES \
+      ('peer/app', 'repo:@test/proj/sub'), ('peer/app', 'repo:@test/proj'), ('peer/app', 'repo:@test/project'); \
+    INSERT INTO releases (project, name, position) VALUES ('test/proj', '1.0.0', 1); \
+    INSERT INTO publications (project, published_sha, work_sha, created_at) VALUES \
+      ('test/proj', repeat('a', 40), repeat('b', 40), 'c'); \
+    INSERT INTO roots (host, path, project, bound_at, how) VALUES ('bench', '/srv/proj', 'test/proj', 'b', 'bind'); \
+    INSERT INTO pending_dump (rid, project) VALUES (1, 'test/proj') ON CONFLICT (rid) DO UPDATE SET project=EXCLUDED.project; \
+    INSERT INTO chores (name, project) VALUES ('dump', 'test/proj'); \
+    INSERT INTO meta (k, v) VALUES ('pending_dump_projects', '[\"test/proj\"]') \
+      ON CONFLICT (k) DO UPDATE SET v=EXCLUDED.v";
+
+/// The project with an item carrying a label, and every row the seed adds, before any rename.
+async fn with_rows_to_move() -> Scratch {
+    let s = Scratch::new().await;
+    s.open("T", "First").await;
+    s.ok(
+        "label",
+        json!({ "action": "add", "id": "T1", "name": "slow-path" }),
+    )
+    .await;
+    s.db.seed(ROWS_TO_MOVE).await;
+    s
+}
+
+/// One value of a query on the scratch database.
+async fn read<T: sea_orm::TryGetable>(s: &Scratch, text: &str, values: Vec<sea_orm::Value>) -> T {
+    use sea_orm::ConnectionTrait;
+    s.db.db
+        .query_one_raw(docket_migration::statement(text, values))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get_by_index::<T>(0)
+        .unwrap()
+}
+
+#[tokio::test]
+async fn test_projects_rename_moves_every_row_and_records_the_old_slug() {
+    let s = with_rows_to_move().await;
+    let dry = s
+        .ok(
+            "projects-rename",
+            json!({ "new": "other/name", "dry_run": true }),
+        )
+        .await;
+    assert_eq!(dry["moved"]["items"], 1);
+    assert_eq!(dry["moved"]["labels"], 1);
+    assert_eq!(dry["labels"].as_array().unwrap().len(), 2);
+    assert_eq!(rows_of(&s, "items", "test/proj").await, 1);
+    let out = s
+        .ok("projects-rename", json!({ "new": "other/name" }))
+        .await;
+    assert_eq!(out["old"], "test/proj");
+    assert_eq!(out["new"], "other/name");
+    for table in [
+        "items",
+        "events",
+        "releases",
+        "areas",
+        "labels",
+        "publications",
+        "roots",
+        "pending_dump",
+        "chores",
+    ] {
+        let moved = out["moved"][table].as_i64().unwrap();
+        assert!(moved >= 1, "{table}: {moved}");
+        let now = moved + i64::from(table == "events");
+        assert_eq!(rows_of(&s, table, "other/name").await, now, "{table}");
+        assert_eq!(rows_of(&s, table, "test/proj").await, 0, "{table}");
+    }
+    let note: String = read(
+        &s,
+        "SELECT note FROM events WHERE project=? AND kind='renamed' AND rid IS NULL",
+        vec!["other/name".into()],
+    )
+    .await;
+    assert_eq!(note, "test/proj -> other/name");
+    let pending: String = read(
+        &s,
+        "SELECT v FROM meta WHERE k='pending_dump_projects'",
+        vec![],
+    )
+    .await;
+    assert!(
+        pending.contains("other/name") && !pending.contains("test/proj"),
+        "{pending}"
+    );
+}
+
+#[tokio::test]
+async fn test_projects_rename_renames_the_labels_naming_it_and_lists_only_the_new_slug() {
+    let s = with_rows_to_move().await;
+    let out = s
+        .ok("projects-rename", json!({ "new": "other/name" }))
+        .await;
+    assert_eq!(
+        out["labels"],
+        json!([
+            { "project": "peer/app", "old": "repo:@test/proj", "new": "repo:@other/name" },
+            { "project": "peer/app", "old": "repo:@test/proj/sub", "new": "repo:@other/name/sub" },
+        ])
+    );
+    let (_, peer) = s
+        .send(
+            Method::GET,
+            &format!("/labels?project={}", urlencode("peer/app")),
+            "ownerkey",
+            None,
+        )
+        .await;
+    let mut names: Vec<&str> = peer
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["name"].as_str().unwrap())
+        .collect();
+    names.sort_unstable();
+    assert_eq!(
+        names,
+        [
+            "repo:@other/name",
+            "repo:@other/name/sub",
+            "repo:@test/project"
+        ]
+    );
+    let (_, projects) = s.send(Method::GET, "/projects", "ownerkey", None).await;
+    let mut slugs: Vec<&str> = projects
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["slug"].as_str().unwrap())
+        .collect();
+    slugs.sort_unstable();
+    assert_eq!(slugs, ["other/name", "peer/app"]);
+}
+
+#[tokio::test]
+async fn test_projects_rename_is_the_owners_and_refuses_a_taken_led_or_claimed_project() {
+    let s = Scratch::new().await;
+    s.open("T", "First").await;
+    let (status, _) = s
+        .post_as(
+            "agentkey",
+            "projects-rename",
+            json!({ "new": "other/name" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let bad = s
+        .refused("projects-rename", json!({ "new": "other/name/deep" }))
+        .await;
+    assert!(bad.contains("OWNER/NAME"), "{bad}");
+    assert_eq!(
+        s.status("projects-rename", json!({ "new": "test/proj" }))
+            .await,
+        StatusCode::BAD_REQUEST
+    );
+    s.db.seed("INSERT INTO projects (slug, created_at, updated_at) VALUES ('peer/app', 'c', 'u')")
+        .await;
+    let taken = s
+        .refused("projects-rename", json!({ "new": "peer/app" }))
+        .await;
+    assert!(taken.contains("already exists"), "{taken}");
+    s.db.seed(
+        "INSERT INTO leads (project, host, session, since, renewed_at) \
+         VALUES ('test/proj', 'loft', 's', 'a', 'r')",
+    )
+    .await;
+    let led = s
+        .refused("projects-rename", json!({ "new": "other/name" }))
+        .await;
+    assert!(led.contains("led from loft"), "{led}");
+    s.db.seed("DELETE FROM leads WHERE project='test/proj'")
+        .await;
+    s.ok("start", json!({ "id": "T1" })).await;
+    let claimed = s
+        .refused("projects-rename", json!({ "new": "other/name" }))
+        .await;
+    assert!(claimed.contains("claimed (T1)"), "{claimed}");
+    s.ok(
+        "projects-rename",
+        json!({ "new": "other/name", "force": true }),
+    )
+    .await;
+    assert_eq!(rows_of(&s, "items", "other/name").await, 1);
+    let (status, _) = s
+        .send(
+            Method::GET,
+            &format!("/show/T1?project={}", urlencode("other/name")),
+            "ownerkey",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_projects_rename_never_moves_under_a_running_job() {
+    let s = Scratch::new().await;
+    s.open("T", "First").await;
+    s.ok(
+        "start",
+        json!({ "id": "T1", "runner": "codex", "job": "pk2-s1", "model": "gpt-5.4", "on": "devbox", "role": "build" }),
+    )
+    .await;
+    let running = s
+        .refused(
+            "projects-rename",
+            json!({ "new": "other/name", "force": true }),
+        )
+        .await;
+    assert!(running.contains("running jobs (T1)"), "{running}");
+    assert_eq!(rows_of(&s, "items", "test/proj").await, 1);
+}
+
 #[tokio::test]
 async fn test_reopening_an_item_that_closes_a_cycle_is_refused_with_its_path() {
     let s = Scratch::new().await;

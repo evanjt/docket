@@ -760,3 +760,31 @@ pub struct Remapped {
     pub dry_run: bool,
     pub rows: Vec<RemapRow>,
 }
+
+/// `projects rename`: the project in `common` takes the slug `new`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectRenameRequest {
+    #[serde(flatten)]
+    pub common: Common,
+    pub new: String,
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+/// A label of some project that named the renamed one as `repo:@OLD[/PATH]`, renamed with it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenamedLabel {
+    pub project: String,
+    pub old: String,
+    pub new: String,
+}
+
+/// What a rename moved: the rows of each table that now carry the new slug, and the labels renamed.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ProjectRenamed {
+    pub dry_run: bool,
+    pub old: String,
+    pub new: String,
+    pub moved: BTreeMap<String, u64>,
+    pub labels: Vec<RenamedLabel>,
+}

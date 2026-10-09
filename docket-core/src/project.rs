@@ -17,6 +17,26 @@ pub fn slug_from_url(url: &str) -> Option<String> {
     Some(format!("{}/{}", &m[1], &m[2]))
 }
 
+static SLUG: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[A-Za-z0-9_][A-Za-z0-9._-]*(/[A-Za-z0-9_][A-Za-z0-9._-]*)?$").unwrap()
+});
+
+/// A slug a project may be given by hand: one or two words of letters, digits, `.`, `_` and `-`,
+/// joined by one `/`, neither word starting with a dot.
+///
+/// # Errors
+/// Refused for anything else, naming the shape.
+pub fn slug_valid(slug: &str) -> Result<(), Refused> {
+    if SLUG.is_match(slug) {
+        return Ok(());
+    }
+    Err(Refused(format!(
+        "a project slug is NAME or OWNER/NAME, words of letters, digits, '.', '_' and '-' that do not \
+         start with a dot, not {}",
+        crate::text::quoted(slug)
+    )))
+}
+
 /// The projects a checkout may be: the slug its remote names, a project sharing one of its remotes, or
 /// one whose slug ends in the checkout's directory name. Sorted, each once.
 #[must_use]

@@ -39,6 +39,13 @@ jobs:
       - name: Rust toolchain named by rust-toolchain.toml
         run: rustup toolchain install && rustup show active-toolchain
 
+      # Restores ~/.cargo and the compiled dependencies in target/, keyed by the toolchain and
+      # Cargo.lock, so a run compiles only the workspace crates. Only main saves, so pull requests
+      # read its cache without spending the repository's cache space on their own.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
       - name: Check formatting
         run: cargo fmt --check
 
@@ -73,25 +80,20 @@ jobs:
       - name: Build
         run: npm run build
 
+  # Builds alongside test and web, and pushes the image by digest only: nothing names it until
+  # publish tags it once the tests pass.
   build:
     if: github.event_name != 'pull_request'
-    needs: [test, web]
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-      id-token: write
     outputs:
       digest: ${{ steps.build-and-push.outputs.digest }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Install cosign
-        uses: sigstore/cosign-installer@v3.3.0
-        with:
-          cosign-release: 'v2.2.2'
 
       - name: Setup Docker buildx
         uses: docker/setup-buildx-action@79abd3f86f79a9d68a23c75a09a9a85889262adf
@@ -116,19 +118,56 @@ jobs:
           context: .
           file: ./Dockerfile
           platforms: linux/amd64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  publish:
+    needs: [test, web, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    outputs:
+      digest: ${{ needs.build.outputs.digest }}
+
+    steps:
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.3.0
+        with:
+          cosign-release: 'v2.2.2'
+
+      - name: Setup Docker buildx
+        uses: docker/setup-buildx-action@79abd3f86f79a9d68a23c75a09a9a85889262adf
+
+      - name: Log into registry ${{ env.REGISTRY }}
+        uses: docker/login-action@28218f9b04b4f3f62068d7b6ce6ca5b26e35336c
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@98669ae865ea3cffbcbaa878cf57c20bbf1c6c38
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+
+      - name: Tag the tested image
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          SOURCE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest }}
+        run: docker buildx imagetools create $(printf -- '-t %s ' $TAGS) "$SOURCE"
+
       - name: Sign the published Docker image
         env:
           COSIGN_EXPERIMENTAL: "true"
-        run: echo "${{ steps.meta.outputs.tags }}" | xargs -I {} cosign sign --yes {}@${{ steps.build-and-push.outputs.digest }}
+        run: echo "${{ steps.meta.outputs.tags }}" | xargs -I {} cosign sign --yes {}@${{ needs.build.outputs.digest }}
 
   deploy:
-    needs: build
+    needs: publish
     runs-on: ubuntu-latest
     steps:
       - name: Dispatch manifest update
@@ -146,7 +185,7 @@ jobs:
             -d '{
               "event_type": "update-manifest",
               "client_payload": {
-                "digest":    "${{ needs.build.outputs.digest }}",
+                "digest":    "${{ needs.publish.outputs.digest }}",
                 "repo_name": "${{ secrets.CD_REPO }}",
                 "repo_org":  "${{ secrets.CD_ORG }}",
                 "branch":    "prod"

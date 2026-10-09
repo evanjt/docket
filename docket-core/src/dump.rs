@@ -239,6 +239,32 @@ pub fn merge_events(before: &str, events: &[&EventDump]) -> String {
     lines.into_values().map(|l| l + "\n").collect()
 }
 
+/// Two event logs as one, each uid once, in `(at, uid)` order.
+#[must_use]
+pub fn merge_logs(a: &str, b: &str) -> String {
+    let mut lines: BTreeMap<(String, String), String> = BTreeMap::new();
+    for line in a.lines().chain(b.lines()).filter(|l| !l.trim().is_empty()) {
+        lines.insert(order_of(line), line.to_string());
+    }
+    lines.into_values().map(|l| l + "\n").collect()
+}
+
+/// The `(old, new)` slugs of every project rename a page's events record, in order.
+#[must_use]
+pub fn renames(page: &DumpPage) -> Vec<(String, String)> {
+    page.events
+        .iter()
+        .filter(|e| e.kind == "renamed")
+        .filter_map(|e| {
+            let data: Value = serde_json::from_str(e.data.as_deref()?).ok()?;
+            Some((
+                data["old"].as_str()?.to_string(),
+                data["new"].as_str()?.to_string(),
+            ))
+        })
+        .collect()
+}
+
 /// The `(at, uid)` a log line sorts by; a line that is not an event sorts first, by its text.
 fn order_of(line: &str) -> (String, String) {
     let parsed: Value = serde_json::from_str(line).unwrap_or_default();

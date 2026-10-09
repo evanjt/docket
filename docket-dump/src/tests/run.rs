@@ -175,3 +175,107 @@ fn test_pass_full_asks_from_zero_whatever_the_cursor() {
 fn run_pass(source: &Pages, repo: &tempfile::TempDir, full: bool) -> Report {
     pass(source, repo.path(), full, "testhost").unwrap()
 }
+
+/// A page that renames the project `o/p` to `o/q`: the project row, its item and the event under
+/// the new slug.
+fn rename_page(cursor: i64, item_state: &str) -> DumpPage {
+    let renamed = EventDump {
+        project: "o/q".into(),
+        uid: "rename".into(),
+        at: "2026-01-02T00:00:00Z".into(),
+        host: "devbox".into(),
+        kind: "renamed".into(),
+        note: Some("o/p -> o/q".into()),
+        data: Some(json!({ "old": "o/p", "new": "o/q" }).to_string()),
+        ..EventDump::default()
+    };
+    DumpPage {
+        cursor,
+        full: false,
+        projects: vec![ProjectDump {
+            slug: "o/q".into(),
+            ..project()
+        }],
+        items: vec![ItemDump {
+            project: "o/q".into(),
+            ..item("T1", item_state)
+        }],
+        events: vec![renamed],
+    }
+}
+
+#[test]
+fn test_a_rename_moves_the_project_directory_so_its_history_stays_whole() {
+    let repo = checkout();
+    let source = Pages::new(vec![
+        Ok(page(
+            1,
+            true,
+            vec![item("T1", "open")],
+            vec![event("a", "opened", "T1")],
+        )),
+        Ok(rename_page(2, "open")),
+    ]);
+    run_pass(&source, &repo, false);
+    assert!(repo.path().join("o/p/events.jsonl").is_file());
+    let report = run_pass(&source, &repo, false);
+    assert!(report.commit.is_some());
+    assert!(!repo.path().join("o/p").exists());
+    let log = tree::read(repo.path(), "o/q/events.jsonl").unwrap();
+    assert_eq!(log.lines().count(), 2, "{log}");
+    assert!(
+        log.contains("\"opened\"") && log.contains("\"renamed\""),
+        "{log}"
+    );
+    assert!(repo.path().join("o/q/items/T1.md").is_file());
+    assert_eq!(tree::projects(repo.path()).unwrap(), ["o/q"]);
+    let tracked = git::git(repo.path(), &["ls-files"]).unwrap();
+    assert!(
+        tracked.contains("o/q/events.jsonl") && !tracked.contains("o/p/"),
+        "{tracked}"
+    );
+    assert_eq!(
+        git::git(repo.path(), &["status", "--porcelain"]).unwrap(),
+        ""
+    );
+}
+
+#[test]
+fn test_a_rename_found_after_the_new_directory_exists_merges_the_old_log_and_removes_the_rest() {
+    let repo = checkout();
+    let source = Pages::new(vec![
+        Ok(page(
+            1,
+            true,
+            vec![item("T1", "open")],
+            vec![event("a", "opened", "T1")],
+        )),
+        Ok(rename_page(2, "done")),
+    ]);
+    run_pass(&source, &repo, false);
+    tree::write(
+        repo.path(),
+        "o/q/events.jsonl",
+        "{\"uid\":\"later\",\"at\":\"2026-01-03T00:00:00Z\",\"kind\":\"closed\"}\n",
+    )
+    .unwrap();
+    tree::write(repo.path(), "o/q/project.json", "{}\n").unwrap();
+    run_pass(&source, &repo, false);
+    assert!(!repo.path().join("o/p").exists());
+    let log = tree::read(repo.path(), "o/q/events.jsonl").unwrap();
+    let kinds: Vec<&str> = log
+        .lines()
+        .map(|l| {
+            serde_json::from_str::<serde_json::Value>(l).unwrap()["kind"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
+        .map(|k| Box::leak(k.into_boxed_str()) as &str)
+        .collect();
+    assert_eq!(kinds, ["opened", "renamed", "closed"], "{log}");
+    assert_eq!(
+        git::git(repo.path(), &["status", "--porcelain"]).unwrap(),
+        ""
+    );
+}

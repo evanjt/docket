@@ -890,16 +890,63 @@ fn park(worktree: &Path) -> Result<(), String> {
 /// changes and untracked files gone, so an earlier job's edits there are not read as the next
 /// job's.
 fn reset_submodules(worktree: &Path) -> Result<(), String> {
+    let checkout = git(
+        worktree,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )
+    .ok()
+    .and_then(|common| Path::new(&common).parent().map(Path::to_path_buf));
+    reset_submodules_from(worktree, checkout.as_deref())
+}
+
+/// [`reset_submodules`], fetching a pin the submodule here lacks from the same submodule in
+/// `checkout`. A slot's submodule is cloned once and kept, while the checkout's moves on with every
+/// landing, and a pin made there may exist nowhere else.
+fn reset_submodules_from(worktree: &Path, checkout: Option<&Path>) -> Result<(), String> {
     for (path, pinned) in gitlinks(worktree, &["ls-files", "--stage", "-z"], 1)? {
         let inside = worktree.join(&path);
         if !is_repository(&inside) {
             continue;
         }
+        let source = checkout.map(|c| c.join(&path)).filter(|s| s != &inside);
         let at = |args: &[&str]| git(&inside, args).map_err(|e| format!("{path}: {e}"));
+        let has_pin = || {
+            git(
+                &inside,
+                &["cat-file", "-e", &format!("{pinned}^{{commit}}")],
+            )
+            .is_ok()
+        };
+        if !has_pin() {
+            if let Some(s) = source.as_ref().filter(|s| is_repository(s)) {
+                let _ = git(
+                    &inside,
+                    &[
+                        "fetch",
+                        "--quiet",
+                        &s.display().to_string(),
+                        "+refs/heads/*:refs/remotes/checkout/*",
+                        &pinned,
+                    ],
+                );
+            }
+        }
+        if !has_pin() {
+            let _ = git(&inside, &["fetch", "--quiet", "origin", &pinned]);
+        }
+        if !has_pin() {
+            let looked = source.map_or_else(
+                || "origin".to_string(),
+                |s| format!("{} and origin", s.display()),
+            );
+            return Err(format!(
+                "{path}: the pinned commit {pinned} is in neither {looked}"
+            ));
+        }
         at(&["checkout", "--quiet", "--force", "--detach", &pinned])?;
         at(&["reset", "--quiet", "--hard"])?;
         at(&["clean", "--quiet", "-ffd"])?;
-        reset_submodules(&inside)?;
+        reset_submodules_from(&inside, source.as_deref())?;
     }
     Ok(())
 }

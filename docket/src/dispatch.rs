@@ -436,6 +436,31 @@ pub fn push_to_machine(repo: &Path, url: &str, refspec: &str) -> Result<String, 
     git(repo, &["push", "--no-verify", url, refspec])
 }
 
+/// Each submodule commit `base` pins, pushed from the lead's checkout of that submodule to the
+/// machine's checkout of it, under `refs/docket/pins/`. A pin may be a commit made here and pushed
+/// nowhere, and a job there checks the submodule out at it. Returns what could not be pushed, as
+/// `path: why`, for a submodule this checkout or the machine's does not hold as a repository.
+#[must_use]
+pub fn push_pins(repo: &Path, base: &str, url: &str) -> Vec<String> {
+    let Ok(links) = crate::job::gitlinks(repo, &["ls-tree", "-r", "-z", base], 2) else {
+        return vec![format!("{base}: its tree could not be read")];
+    };
+    let mut missed = Vec::new();
+    for (path, pinned) in links {
+        let inside = repo.join(&path);
+        if !crate::job::is_repository(&inside) {
+            missed.push(format!("{path}: not checked out here"));
+            continue;
+        }
+        let there = format!("{}/{path}", url.trim_end_matches('/'));
+        let refspec = format!("{pinned}:refs/docket/pins/{pinned}");
+        if let Err(why) = push_to_machine(&inside, &there, &refspec) {
+            missed.push(format!("{path}: {why}"));
+        }
+    }
+    missed
+}
+
 /// The commits a job's change was made into here, none of them on a branch yet.
 #[derive(Debug)]
 pub struct Made {

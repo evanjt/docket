@@ -18,7 +18,7 @@ use docket_core::machine::{Limit, Machine};
 use crate::ctx::Ctx;
 use crate::dispatch::{
     Here, JobClaim as Claim, Via, any_ended, branch_for, catch_up, commit_change, commit_message,
-    ended_in, gate_run_ended, git, gone, job_claims, land_moved, limited_runners, nonce,
+    ended_in, gate_run_ended, git, gone, job_claims, land_moved, limited_runners, nonce, push_pins,
     push_to_machine, ranked, read_machines_now, role_for, runner_counts, running_gate_runs,
 };
 use crate::fail::{Fail, Result};
@@ -1085,8 +1085,9 @@ struct Push {
     url: String,
 }
 
-/// Each repository's base pushed to the machine's checkout as the job's branch, then the job
-/// started there.
+/// Each repository's base pushed to the machine's checkout as the job's branch, with the
+/// submodule commits it pins, then the job started there. A pin that cannot be pushed is left to
+/// the machine, which fetches it from its own checkout and names it when it is nowhere.
 fn start(via: &Via, pushes: &[Push], job: &Job) -> std::result::Result<String, String> {
     for p in pushes {
         push_to_machine(
@@ -1094,6 +1095,11 @@ fn start(via: &Via, pushes: &[Push], job: &Job) -> std::result::Result<String, S
             &p.url,
             &format!("{}:refs/heads/{}", p.base, job.branch),
         )?;
+        if !matches!(via, Via::Here) {
+            for why in push_pins(&p.repo, &p.base, &p.url) {
+                eprintln!("dispatch: a pin was not pushed, {why}");
+            }
+        }
     }
     let mut args = strings(&[
         "-p", job.slug, "--branch", job.branch, "job", "run", "--id", job.id, "--runner",

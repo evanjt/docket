@@ -1058,3 +1058,51 @@ fn test_a_gate_run_directory_reads_as_a_row_with_its_members() {
     assert_eq!(rows[0]["state"], "done");
     assert_eq!(rows[0]["report"], "T1 T2");
 }
+
+#[test]
+fn test_a_reused_worktree_fetches_a_pin_only_the_checkout_holds_before_checking_it_out() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (lib, top, slot) = (
+        tmp.path().join("lib-origin"),
+        tmp.path().join("top"),
+        tmp.path().join("top-slot1"),
+    );
+    for (dir, file) in [(&lib, "lib.txt"), (&top, "top.txt")] {
+        fs::create_dir_all(dir).unwrap();
+        git_as(dir, &["init", "-q", "-b", "main"]);
+        fs::write(dir.join(file), "one\n").unwrap();
+        git_as(dir, &["add", file]);
+        git_as(dir, &["commit", "-q", "-m", "Start"]);
+    }
+    git_as(
+        &top,
+        &["submodule", "add", "-q", &lib.display().to_string(), "lib"],
+    );
+    git_as(&top, &["commit", "-q", "-m", "Pin lib"]);
+    git_as(
+        &top,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            &slot.display().to_string(),
+            "--detach",
+        ],
+    );
+    git_as(&slot, &["submodule", "update", "--init", "-q"]);
+
+    // A commit made in the checkout's own submodule and never pushed anywhere, then pinned.
+    let checkout_lib = top.join("lib");
+    fs::write(checkout_lib.join("lib.txt"), "two\n").unwrap();
+    git_as(&checkout_lib, &["commit", "-q", "-am", "Unpushed"]);
+    let pinned = git_as(&checkout_lib, &["rev-parse", "HEAD"]);
+    git_as(&top, &["add", "lib"]);
+    git_as(&top, &["commit", "-q", "-m", "Pin the unpushed commit"]);
+    git_as(&top, &["branch", "job"]);
+
+    git_as(&slot, &["checkout", "-q", "job"]);
+    reset_submodules(&slot).unwrap();
+
+    assert_eq!(git_as(&slot.join("lib"), &["rev-parse", "HEAD"]), pinned);
+    assert_eq!(git_as(&slot.join("lib"), &["status", "--porcelain"]), "");
+}

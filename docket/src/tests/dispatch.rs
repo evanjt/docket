@@ -791,3 +791,49 @@ fn test_a_land_event_moves_a_claims_landing_stage_or_ends_a_landing_claim() {
         &rows(Some("2026-01-01T00:00:02Z"), true)
     ));
 }
+
+#[test]
+fn test_a_pin_only_the_lead_holds_reaches_the_machines_submodule() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (lib, lead, machine) = (
+        tmp.path().join("lib-origin"),
+        tmp.path().join("lead"),
+        tmp.path().join("machine"),
+    );
+    for dir in [&lib, &lead] {
+        std::fs::create_dir(dir).unwrap();
+        git_in(dir, &["init", "-q", "-b", "main"]);
+        git_in(dir, &["commit", "-q", "--allow-empty", "-m", "Start"]);
+    }
+    git_in(
+        &lead,
+        &["submodule", "add", "-q", &lib.display().to_string(), "lib"],
+    );
+    git_in(&lead, &["commit", "-q", "-m", "Pin lib"]);
+    git_in(
+        tmp.path(),
+        &["clone", "-q", "--recurse-submodules", "lead", "machine"],
+    );
+    git_in(
+        &machine.join("lib"),
+        &["remote", "set-url", "origin", &lib.display().to_string()],
+    );
+
+    // A commit in the lead's submodule that was never pushed anywhere, then pinned.
+    git_in(
+        &lead.join("lib"),
+        &["commit", "-q", "--allow-empty", "-m", "Unpushed"],
+    );
+    let pinned = git_in(&lead.join("lib"), &["rev-parse", "HEAD"]);
+    git_in(&lead, &["add", "lib"]);
+    git_in(&lead, &["commit", "-q", "-m", "Pin the unpushed commit"]);
+    let base = git_in(&lead, &["rev-parse", "HEAD"]);
+
+    let missed = push_pins(&lead, &base, &machine.display().to_string());
+
+    assert!(missed.is_empty(), "{missed:?}");
+    git_in(
+        &machine.join("lib"),
+        &["cat-file", "-e", &format!("{pinned}^{{commit}}")],
+    );
+}

@@ -564,7 +564,7 @@ async fn test_device_pathway() {
     let out = s
         .ok(
             "ask",
-            json!({ "id": "B1", "note": "needs a run on the S22" }),
+            json!({ "id": "B1", "note": "needs a run on the test phone" }),
         )
         .await;
     assert_eq!(out["item"]["word"], "waiting on owner");
@@ -572,7 +572,7 @@ async fn test_device_pathway() {
     assert_eq!(out["twins"], json!([]));
     assert_eq!(
         s.refused("start", json!({ "id": "B1" })).await,
-        "B1 is the owner's turn: needs a run on the S22. reply to it first if you are taking it back."
+        "B1 is the owner's turn: needs a run on the test phone. reply to it first if you are taking it back."
     );
     s.ok(
         "reply",

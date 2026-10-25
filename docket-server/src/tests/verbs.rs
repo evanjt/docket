@@ -1524,28 +1524,37 @@ async fn test_a_job_files_under_the_plan_and_from_the_question_it_holds() {
 }
 
 #[tokio::test]
-async fn test_a_job_building_a_ticket_still_files_nothing() {
+async fn test_a_job_building_a_ticket_files_from_the_ticket_it_holds() {
     let s = Scratch::new().await;
-    s.open("B", "Fix the timeout").await;
-    s.ok("start", json!({ "id": "B1", "branch": "lead/b1-1" }))
+    s.open("T", "Fix the timeout").await;
+    s.ok("start", json!({ "id": "T1", "branch": "lead/t1-1" }))
         .await;
     s.open("I", "Measure the store").await;
     s.ok("start", json!({ "id": "I1", "branch": "lead/i1-1" }))
         .await;
-    for branch in ["lead/b1-1", "lead/none-1"] {
-        let (status, out) = job_files(
-            &s,
-            "new",
-            branch,
-            json!({ "key": "B", "title": "something I noticed" }),
-        )
-        .await;
-        assert_eq!(status, StatusCode::FORBIDDEN, "{branch}: {out}");
-        assert!(
-            out["error"].as_str().unwrap().contains("Observations"),
-            "{branch}: {out}"
-        );
-    }
+    let (status, out) = job_files(
+        &s,
+        "new",
+        "lead/t1-1",
+        json!({ "key": "T", "title": "Retry the fetch once" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(s.item("T2").await["origin"], json!(["T1"]));
+
+    let (status, out) = job_files(
+        &s,
+        "new",
+        "lead/none-1",
+        json!({ "key": "B", "title": "filed with no claim" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{out}");
+    assert!(
+        out["error"].as_str().unwrap().contains("Observations"),
+        "{out}"
+    );
+
     s.ok(
         "release",
         json!({ "id": "I1", "branch": "lead/i1-1", "outcome": "ended" }),
@@ -1562,7 +1571,7 @@ async fn test_a_job_building_a_ticket_still_files_nothing() {
     let (status, _) = s
         .send(
             Method::GET,
-            &format!("/show/B2?project={SLUG}"),
+            &format!("/show/B1?project={SLUG}"),
             "ownerkey",
             None,
         )

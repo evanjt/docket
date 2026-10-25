@@ -9,7 +9,7 @@ use docket_core::api::{AddRequest, Decided, NewRequest, Opened};
 use docket_core::item::{Field, Item};
 use docket_core::project::require_fileable;
 use docket_core::rules::{COMPLEXITIES, default_turn};
-use docket_core::word::{ItemType, Kind, PRIORITIES};
+use docket_core::word::{ItemType, PRIORITIES};
 
 use crate::auth::Caller;
 use crate::store::NewItem;
@@ -65,9 +65,9 @@ pub async fn add(
     open_item(call, as_new, req.from, from).await.map(Json)
 }
 
-/// What a job's filing springs from: the plan, investigation or question its branch holds a claim
-/// on. A job building a ticket files nothing and reports what it saw instead, and the owner files
-/// from nothing.
+/// What a job's filing springs from: the item its branch holds an open claim on, whatever its kind.
+/// A branch with no open claim, one that never held one or whose claim ended, files nothing and
+/// reports what it saw instead, and the owner files from nothing.
 async fn filing_from(call: &Call, caller: &Caller) -> Result<Option<Item>, Failure> {
     if caller.owner {
         return Ok(None);
@@ -79,18 +79,10 @@ async fn filing_from(call: &Call, caller: &Caller) -> Result<Option<Item>, Failu
         vec![call.slug.clone().into(), call.branch().into()],
     )
     .await?;
-    match held
-        .into_iter()
-        .find(|r| files_findings(r.item_type.kind()))
-    {
+    match held.into_iter().next() {
         Some(r) => Ok(Some(r)),
         None => require_owner(caller, "new").map(|()| None),
     }
-}
-
-/// A kind whose work is finding what to do: a plan, an audit of one, an investigation or a question.
-fn files_findings(kind: Kind) -> bool {
-    !matches!(kind, Kind::Work | Kind::Concept | Kind::Idea)
 }
 
 /// The labels `--theme NAME`, `--group NAME` and `--repo PATH` give a new item: the theme as it is

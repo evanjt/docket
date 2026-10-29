@@ -6,7 +6,7 @@ use crate::item::Refused;
 use crate::text::quoted;
 
 /// Every fact a project carries, in the order `docket skills` prints them, with its one-line meaning.
-pub const FACTS: [(&str, &str); 26] = [
+pub const FACTS: [(&str, &str); 27] = [
     ("owner", "the owner's name, as the skills address them"),
     (
         "worktree",
@@ -98,6 +98,10 @@ pub const FACTS: [(&str, &str); 26] = [
         "the failed attempts at one item before it is assigned to the owner",
     ),
     (
+        "sendback_limit",
+        "the builds of one item the gate sends back before it is assigned to the owner",
+    ),
+    (
         "prices",
         "money per million tokens by model, as \"model=input:output ...\", for the cost of an agent attempt",
     ),
@@ -149,7 +153,7 @@ pub const AGENT_SETTINGS: [&str; 5] =
     ["models", "job_timeout", "stale_claim", "lead_lapse", "mode"];
 
 /// The value a fact takes when neither the project nor the owner sets one.
-pub const DEFAULTS: [(&str, &str); 12] = [
+pub const DEFAULTS: [(&str, &str); 13] = [
     ("models", DEFAULT_MODELS),
     ("owner", "the owner"),
     ("checkout", "."),
@@ -160,6 +164,7 @@ pub const DEFAULTS: [(&str, &str); 12] = [
     ("stall_after", "15"),
     ("owner_limit", "20"),
     ("failure_limit", "2"),
+    ("sendback_limit", "2"),
     ("land_batch", "6"),
     ("land_bisect", "on"),
 ];
@@ -338,13 +343,14 @@ pub const CHOICES: [(&str, &[&str]); 2] = [
 ];
 
 /// Facts that hold a whole number above 0.
-pub const COUNTS: [&str; 7] = [
+pub const COUNTS: [&str; 8] = [
     "stale_claim",
     "job_timeout",
     "lead_lapse",
     "stall_after",
     "owner_limit",
     "failure_limit",
+    "sendback_limit",
     "land_batch",
 ];
 

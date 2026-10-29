@@ -177,6 +177,14 @@ batch, and `docket jobs --wait` returns when it exits.
       docket land --back T14 "fails <gate> on <sha>: <the failing lines>"
       docket dispatch T14
 
+  A build sent back gives its claim back with the outcome gate, the one
+  `land --back` records; when you merge and gate by hand, use
+  `unclaim T14 --outcome gate "<the failing lines>"`, never `ended`, which is
+  for a reason outside the build (a usage limit, a base that lacks what the item
+  needs). The server counts the send-backs apart from the failures: at the
+  project's `sendback_limit` (2 by default) the item is assigned to the owner,
+  so a build the gate keeps refusing stops costing jobs.
+
 `docket stale` lists the job branches whose item is closed or that no claim or job names, and
 whether each holds commits the work ref lacks; `docket stale --prune` removes those with none.
 

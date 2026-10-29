@@ -198,42 +198,55 @@ pub async fn release(
     Ok(Json(Moved { item }))
 }
 
-/// Hands the item to the owner when the attempt just ended failed and the item has now failed the
-/// project's `failure_limit` times. Only an attempt that reached a job counts: one released failed
-/// before any job reported anything failed for a reason outside the item. It goes past the owner's limit on open asks: the owner is the
-/// only one left who can move it.
+/// Hands the item to the owner when the attempt just ended failed or sent back by the gate, and the
+/// item has now ended that way the project's `failure_limit` or `sendback_limit` times. The two are
+/// counted apart, and only an attempt that reached a job counts: one released before any job
+/// reported anything ended for a reason outside the item. It goes past the owner's limit on open
+/// asks: the owner is the only one left who can move it.
 async fn assign_past_failure_limit(call: &mut Call, rid: i64) -> Result<(), Failure> {
+    const REACHED_A_JOB: &str = "(job_started_at IS NOT NULL OR job_ended_at IS NOT NULL OR job_exit IS NOT NULL \
+         OR tokens_in IS NOT NULL OR tokens_out IS NOT NULL OR cost_reported IS NOT NULL)";
     let conn = &call.tx.conn;
     let last: Option<String> = scalar(
         conn,
-        "SELECT COALESCE(CASE WHEN job_started_at IS NOT NULL OR job_ended_at IS NOT NULL \
-         OR job_exit IS NOT NULL OR tokens_in IS NOT NULL OR tokens_out IS NOT NULL \
-         OR cost_reported IS NOT NULL THEN outcome END, '') FROM assignments \
-         WHERE rid=? AND kind='claim' AND ended_at IS NOT NULL ORDER BY id DESC LIMIT 1",
+        &format!(
+            "SELECT COALESCE(CASE WHEN {REACHED_A_JOB} THEN outcome END, '') FROM assignments \
+             WHERE rid=? AND kind='claim' AND ended_at IS NOT NULL ORDER BY id DESC LIMIT 1"
+        ),
         vec![rid.into()],
     )
     .await?;
-    if last.as_deref() != Some("failed") {
-        return Ok(());
-    }
-    let failed: Option<i64> = scalar(
+    let (outcome, fact, default, why) = match last.as_deref() {
+        Some("failed") => (
+            "failed",
+            "failure_limit",
+            docket_core::assignment::FAILURE_LIMIT,
+            "attempts failed",
+        ),
+        Some("gate") => (
+            "gate",
+            "sendback_limit",
+            docket_core::assignment::SENDBACK_LIMIT,
+            "builds sent back by the gate",
+        ),
+        _ => return Ok(()),
+    };
+    let count: Option<i64> = scalar(
         conn,
-        "SELECT COUNT(*) FROM assignments WHERE rid=? AND kind='claim' AND outcome='failed' \
-         AND (job_started_at IS NOT NULL OR job_ended_at IS NOT NULL OR job_exit IS NOT NULL \
-         OR tokens_in IS NOT NULL OR tokens_out IS NOT NULL OR cost_reported IS NOT NULL)",
-        vec![rid.into()],
+        &format!("SELECT COUNT(*) FROM assignments WHERE rid=? AND kind='claim' AND outcome=? AND {REACHED_A_JOB}"),
+        vec![rid.into(), outcome.into()],
     )
     .await?;
-    let failed = usize::try_from(failed.unwrap_or(0)).unwrap_or(0);
+    let count = usize::try_from(count.unwrap_or(0)).unwrap_or(0);
     let skills = crate::facts::stored(conn, &call.slug).await?;
     let owner = crate::facts::owner(conn).await?;
-    let limit = docket_core::fact::layered(&skills, &owner, "failure_limit")
+    let limit = docket_core::fact::layered(&skills, &owner, fact)
         .and_then(|(v, _)| v.parse().ok())
-        .unwrap_or(docket_core::assignment::FAILURE_LIMIT);
-    if !past_failure_limit(failed, limit) {
+        .unwrap_or(default);
+    if !past_failure_limit(count, limit) {
         return Ok(());
     }
-    let note = format!("{failed} attempts failed: it needs the owner to look at why");
+    let note = format!("{count} {why}: it needs the owner to look at why");
     call.tx.update(rid, &[]).await?;
     call.tx
         .event(&call.slug, Some(rid), "asked", Some(&note), None, None)

@@ -17,6 +17,8 @@ pub const AGENT: &str = "agent";
 pub const OWNER: &str = "owner";
 /// The failed attempts at an item the project allows before the item is assigned to the owner.
 pub const FAILURE_LIMIT: usize = 2;
+/// The builds of an item the gate may send back before the item is assigned to the owner.
+pub const SENDBACK_LIMIT: usize = 2;
 /// How many of the project's last ended attempts must all have failed for the queue to report a halt.
 pub const HALT_RUN: usize = 3;
 /// Who an assignment is given to: the agent or the owner.

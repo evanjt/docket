@@ -124,7 +124,7 @@ fn test_check_refuses_an_unknown_key_naming_every_fact() {
     );
     assert!(
         why.ends_with(
-            "stale_claim, lead_lapse, stall_after, owner_limit, failure_limit, prices, flow"
+            "stale_claim, lead_lapse, stall_after, owner_limit, failure_limit, sendback_limit, prices, flow"
         ),
         "{why}"
     );

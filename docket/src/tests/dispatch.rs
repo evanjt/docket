@@ -662,6 +662,13 @@ fn diverged(tmp: &Path, job_file: &str, main_file: &str) -> PathBuf {
     let repo = tmp.join("lead");
     std::fs::create_dir_all(&repo).unwrap();
     git_in(&repo, &["init", "-q", "-b", "main"]);
+    for (key, value) in [
+        ("user.name", "t"),
+        ("user.email", "t@example.org"),
+        ("commit.gpgsign", "false"),
+    ] {
+        git_in(&repo, &["config", key, value]);
+    }
     std::fs::write(repo.join("shared.txt"), "one\n").unwrap();
     git_in(&repo, &["add", "-A"]);
     git_in(&repo, &["commit", "-qm", "start"]);

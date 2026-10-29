@@ -290,6 +290,17 @@ fn test_both_lead_variants_land_in_a_batch_and_resolve_conflicts_themselves() {
     }
 }
 
+#[test]
+fn test_both_lead_variants_dispatch_while_a_gate_runs_and_keep_a_watch_armed() {
+    let lead = SKILLS.iter().find(|s| s.name == "lead").unwrap();
+    for text in [lead.claude, lead.codex] {
+        assert!(text.contains("A slot never waits for a landing"));
+        assert!(text.contains("Never end a turn without a watch armed"));
+        assert!(!text.contains("Land before you dispatch"));
+        assert!(!text.contains("Every claim is a running job."));
+    }
+}
+
 fn work_texts() -> Vec<(String, &'static str)> {
     let work = SKILLS.iter().find(|s| s.name == "work").unwrap();
     vec![

@@ -75,13 +75,18 @@ running jobs.
 
 ### 3. Dispatch until the slots are full
 
-Land before you dispatch. Every job that reported DONE is merged and on your
-branch (step 4) before any new job starts, so a claim shown as in progress is
-always a job that is running. No finished build waits for another to land
-first: a build waiting to land still reads as in progress, hides how far the
-queue really is, and goes stale as the branch moves under it. When several end
-together, land them as one batch with one gate run rather than one gate run
-each.
+A slot never waits for a landing. Collect every job that reported DONE at
+once and put it in the next gate run (step 4), and keep dispatching from your
+branch while a gate runs. No finished build waits longer than the gate run in
+progress: it goes into the next batch, merged onto the batch in the gate, so
+it does not go stale as the branch moves. When several end together, land them
+as one batch with one gate run rather than one gate run each.
+
+An item whose Evidence or Fix needs the change of another claimed or collected
+item is not dispatched until that change has landed: its job would build on a
+base that lacks it, and fail or conflict. Mark it `docket wait ID --on OTHER`;
+where `wait` refuses (a later release, say), note it on the item and hold it
+by hand. Dispatch it the moment the other change lands.
 
 Take the one list in the order `next` gives it: earliest release first, then
 most urgent, then audits, plans and investigations, then tickets, then the item
@@ -125,8 +130,8 @@ It returns when a running job ends, or after five minutes so you renew the
 lead; run it in the foreground or in the background, and when it returns go
 on. Then, for each job that ended since you last looked, by its report:
 
-**DONE, for a ticket.** Land it now, before collecting another job or
-dispatching. Bring its change here and commit it:
+**DONE, for a ticket.** Collect it at once and put it in the next gate run;
+dispatching goes on meanwhile. Bring its change here and commit it:
 
     docket collect T14
 
@@ -152,7 +157,9 @@ the next branch. Never leave a finished build waiting for a job to rebase it.
 
 Then land the batch with the project's merge command (`docket skills` prints
 it), which runs the gates, or with the gates by hand and
-`git merge --ff-only lead/batch`. When a gate fails:
+`git merge --ff-only lead/batch`. Start the gate run in the background, never
+in the foreground, so that its exit wakes you, and go on dispatching while it
+runs. When a gate fails:
 
 - On your resolution, or on something mechanical (formatting, a generated
   file, a lint the formatter fixes): fix it in the batch with a commit of its
@@ -223,16 +230,24 @@ nothing more and stop after the running jobs.
 
 ### 5. Again
 
-Back to step 1. Stop when nothing is running and step 3 dispatched nothing:
-every item left is blocked, parked on the owner or held by another session.
+Back to step 1. Never end a turn without a watch armed that wakes you on every
+job that ends, on the gate run's exit and on a tick of at most 15 minutes; on
+each wake, go round the loop again. Work you do yourself (a measurement, a
+reference run) never waits for a quiet machine or for the gate: start it on a
+machine the gate does not measure.
+
+Stop when no job, no gate run and no work of your own is running, and step 3
+dispatched nothing: every item left is blocked, parked on the owner or held by
+another session.
 
 ## Rules
 
 - Never build a ticket, review or answer anything yourself: a job does it.
   Merging is yours, including every conflict and the mechanical fixes a gate
   asks of a merge. Only a build whose own behaviour fails goes back to a job.
-- Every claim is a running job. A finished build is landed or given back in
-  the same pass, never held while more jobs run.
+- Every claim is a running job or a build in the next gate run. A finished
+  build is collected in the same pass and lands in the next gate run, or is
+  given back with its reason; it is never held for another reason.
 - Never push. Never `--force` a claim, and never unclaim one you did not make.
 - Never rewrite the work ref: the squash skill squashes it in place, and only while nothing is
   claimed.

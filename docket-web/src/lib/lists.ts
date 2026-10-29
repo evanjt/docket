@@ -21,6 +21,8 @@ export function caption(shown: number, total: number | null): string {
 
 const WORD_LISTS: Record<string, string> = {
   'in progress': 'wip',
+  'to land': 'wip',
+  'job failed': 'wip',
   ready: 'next',
   blocked: 'waiting',
   'waiting on owner': 'todo',
@@ -31,6 +33,11 @@ const WORD_LISTS: Record<string, string> = {
 /** The list route whose rows carry the reasons and priorities of one word; null where no list covers it. */
 export function wordList(word: string): string | null {
   return WORD_LISTS[word] ?? null;
+}
+
+/** The rows of one word on a list route that holds several words, as the claimed list does; every row elsewhere. */
+export function cutToWord<T extends { word: string }>(rows: T[], word: string | null, route: string | null): T[] {
+  return word && route === 'wip' ? rows.filter((r) => r.word === word) : rows;
 }
 
 const GROUPING_KINDS: Kind[] = ['audit', 'story', 'package', 'idea'];

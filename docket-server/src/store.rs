@@ -86,8 +86,8 @@ pub fn json(value: Json) -> Value {
 
 /// The open assignment rows: who holds each item now. Every read of a claim or of the owner's turn
 /// goes through it.
-const HELD: &str = "SELECT rid, kind, branch, host, started_at, runner, job, machine, note \
-                    FROM assignments WHERE ended_at IS NULL";
+const HELD: &str = "SELECT rid, kind, branch, host, started_at, runner, job, machine, note, \
+                    job_report FROM assignments WHERE ended_at IS NULL";
 
 /// A condition on `items.rid`: an open claim holds the item.
 pub const CLAIMED: &str =
@@ -140,6 +140,7 @@ struct HeldRow {
     job: Option<String>,
     machine: Option<String>,
     note: Option<String>,
+    job_report: Option<String>,
 }
 
 impl HeldRow {
@@ -152,6 +153,7 @@ impl HeldRow {
                 runner: self.runner,
                 job: self.job,
                 on: self.machine,
+                report: self.job_report,
             }),
             assignment::Kind::Ask => Held::Ask(Ask {
                 since: self.started_at,

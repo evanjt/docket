@@ -32,6 +32,7 @@ mod m20261006_233349_items_area_not_null;
 mod m20261006_235900_outcome_ended;
 mod m20261007_073521_events_close_index;
 mod m20261009_073000_project_rename;
+mod m20261029_090535_job_report;
 pub mod parents;
 #[cfg(any(test, feature = "scratch"))]
 pub mod scratch;
@@ -89,6 +90,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261006_235900_outcome_ended::Migration),
             Box::new(m20261007_073521_events_close_index::Migration),
             Box::new(m20261009_073000_project_rename::Migration),
+            Box::new(m20261029_090535_job_report::Migration),
         ]
     }
 }

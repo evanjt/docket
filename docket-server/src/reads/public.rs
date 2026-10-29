@@ -133,8 +133,8 @@ async fn totals<C: ConnectionTrait>(
     Ok(docket_core::member::member_totals(&rows))
 }
 
-/// The status word of a row, the same on every surface: an open claim is its open assignment, an
-/// open ask the owner's turn, and `waiting` whether its dependencies hold it.
+/// The status word of a row, the same on every surface: an open claim is its open assignment, read
+/// with its job's end, an open ask the owner's turn, and `waiting` whether its dependencies hold it.
 pub fn word_of(
     state: &str,
     held: Option<&Held>,
@@ -142,9 +142,12 @@ pub fn word_of(
     kind: Kind,
     members: Members,
 ) -> &'static str {
-    let claimed = matches!(held, Some(Held::Claim(_)));
+    let claim = match held {
+        Some(Held::Claim(c)) => Some(c.job_end()),
+        _ => None,
+    };
     let asked = matches!(held, Some(Held::Ask(_)));
-    Standing::of(state, claimed, waiting, turn_of(state, asked))
+    Standing::of(state, claim, waiting, turn_of(state, asked))
         .holding(kind, members.open, members.closed)
         .word()
 }

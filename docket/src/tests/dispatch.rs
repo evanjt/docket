@@ -103,6 +103,41 @@ fn test_a_reported_end_is_the_claims_own_and_needs_an_end() {
 }
 
 #[test]
+fn test_a_job_claim_has_ended_once_the_server_holds_its_report_word() {
+    let rows = serde_json::json!([
+        {"id": "T1", "claim_on": "bench", "claim_job": "t1-j", "claim_branch": "lead/t1-1", "claim_report": null},
+        {"id": "T2", "claim_on": "bench", "claim_job": "t2-j", "claim_branch": "lead/t2-1", "claim_report": "DONE"},
+        {"id": "T3", "claim_on": "bench", "claim_job": "t3-j", "claim_branch": "lead/t3-1", "claim_report": ""},
+        {"id": "T4", "claim_branch": "work/t4-1"},
+    ]);
+    let got: Vec<(String, bool)> = job_claims("o/p", &rows)
+        .into_iter()
+        .map(|c| (c.id, c.ended))
+        .collect();
+    let want = [("T1", false), ("T2", true), ("T3", true)];
+    assert_eq!(got, want.map(|(id, ended)| (id.to_string(), ended)));
+}
+
+#[test]
+fn test_a_wait_ends_when_a_held_claims_job_ends_or_its_claim_goes() {
+    let rows = |t1: Option<&str>, t2: bool| {
+        let mut out = vec![serde_json::json!(
+            {"id": "T1", "claim_on": "bench", "claim_job": "t1-j", "claim_branch": "lead/t1-1", "claim_report": t1}
+        )];
+        if t2 {
+            out.push(serde_json::json!(
+                {"id": "T2", "claim_on": "bench", "claim_job": "t2-j", "claim_branch": "lead/t2-1"}
+            ));
+        }
+        job_claims("o/p", &serde_json::Value::Array(out))
+    };
+    let held = rows(None, true);
+    assert!(!any_ended(&held, &rows(None, true)));
+    assert!(any_ended(&held, &rows(Some("DONE"), true)));
+    assert!(any_ended(&held, &rows(None, false)));
+}
+
+#[test]
 fn test_machines_are_read_only_once_a_report_is_overdue() {
     use std::time::Duration;
     let fallback = Duration::from_secs(300);

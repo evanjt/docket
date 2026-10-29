@@ -10,3 +10,11 @@ export function note(r: Row): string {
   if (r.wait_on) return r.wait_on === 'condition' ? `waits on ${r.wait_ref ?? ''}, for the owner` : `waits on ${r.wait_ref ?? ''}`;
   return r.turn_note ?? '';
 }
+
+/** A snippet cut at the server's `[` and `]` markers into plain and matched parts. */
+export function highlight(snip: string): { text: string; hit: boolean }[] {
+  return snip
+    .split(/\[([^\]]*)\]/)
+    .map((text, i) => ({ text, hit: i % 2 === 1 }))
+    .filter((p) => p.text);
+}

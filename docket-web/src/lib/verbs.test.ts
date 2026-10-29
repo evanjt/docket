@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { editRequest, filled, moveRequest, verbs } from './verbs';
+import { editRequest, filled, moveRequest, releaseActions, releaseRequest, verbs } from './verbs';
 import type { Offers } from './types';
 
 const offers = (over: Partial<Offers>): Offers => ({
@@ -63,5 +63,23 @@ describe('moveRequest', () => {
   const common = { project: 'o/p', branch: null };
   it('is the edit verb naming the release, with no field set and nothing carried', () => {
     expect(moveRequest('T1', '1.1', common)).toEqual({ ...common, id: 'T1', release: '1.1', set: [], carry: false });
+  });
+});
+
+describe('releaseRequest', () => {
+  const common = { project: 'o/p', branch: null };
+  it('names the release and carries only what the action reads', () => {
+    expect(releaseRequest('rename', '1.1.0', { to: '1.2.0' }, common)).toEqual({ ...common, action: 'rename', name: '1.1.0', rename: '1.2.0' });
+    expect(releaseRequest('merge', '1.1.0', { to: '1.2.0' }, common)).toEqual({ ...common, action: 'merge', name: '1.1.0', to: '1.2.0' });
+    expect(releaseRequest('rm', '1.1.0', { to: 'x' }, common)).toEqual({ ...common, action: 'rm', name: '1.1.0' });
+    expect(releaseRequest('add', '2.0.0', { targetDate: '2027-01-01' }, common)).toEqual({ ...common, action: 'add', name: '2.0.0', target_date: '2027-01-01' });
+  });
+});
+
+describe('releaseActions', () => {
+  it('offers remove only for an empty release and ship only for one with nothing open', () => {
+    expect(releaseActions({ open: 0, closed: 0 })).toEqual({ rm: true, ship: true });
+    expect(releaseActions({ open: 0, closed: 3 })).toEqual({ rm: false, ship: true });
+    expect(releaseActions({ open: 2, closed: 3 })).toEqual({ rm: false, ship: false });
   });
 });

@@ -3,8 +3,8 @@
   import { project } from '../lib/context';
   import { ASIDE, FLOW, byId, wordVar } from '../lib/flow';
   import { resource } from '../lib/live.svelte';
-  import { SORTS, applies, filterChanges, nextParams, pagedParams, parseFilter, searchParams, sortRows } from '../lib/filter';
-  import { caption, countOf, pageSize, queueNodes, wordList } from '../lib/lists';
+  import { GROUPS, SORTS, applies, filterChanges, groupRows, nextParams, pagedParams, parseFilter, searchParams, sortRows } from '../lib/filter';
+  import { caption, countOf, cutToWord, pageSize, queueNodes, wordList } from '../lib/lists';
   import { checkIds, releaseOf } from '../lib/releases';
   import { at, go, withParams } from '../lib/router.svelte';
   import { act } from '../lib/session.svelte';
@@ -30,26 +30,30 @@
   type Shape = Pick<Row, 'id' | 'title' | 'word'> & Partial<Row> & { aside?: string };
 
   const q = $derived(at.params.get('q') ?? '');
-  const word = $derived(at.params.get('word'));
+  const filter = $derived(parseFilter(at.params, ctx));
+  const word = $derived(filter.word || null);
   const checkKind = $derived(at.params.get('check'));
   const wordRoute = $derived(word ? wordList(word) : null);
   const list = $derived(q || checkKind ? null : word ? wordRoute : (at.params.get('list') ?? 'next'));
   const selected = $derived(at.params.get('i'));
-  const filter = $derived(parseFilter(at.params, ctx));
   const release = $derived(filter.release);
-  const narrowed = $derived(Object.values({ ...filter, sort: '' }).some(Boolean));
+  const narrowed = $derived(Object.values({ ...filter, sort: '', group: '' }).some(Boolean));
 
-  let typed = $state(at.params.get('q') ?? '');
-  let searchBox: HTMLInputElement | undefined = $state();
+  const SEARCH_PAGE = 200;
+
   let marks = $state(new Set<string>());
   let more = $state(0);
+  /** The search results past the first page, read by offset on "show more". */
+  let tail = $state<Shape[]>([]);
+  let tailFull = $state(true);
+  let tailBusy = $state(false);
 
   const status = resource(() => api.status(ctx.slug));
   const problems = resource(() => (checkKind ? api.check(ctx.slug) : null));
 
   const fetched = resource<Shape[]>(() => {
     if (checkKind) return null;
-    if (q) return api.search(ctx.slug, q, 200, searchParams(filter));
+    if (q) return api.search(ctx.slug, q, SEARCH_PAGE, searchParams(filter));
     if (word && !wordRoute) return filter.under ? api.list('under', ctx.slug, 5000, { under: filter.under }) : null;
     // With a filter chosen, the whole queue is read: next lists the earlier releases first.
     if (list === 'next') return api.next(ctx.slug, narrowed ? 5000 : Math.max(200, pageSize(more, false)), nextParams(filter));
@@ -81,33 +85,41 @@
         .sort((a, b) => byId(a.id, b.id))
         .map((n) => ({ id: n.id, title: n.title, word: n.word, release: n.release, area: n.area }));
     }
-    return fetched.data ?? [];
+    return q ? [...(fetched.data ?? []), ...tail] : cutToWord(fetched.data ?? [], word, wordRoute);
   });
 
   /** The rows that pass the filter, each with its release when the project sets releases, in the sort chosen. */
   const shown = $derived(
     sortRows(
       rows
-        .map((r) => ({ ...r, release: releaseOf(r.release ?? ctx.board?.nodes.get(r.id)?.release, ctx.releases), area: r.area ?? ctx.board?.nodes.get(r.id)?.area }))
+        .map((r) => ({ ...r, release: releaseOf(r.release ?? ctx.board?.nodes.get(r.id)?.release, ctx.releases), area: r.area ?? ctx.board?.nodes.get(r.id)?.area, plan: ctx.board?.parents.get(r.id)?.[0] }))
         .filter((r) => applies(r, filter, ctx.releases, ctx.priorities)),
       filter.sort,
       ctx.priorities,
     ),
   );
 
+  const groups = $derived(groupRows(shown, filter.group, ctx.releases));
+
   const total = $derived(narrowed || q || word || !list ? null : countOf(list, status.data));
+  const moreResults = $derived(!!q && tailFull && (fetched.data?.length ?? 0) >= SEARCH_PAGE && !tailBusy);
   const cut = $derived(!narrowed && !q && !word && list !== 'next' && list !== 'groups' && list !== 'derived' && total !== null && total > shown.length);
 
   const loading = $derived(checkKind ? problems.loading && !problems.data : word && !wordRoute ? !ctx.board || (!!filter.under && !fetched.data) : fetched.loading && !fetched.data);
   const heading = $derived(checkKind ? `Check: ${checkKind}` : q ? `Search: ${q}` : word ? `Every item ${word}` : LISTS.find((l) => l.name === list)?.label);
 
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  function search(text: string) {
-    clearTimeout(timer);
-    timer = setTimeout(() => {
-      go(withParams({ q: text.trim() || undefined, word: undefined, list: text.trim() ? undefined : 'next' }), true);
-    }, 220);
+  async function showMoreResults() {
+    tailBusy = true;
+    try {
+      const batch = await api.search(ctx.slug, q, SEARCH_PAGE, { ...searchParams(filter), offset: String(SEARCH_PAGE + tail.length) });
+      tail = [...tail, ...batch];
+      tailFull = batch.length >= SEARCH_PAGE;
+    } finally {
+      tailBusy = false;
+    }
   }
+
+  const searchKey = $derived(JSON.stringify([q, searchParams(filter)]));
 
   $effect(() => {
     list;
@@ -115,6 +127,12 @@
     word;
     narrowed;
     more = 0;
+  });
+
+  $effect(() => {
+    searchKey;
+    tail = [];
+    tailFull = true;
   });
 
   /** The keys the project's items carry, read from the board. */
@@ -161,7 +179,6 @@
   function onkey(e: KeyboardEvent) {
     const t = e.target as HTMLElement;
     if (t.closest('input, textarea, select, [contenteditable]')) {
-      if (e.key === 'Escape' && t === searchBox) searchBox?.blur();
       return;
     }
     if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -171,9 +188,6 @@
     } else if (e.key === 'k' || e.key === 'ArrowUp') {
       e.preventDefault();
       move(-1);
-    } else if (e.key === '/') {
-      e.preventDefault();
-      searchBox?.focus();
     } else if (e.key === 'x' && selected) {
       toggle(selected);
     }
@@ -198,19 +212,9 @@
 <div class="work" class:open={!!selected}>
   <div class="left">
     <div class="tools">
-      <input
-        bind:this={searchBox}
-        class="field"
-        type="search"
-        placeholder="Search titles and bodies"
-        bind:value={typed}
-        oninput={() => search(typed)}
-        aria-label="Search"
-      />
       <nav class="lists" aria-label="Lists">
         {#each LISTS as l (l.name)}
-          <a href={withParams({ list: l.name, q: undefined, word: undefined, i: undefined })} class:active={list === l.name}
-            onclick={() => (typed = '')}>{l.label}</a>
+          <a href={withParams({ list: l.name, q: undefined, word: undefined, i: undefined })} class:active={list === l.name}>{l.label}</a>
         {/each}
       </nav>
       {#if ctx.releases.length}
@@ -231,17 +235,20 @@
         <select aria-label="Sort" value={filter.sort} onchange={(e) => setFilter({ sort: e.currentTarget.value })}>
           {#each SORTS as o (o.name)}<option value={o.name}>{o.label}</option>{/each}
         </select>
+        <select aria-label="Group" value={filter.group} onchange={(e) => setFilter({ group: e.currentTarget.value })}>
+          {#each GROUPS as o (o.name)}<option value={o.name}>{o.label}</option>{/each}
+        </select>
         {#if filter.under}
           <a class="chip" href={withParams({ under: undefined, i: undefined })}>under {filter.under} ×</a>
         {/if}
         {#if narrowed}
-          <a class="chip" href={withParams({ ...filterChanges(parseFilter(new URLSearchParams(), ctx)), sort: filter.sort || undefined, i: undefined })}>clear filters</a>
+          <a class="chip" href={withParams({ ...filterChanges(parseFilter(new URLSearchParams(), ctx)), sort: filter.sort || undefined, group: filter.group || undefined, i: undefined })}>clear filters</a>
         {/if}
       </div>
       <nav class="words" aria-label="Words">
         {#each [...FLOW, ...ASIDE, 'done', 'dropped'] as w (w)}
-          <a href={withParams({ word: w, q: undefined, list: undefined, i: undefined })} class:active={word === w}
-            style="--c: {wordVar(w)}" onclick={() => (typed = '')}>{w}</a>
+          <a href={withParams({ word: w, list: undefined, i: undefined })} class:active={word === w}
+            style="--c: {wordVar(w)}">{w}</a>
         {/each}
       </nav>
     </div>
@@ -269,15 +276,22 @@
         {q ? 'No item matches. Search reads whole words; try fewer of them.' : 'This list is empty.'}
       </p>
     {/if}
-    <ul class="rows">
-      {#each shown as r (r.id)}
-        <ItemRow row={r} href={withParams({ i: r.id })} selected={r.id === selected} marked={marks.has(r.id)}
-          onmark={() => toggle(r.id)} aside={r.aside}
-          release={!release && r.release && r.release !== ctx.releases[0] ? r.release : undefined} />
-      {/each}
-    </ul>
+    {#each groups as g (g.name)}
+      {#if filter.group}
+        <h3 class="group">{g.name || `No ${filter.group}`} <span class="faint">{g.rows.length}</span></h3>
+      {/if}
+      <ul class="rows">
+        {#each g.rows as r (r.id)}
+          <ItemRow row={r} href={withParams({ i: r.id })} selected={r.id === selected} marked={marks.has(r.id)}
+            onmark={() => toggle(r.id)} aside={r.aside}
+            release={!release && r.release && r.release !== ctx.releases[0] ? r.release : undefined} />
+        {/each}
+      </ul>
+    {/each}
     {#if cut}
       <button class="btn small" onclick={() => (more += 1)}>Show more</button>
+    {:else if moreResults}
+      <button class="btn small" onclick={showMoreResults}>Show more</button>
     {/if}
   </div>
 
@@ -323,6 +337,16 @@
     z-index: 2;
     background: var(--paper);
     border-bottom: 1px solid var(--rule);
+  }
+
+  .group {
+    margin: 0;
+    padding: 10px 12px 4px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
   }
 
   .lists,

@@ -540,8 +540,14 @@ pub struct ReleaseRow {
     pub name: String,
     pub open: u64,
     pub ready: u64,
-    /// Items with a claim, the work running now.
+    /// Items with a claim whose job runs now.
     pub in_progress: u64,
+    /// Items whose claim's job reported DONE, waiting to land.
+    #[serde(default)]
+    pub to_land: u64,
+    /// Items whose claim's job ended with any other report or none.
+    #[serde(default)]
+    pub job_failed: u64,
     /// Plans with open tickets: not running work themselves.
     pub under_way: u64,
     pub waiting_owner: u64,
@@ -584,6 +590,8 @@ pub fn release_rows<S: std::hash::BuildHasher>(
                 open: mine.iter().filter(|i| i.open()).count() as u64,
                 ready: words(&["ready"]),
                 in_progress: words(&["in progress"]),
+                to_land: words(&["to land"]),
+                job_failed: words(&["job failed"]),
                 under_way: words(&["under way"]),
                 waiting_owner: words(&["parked", "waiting on owner"]),
                 blocked: words(&["blocked"]),

@@ -179,10 +179,11 @@ const SPECS: [Spec; 27] = [
     Spec {
         names: &["releases"],
         route: "releases",
-        slots: &[Word("action"), Word("name")],
+        slots: &[Word("action"), Word("name"), MaybeRest("rename")],
         flags: &[
             ("--to", "to"),
             ("--move-open-to", "to"),
+            ("--into", "to"),
             ("--carry", "!carry"),
             ("--target", "target_date"),
             ("--note", "note"),
@@ -326,7 +327,7 @@ fn finish(verb: &str, spec: &Spec, body: &mut Map<String, Value>) -> Result<(), 
             body.remove("action");
             body.insert("remove".into(), json!(action.as_deref() == Some("rm")));
         }
-        "releases" => word(&["add", "move", "ship"])?,
+        "releases" => word(&["add", "move", "ship", "rename", "merge", "rm"])?,
         "areas" => word(&["add", "edit", "move", "rm"])?,
         "label" => word(&["add", "rm"])?,
         "lead" => {

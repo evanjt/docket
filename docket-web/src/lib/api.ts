@@ -1,7 +1,7 @@
 import { aborted, current } from './reads';
 import type {
   Offers,
-  Area, Count, Deps, Derived, EventRow, Facts, Graph, LeadState, Machine, Problem, ProjectRow, ReleaseCounts, Row, Shown, Status, Summary, Whole, Whoami,
+  Area, Count, Deps, Derived, EventRow, Facts, Graph, LeadState, Machine, Problem, ProjectRow, ReleaseCounts, ReleaseRowOut, Row, Shown, Status, Summary, Whole, Whoami,
 } from './types';
 
 const KEY = 'docket.key';
@@ -133,6 +133,7 @@ export const api = {
   counts: () => get<Count[]>('/counts'),
   status: (p: string) => get<Status>('/status', of(p)),
   releases: (p: string) => get<{ releases: ReleaseCounts[] }>('/metrics', { project: p, scope: 'releases' }).then((b) => b.releases),
+  releaseRows: (p: string) => get<ReleaseRowOut[]>('/releases', { project: p, all: 'true' }),
   next: (p: string, n = 100, filter: Params = {}) => get<Row[]>('/next', { project: p, n, ...filter }),
   list: (route: string, p: string, n?: number, filter: Params = {}) => get<Row[]>(`/${route}`, { project: p, n, ...filter }),
   derived: (p: string, n?: number, filter: Params = {}) => get<Derived[]>('/derived', { project: p, n, ...filter }),

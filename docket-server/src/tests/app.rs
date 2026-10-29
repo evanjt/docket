@@ -81,7 +81,7 @@ async fn test_show_matches_the_json_of_docket_show() {
         "project": "o/p", "key": "T", "num": 1, "id": "T1", "title": "First", "state": "open",
         "turn": "agent", "turn_note": null, "asked_at": null,
         "claim_branch": null, "claim_host": null, "claim_since": null,
-        "claim_runner": null, "claim_job": null, "claim_on": null,
+        "claim_runner": null, "claim_job": null, "claim_on": null, "claim_report": null,
         "wait_on": null, "wait_ref": null, "wait_since": null,
         "decision": null, "decided_at": null, "resolution": null,
         "complexity": null, "release": null, "area": "general",

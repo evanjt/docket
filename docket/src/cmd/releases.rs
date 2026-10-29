@@ -1,4 +1,4 @@
-//! `docket releases`: a project's releases, listed, added, their open items moved, or shipped.
+//! `docket releases`: a project's releases, listed, added, their open items moved, shipped, renamed, merged or removed.
 
 use docket_core::api::{ReleasesDone, ReleasesRequest};
 use docket_core::metrics::ReleaseRow;
@@ -12,6 +12,8 @@ use crate::fail::{Fail, Result};
 pub struct Releases<'a> {
     pub action: Option<&'a str>,
     pub name: Option<&'a str>,
+    pub new_name: Option<&'a str>,
+    pub into: Option<&'a str>,
     pub to: Option<&'a str>,
     pub move_open_to: Option<&'a str>,
     pub carry: bool,
@@ -154,7 +156,8 @@ pub fn releases(ctx: &mut Ctx, a: &Releases) -> Result<i32> {
         common: ctx.common(false)?,
         action: action.to_string(),
         name: name.to_string(),
-        to: a.to.or(a.move_open_to).map(str::to_string),
+        rename: a.new_name.map(str::to_string),
+        to: a.to.or(a.move_open_to).or(a.into).map(str::to_string),
         carry: a.carry,
         target_date: a.target.map(str::to_string),
         note: a.note.map(str::to_string),

@@ -1,12 +1,12 @@
 use super::*;
 
 fn open(claimed: bool, waiting: bool, turn: Option<&str>) -> Standing<'_> {
-    Standing::of("open", claimed, waiting, turn)
+    Standing::of("open", claimed.then_some(JobEnd::Running), waiting, turn)
 }
 
 #[test]
 fn test_word_closed_is_its_state() {
-    let row = Standing::of("dropped", false, false, None);
+    let row = Standing::of("dropped", None, false, None);
     assert_eq!(row.word(), "dropped");
 }
 
@@ -180,4 +180,37 @@ fn test_a_stored_item_takes_its_type_from_its_key_else_its_kind() {
         ItemType::of_stored("ZZ", Kind::Research),
         ItemType::Investigation
     );
+}
+
+#[test]
+fn test_an_open_claim_reads_its_jobs_end() {
+    let claim = |end| Standing {
+        open_assignment: true,
+        job_end: end,
+        unsatisfied_dependency: true,
+        ..live()
+    };
+    assert_eq!(claim(JobEnd::Running).word(), "in progress");
+    assert_eq!(claim(JobEnd::Done).word(), "to land");
+    assert_eq!(claim(JobEnd::Failed).word(), "job failed");
+}
+
+#[test]
+fn test_a_jobs_end_is_done_only_for_a_done_report() {
+    assert_eq!(JobEnd::of(None), JobEnd::Running);
+    assert_eq!(JobEnd::of(Some("DONE")), JobEnd::Done);
+    assert_eq!(JobEnd::of(Some("FAILED")), JobEnd::Failed);
+    assert_eq!(JobEnd::of(Some("WAITING")), JobEnd::Failed);
+    assert_eq!(JobEnd::of(Some("")), JobEnd::Failed);
+}
+
+#[test]
+fn test_a_done_item_whose_job_reported_reads_done() {
+    let done = Standing {
+        state: "done",
+        open_assignment: true,
+        job_end: JobEnd::Done,
+        ..live()
+    };
+    assert_eq!(done.word(), "done");
 }

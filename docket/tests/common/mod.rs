@@ -2,11 +2,33 @@
 //! client against it. Dropping it stops the server and drops the database.
 
 use std::net::SocketAddr;
+use std::process::Command;
 use std::sync::mpsc;
 
 use docket_migration::scratch::Scratch;
 use docket_server::app;
 use docket_server::auth::Keys;
+
+/// What a surrounding job or shell sets and a client under test must not inherit.
+pub const JOB_ENVIRONMENT: [&str; 7] = [
+    "DOCKET_JOB",
+    "DOCKET_PROJECT",
+    "DOCKET_KEY",
+    "DOCKET_REPO",
+    "DOCKET_SERVER",
+    "DOCKET_JOB_STATE",
+    "DOCKET_JOBS_FALLBACK",
+];
+
+/// The built `docket` client with the job environment removed; a test sets only what it needs.
+#[must_use]
+pub fn docket_command() -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_docket"));
+    for name in JOB_ENVIRONMENT {
+        command.env_remove(name);
+    }
+    command
+}
 
 pub struct Server {
     pub addr: SocketAddr,

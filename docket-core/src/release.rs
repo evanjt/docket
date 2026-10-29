@@ -158,6 +158,49 @@ pub fn place(all: &[Release], name: &str) -> Result<i64, Refused> {
     Ok(i64::try_from(before).unwrap_or(i64::MAX))
 }
 
+/// The position a release takes once renamed to `new`: where `place` puts that name among the
+/// other releases. Refuses what `add` refuses against every other release, and the same name.
+///
+/// # Errors
+/// The name is refused, already a release, or the release's own.
+pub fn rename_place(all: &[Release], old: &str, new: &str) -> Result<i64, Refused> {
+    if old == new {
+        return Err(Refused(format!("{old} already has that name")));
+    }
+    let others: Vec<Release> = all.iter().filter(|r| r.name != old).cloned().collect();
+    place(&others, new)
+}
+
+/// Why `from` cannot be merged into `to`: it is the same release, or `to` has shipped while `from`
+/// still holds `open` items.
+#[must_use]
+pub fn merge_refusal(from: &str, to: &str, to_shipped: bool, open: &[String]) -> Option<String> {
+    if from == to {
+        return Some(format!("{from} cannot be merged into itself"));
+    }
+    (to_shipped && !open.is_empty()).then(|| {
+        format!(
+            "{to} has shipped and {from} still holds {} open: {}. Close them or move them to a \
+             release not shipped first.",
+            open.len(),
+            open.join(", ")
+        )
+    })
+}
+
+/// Why a release cannot be removed while `held` items are in it.
+#[must_use]
+pub fn rm_refusal(name: &str, held: &[String]) -> Option<String> {
+    (!held.is_empty()).then(|| {
+        format!(
+            "{name} holds {} items: {}. Merge it into another release with docket releases \
+             merge, or move them first.",
+            held.len(),
+            held.join(", ")
+        )
+    })
+}
+
 /// The release a write names: `current` is the first not shipped, any other name a release not yet
 /// shipped. An empty name is the backlog.
 ///

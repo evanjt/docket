@@ -49,6 +49,9 @@ pub struct ItemView {
     pub claim_runner: Option<String>,
     pub claim_job: Option<String>,
     pub claim_on: Option<String>,
+    /// The word the claim's job left when it ended, none while it runs.
+    #[serde(default)]
+    pub claim_report: Option<String>,
     pub wait_on: Option<String>,
     pub wait_ref: Option<String>,
     pub wait_since: Option<String>,
@@ -427,14 +430,19 @@ pub struct EditRequest {
     pub area: Option<String>,
 }
 
-/// `docket releases add|move|ship`: one release added, its open items moved, or it shipped.
+/// `docket releases add|move|ship|rename|merge|rm`: one release added, its open items moved, shipped,
+/// renamed, merged into another or removed.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ReleasesRequest {
     #[serde(flatten)]
     pub common: Common,
     pub action: String,
     pub name: String,
-    /// Where `move` and `ship` take the open items: `current`, a release, or empty for the backlog.
+    /// `rename`: the release's new name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rename: Option<String>,
+    /// Where `move` and `ship` take the open items: `current`, a release, or empty for the
+    /// backlog. `merge` takes every item to the release named.
     #[serde(default)]
     pub to: Option<String>,
     /// `move` and `ship`: move too what the move would leave out of order, instead of refusing it.

@@ -436,20 +436,25 @@ pub enum Cmd {
         #[arg(long, value_name = "FILE|-")]
         body: Option<String>,
     },
-    /// a project's releases: list them, add one, move one's open items, or ship one
+    /// a project's releases: list them, add one, move one's open items, ship, rename, merge or remove one
     Releases {
-        /// list (the default), add, move or ship
-        #[arg(value_parser = ["list", "add", "move", "ship"])]
+        /// list (the default), add, move, ship, rename, merge or rm
+        #[arg(value_parser = ["list", "add", "move", "ship", "rename", "merge", "rm"])]
         action: Option<String>,
         /// the release: add takes a version, placed by its version order
         name: Option<String>,
+        /// rename: the new name, a version placed by its version order
+        new_name: Option<String>,
+        /// merge: the release every item of NAME goes to; NAME is then deleted
+        #[arg(long, value_name = "RELEASE")]
+        into: Option<String>,
         /// move: where its open items go, current, a release, or "" for the backlog
         #[arg(long, value_name = "RELEASE")]
         to: Option<String>,
         /// ship: move what is still open there first; without it ship refuses while any is open
         #[arg(long = "move-open-to", value_name = "RELEASE")]
         move_open_to: Option<String>,
-        /// move and ship: move too what the move would leave out of order, dependants and plans later, dependencies and children earlier
+        /// move, ship and merge: move too what the move would leave out of order, dependants and plans later, dependencies and children earlier
         #[arg(long)]
         carry: bool,
         /// add: the date it is meant to ship

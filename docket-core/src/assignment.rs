@@ -124,6 +124,9 @@ pub struct Assignment {
     pub job_started_at: Option<String>,
     pub job_ended_at: Option<String>,
     pub job_exit: Option<i32>,
+    /// The first word of the job's report once it reports its end, empty when it ended with none.
+    #[serde(default)]
+    pub job_report: Option<String>,
     /// What an ask needs of the owner: one of `queue::NEEDS`.
     pub need: Option<String>,
 }
@@ -188,6 +191,7 @@ pub struct Usage {
     pub job_started_at: Option<String>,
     pub job_ended_at: Option<String>,
     pub job_exit: Option<i32>,
+    pub job_report: Option<String>,
 }
 
 /// What one event does: the open row ended, then a row opened, or the open claim given the usage of
@@ -312,6 +316,21 @@ fn usage_of(e: &Event) -> Usage {
         job_exit: get("exit")
             .and_then(Value::as_i64)
             .and_then(|n| i32::try_from(n).ok()),
+        job_report: report_word(get("end").is_some(), get("report").and_then(Value::as_str)),
+    }
+}
+
+/// The word a job's end leaves on its claim: the first word of its report, empty for an end with no
+/// report, none for a report that names no end, such as usage alone.
+fn report_word(ended: bool, report: Option<&str>) -> Option<String> {
+    match report {
+        Some(line) => Some(
+            line.split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .to_string(),
+        ),
+        None => ended.then(String::new),
     }
 }
 
@@ -339,6 +358,7 @@ fn row(e: &Event) -> Assignment {
         job_started_at: None,
         job_ended_at: None,
         job_exit: None,
+        job_report: None,
         need: None,
     }
 }
@@ -416,13 +436,15 @@ pub fn rebuild(events: &[Event]) -> Vec<Assignment> {
             a.job_started_at = u.job_started_at.or(a.job_started_at.take());
             a.job_ended_at = u.job_ended_at.or(a.job_ended_at.take());
             a.job_exit = u.job_exit.or(a.job_exit);
+            a.job_report = u.job_report.or(a.job_report.take());
         }
         rows.extend(s.open);
     }
     rows
 }
 
-/// An item's open claim: the branch and host that hold it, since when, and the job that runs it.
+/// An item's open claim: the branch and host that hold it, since when, the job that runs it and the
+/// word its job's end left, none while it runs.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Claim {
     pub branch: String,
@@ -431,6 +453,16 @@ pub struct Claim {
     pub runner: Option<String>,
     pub job: Option<String>,
     pub on: Option<String>,
+    #[serde(default)]
+    pub report: Option<String>,
+}
+
+impl Claim {
+    /// Where the claim's job stands.
+    #[must_use]
+    pub fn job_end(&self) -> crate::word::JobEnd {
+        crate::word::JobEnd::of(self.report.as_deref())
+    }
 }
 
 /// The owner's open ask: since when, and what it needs of them.
@@ -459,6 +491,7 @@ impl Held {
                 runner: a.runner.clone(),
                 job: a.job.clone(),
                 on: a.machine.clone(),
+                report: a.job_report.clone(),
             }),
             Kind::Ask => Held::Ask(Ask {
                 since: a.started_at.clone(),
@@ -489,6 +522,7 @@ pub struct HeldFields {
     pub claim_runner: Option<String>,
     pub claim_job: Option<String>,
     pub claim_on: Option<String>,
+    pub claim_report: Option<String>,
 }
 
 impl HeldFields {
@@ -508,6 +542,7 @@ impl HeldFields {
                 out.claim_runner.clone_from(&c.runner);
                 out.claim_job.clone_from(&c.job);
                 out.claim_on.clone_from(&c.on);
+                out.claim_report.clone_from(&c.report);
             }
             Some(Held::Ask(a)) => {
                 out.turn_note.clone_from(&a.note);
@@ -543,6 +578,7 @@ impl Now {
                 runner: i.claim_runner.clone(),
                 job: i.claim_job.clone(),
                 on: i.claim_on.clone(),
+                report: None,
             }),
             _ => None,
         };

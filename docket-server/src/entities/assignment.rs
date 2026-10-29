@@ -44,6 +44,7 @@ pub struct Model {
     pub job_started_at: Option<String>,
     pub job_ended_at: Option<String>,
     pub job_exit: Option<i32>,
+    pub job_report: Option<String>,
     #[crudcrate(filterable)]
     pub need: Option<String>,
 }

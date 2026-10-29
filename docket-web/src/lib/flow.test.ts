@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FLOW, board, byId, moves, planCount, planWord, plans, tally, wordVar } from './flow';
+import { ASIDE, FLOW, MEANING, board, byId, moves, planCount, planWord, plans, tally, wordVar } from './flow';
 import type { EventRow, Graph, GraphNode, Progress } from './types';
 
 /** Progress as the server serves it, with `dropped` of the `total` not counted. */
@@ -149,6 +149,13 @@ describe('moves', () => {
 });
 
 describe('FLOW', () => {
+  it('holds to land after in progress, and job failed beside it', () => {
+    expect([...FLOW]).toEqual(['ready', 'in progress', 'to land']);
+    expect([...ASIDE]).toContain('job failed');
+    expect(MEANING['to land']).toBeTruthy();
+    expect(MEANING['job failed']).toBeTruthy();
+  });
+
   it('holds item words only, with no plan word', () => {
     expect([...FLOW]).not.toContain('under way');
     expect([...FLOW]).not.toContain('audit due');

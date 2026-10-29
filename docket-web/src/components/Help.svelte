@@ -10,7 +10,7 @@
     ['g y, g a, g s', 'yours, activity, settings'],
     ['g h', 'every project'],
     ['j, k', 'next and previous row on Work'],
-    ['/', 'search on Work'],
+    ['/', 'search ids, titles, files and bodies'],
     ['x', 'mark the selected row on Work'],
     ['Esc', 'close the open item or this page'],
     ['?', 'this page'],

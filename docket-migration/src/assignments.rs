@@ -65,7 +65,8 @@ pub async fn report<C: ConnectionTrait>(c: &C, id: i64, u: &Usage) -> Result<(),
     c.execute_raw(statement(
         "UPDATE assignments SET tokens_in=COALESCE(?, tokens_in), tokens_out=COALESCE(?, tokens_out), \
          cost_reported=COALESCE(?, cost_reported), job_started_at=COALESCE(?, job_started_at), \
-         job_ended_at=COALESCE(?, job_ended_at), job_exit=COALESCE(?, job_exit) WHERE id=?",
+         job_ended_at=COALESCE(?, job_ended_at), job_exit=COALESCE(?, job_exit), \
+         job_report=COALESCE(?, job_report) WHERE id=?",
         vec![
             u.tokens_in.into(),
             u.tokens_out.into(),
@@ -73,6 +74,7 @@ pub async fn report<C: ConnectionTrait>(c: &C, id: i64, u: &Usage) -> Result<(),
             u.job_started_at.clone().into(),
             u.job_ended_at.clone().into(),
             u.job_exit.into(),
+            u.job_report.clone().into(),
             id.into(),
         ],
     ))
@@ -113,7 +115,7 @@ pub async fn of_items<C: ConnectionTrait>(
 /// # Errors
 /// The database refuses, as it does a second open row for one item.
 pub async fn insert<C: ConnectionTrait>(c: &C, rid: i64, a: &Assignment) -> Result<(), DbErr> {
-    // The need and job columns are added after the table is first rebuilt, so only a row that has
+    // The need, job and report columns are added after the table is first rebuilt, so only a row that has
     // one names it.
     let mut columns = String::new();
     let mut marks = String::new();
@@ -138,11 +140,12 @@ pub async fn insert<C: ConnectionTrait>(c: &C, rid: i64, a: &Assignment) -> Resu
         a.tokens_out.into(),
         a.cost_reported.into(),
     ];
-    let extra: [(&str, Option<sea_orm::Value>); 4] = [
+    let extra: [(&str, Option<sea_orm::Value>); 5] = [
         ("need", a.need.clone().map(Into::into)),
         ("job_started_at", a.job_started_at.clone().map(Into::into)),
         ("job_ended_at", a.job_ended_at.clone().map(Into::into)),
         ("job_exit", a.job_exit.map(Into::into)),
+        ("job_report", a.job_report.clone().map(Into::into)),
     ];
     for (name, value) in extra {
         if let Some(v) = value {
@@ -165,17 +168,48 @@ pub async fn insert<C: ConnectionTrait>(c: &C, rid: i64, a: &Assignment) -> Resu
     Ok(())
 }
 
-/// The rows of every item that has none, rebuilt from its events and made to agree with its claim
-/// and turn now. Returns how many rows were written.
+/// Every claim row given the report word its job's end left, read from the rows its item's events
+/// rebuild to: a row is the rebuilt one that started at the same time. Returns how many rows took one.
 ///
 /// # Errors
 /// The database refuses.
-pub async fn rebuild_all<C: ConnectionTrait>(c: &C) -> Result<usize, DbErr> {
+pub async fn fill_reports<C: ConnectionTrait>(c: &C) -> Result<usize, DbErr> {
+    let mut filled = 0;
+    for (rid, events) in events_of(
+        c,
+        "rid IN (SELECT rid FROM events WHERE kind='job_reported')",
+    )
+    .await?
+    {
+        for a in rebuild(&events) {
+            let (Some(report), Kind::Claim) = (&a.job_report, a.kind) else {
+                continue;
+            };
+            filled += c
+                .execute_raw(statement(
+                    "UPDATE assignments SET job_report=? WHERE rid=? AND kind='claim' \
+                     AND started_at=? AND job_report IS NULL",
+                    vec![report.clone().into(), rid.into(), a.started_at.into()],
+                ))
+                .await?
+                .rows_affected();
+        }
+    }
+    Ok(usize::try_from(filled).unwrap_or(usize::MAX))
+}
+
+/// The events of the items `filter` selects from `events`, oldest first, by rid.
+async fn events_of<C: ConnectionTrait>(
+    c: &C,
+    filter: &str,
+) -> Result<BTreeMap<i64, Vec<Event>>, DbErr> {
     let mut events: BTreeMap<i64, Vec<Event>> = BTreeMap::new();
     for r in c
         .query_all_raw(statement(
-            "SELECT rid, kind, at, host, branch, note, data::text FROM events \
-             WHERE rid IS NOT NULL ORDER BY rid, seq",
+            &format!(
+                "SELECT rid, kind, at, host, branch, note, data::text FROM events \
+                 WHERE rid IS NOT NULL AND {filter} ORDER BY rid, seq"
+            ),
             vec![],
         ))
         .await?
@@ -193,6 +227,16 @@ pub async fn rebuild_all<C: ConnectionTrait>(c: &C) -> Result<usize, DbErr> {
                 data: data.and_then(|d| serde_json::from_str(&d).ok()),
             });
     }
+    Ok(events)
+}
+
+/// The rows of every item that has none, rebuilt from its events and made to agree with its claim
+/// and turn now. Returns how many rows were written.
+///
+/// # Errors
+/// The database refuses.
+pub async fn rebuild_all<C: ConnectionTrait>(c: &C) -> Result<usize, DbErr> {
+    let events = events_of(c, "TRUE").await?;
     let items = c
         .query_all_raw(statement(
             "SELECT rid, state, turn, turn_note, asked_at, claim_branch, claim_host, claim_since, \

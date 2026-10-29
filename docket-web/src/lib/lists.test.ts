@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { board } from './flow';
-import { caption, countOf, pageSize, queueNodes, wordList } from './lists';
+import { caption, countOf, pageSize, queueNodes, cutToWord, wordList } from './lists';
 import type { GraphNode } from './types';
 
 describe('caption', () => {
@@ -40,6 +40,8 @@ describe('wordList', () => {
     expect(wordList('waiting on owner')).toBe('todo');
     expect(wordList('parked')).toBeNull();
     expect(wordList('in progress')).toBe('wip');
+    expect(wordList('to land')).toBe('wip');
+    expect(wordList('job failed')).toBe('wip');
     expect(wordList('done')).toBe('done');
     expect(wordList('dropped')).toBe('dropped');
     expect(wordList('checking')).toBeNull();
@@ -58,5 +60,16 @@ describe('queueNodes', () => {
       edges: [],
     });
     expect(queueNodes(b, 'in progress').map((n) => n.id)).toEqual(['T1']);
+  });
+});
+
+describe('cutToWord', () => {
+  const rows = [{ id: 'T1', word: 'in progress' }, { id: 'T2', word: 'to land' }, { id: 'T3', word: 'job failed' }];
+
+  it('keeps the rows of the word on the claimed list, and every row on another list', () => {
+    expect(cutToWord(rows, 'to land', 'wip').map((r) => r.id)).toEqual(['T2']);
+    expect(cutToWord(rows, 'in progress', 'wip').map((r) => r.id)).toEqual(['T1']);
+    expect(cutToWord(rows, 'ready', 'next')).toHaveLength(3);
+    expect(cutToWord(rows, null, 'wip')).toHaveLength(3);
   });
 });

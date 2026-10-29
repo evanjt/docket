@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use crate::member::{Edge, Tie, descendants};
 use crate::metrics::{Progress, Subject, progress};
 use crate::rows::{ItemRow, ProjectRow};
-use crate::word::{Kind, Standing, kind_of_type};
+use crate::word::{JobEnd, Kind, Standing, kind_of_type};
 
 /// The open plans as the word counts them: under way, and due for their audit.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -115,7 +115,9 @@ impl Board {
         let closed = members.len() as u64 - open;
         Standing::of(
             &item.state,
-            item.claim_branch.is_some(),
+            item.claim_branch
+                .is_some()
+                .then(|| JobEnd::of(item.claim_report.as_deref())),
             item.wait_on.is_some(),
             item.turn.as_deref(),
         )

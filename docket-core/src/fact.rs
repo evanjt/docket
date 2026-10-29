@@ -59,7 +59,7 @@ pub const FACTS: [(&str, &str); 22] = [
     ),
     (
         "releases",
-        "the releases not yet shipped in the order they ship, the current first, read from the release rows: docket releases add, move and ship change them. An item with no release is in the backlog. next orders by release, then priority",
+        "the releases not yet shipped in the order they ship, the current first, read from the release rows: docket releases add, move, ship, rename, merge and rm change them. An item with no release is in the backlog. next orders by release, then priority",
     ),
     (
         "job_timeout",
@@ -346,7 +346,8 @@ pub fn check(key: &str, value: &str) -> Result<(), Refused> {
     }
     if key == "releases" {
         return Err(Refused(
-            "releases are rows: docket releases add, move and ship change them".to_string(),
+            "releases are rows: docket releases add, move, ship, rename, merge and rm change them"
+                .to_string(),
         ));
     }
     if WRITTEN.contains(&key) {

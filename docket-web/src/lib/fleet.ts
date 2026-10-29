@@ -1,4 +1,4 @@
-import type { EventRow, LeadState, Machine, Row } from './types';
+import type { LeadState, Machine, Row } from './types';
 import { ago } from './time';
 
 export interface MachineUse {
@@ -14,22 +14,20 @@ export interface MachineUse {
   here: boolean;
 }
 
-/** Whether the job behind a claim reported its end, which is when its slot is free again. */
-export function jobEnded(claim: Row, reports: EventRow[]): boolean {
-  return reports.some(
-    (e) => e.kind === 'job_reported' && e.branch === claim.claim_branch && typeof e.data?.end === 'string',
-  );
+/** Whether the job behind a claim ended, which is when its slot is free again: the row reads to land or job failed. */
+export function jobEnded(claim: Row): boolean {
+  return claim.word === 'to land' || claim.word === 'job failed';
 }
 
 /**
  * Each machine with the jobs running on it: a claim counts against the machine its job runs on
- * until the job reports its end, after which it is waiting to land. `reports` are the project's
- * `job_reported` events. A usage limit is in force until its reset, `now` in epoch seconds.
+ * until its row reads to land or job failed, after which it waits to land or to be given back. A usage limit is in force until
+ * its reset, `now` in epoch seconds.
  */
-export function machineUse(machines: Machine[], claims: Row[], reports: EventRow[], here: string, now: number): MachineUse[] {
+export function machineUse(machines: Machine[], claims: Row[], here: string, now: number): MachineUse[] {
   return machines.map((m) => {
     const on = claims.filter((c) => (c.claim_on ?? '') === m.name);
-    const waiting = on.filter((c) => jobEnded(c, reports)).length;
+    const waiting = on.filter(jobEnded).length;
     return {
       name: m.name,
       slots: m.slots,

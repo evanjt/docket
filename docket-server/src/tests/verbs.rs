@@ -437,6 +437,98 @@ async fn test_a_release_ships_only_once_its_open_items_are_closed_or_moved_on() 
 }
 
 #[tokio::test]
+async fn test_a_release_is_renamed_merged_and_removed_by_the_owner() {
+    let s = two_releases().await;
+    filed(&s, "T", "1.1.0").await;
+    filed(&s, "T", "1.1.0").await;
+    s.ok("close", json!({ "id": "T2", "resolution": "fixed" }))
+        .await;
+    let out = s
+        .ok(
+            "releases",
+            json!({ "action": "rename", "name": "1.1.0", "rename": "1.2.0" }),
+        )
+        .await;
+    assert_eq!(out["releases"][1]["name"], "1.2.0");
+    assert_eq!(s.item("T1").await["release"], "1.2.0");
+    assert_eq!(s.item("T2").await["release"], "1.2.0");
+    assert_eq!(
+        s.refused(
+            "releases",
+            json!({ "action": "rename", "name": "1.2.0", "rename": "1.0.0" })
+        )
+        .await,
+        "1.0.0 is already a release"
+    );
+    let (status, _) = s
+        .post_as(
+            "agentkey",
+            "releases",
+            json!({ "action": "rename", "name": "1.2.0", "rename": "1.3.0" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    for body in [
+        json!({ "action": "merge", "name": "1.2.0", "to": "1.0.0" }),
+        json!({ "action": "rm", "name": "1.0.0" }),
+    ] {
+        let (status, _) = s.post_as("agentkey", "releases", body).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+
+    filed(&s, "T", "1.0.0").await;
+    assert_eq!(
+        s.refused("releases", json!({ "action": "rm", "name": "1.0.0" }))
+            .await,
+        "1.0.0 holds 1 items: T3. Merge it into another release with docket releases merge, or \
+         move them first."
+    );
+    assert_eq!(
+        s.refused(
+            "releases",
+            json!({ "action": "merge", "name": "1.0.0", "to": "1.0.0" })
+        )
+        .await,
+        "1.0.0 cannot be merged into itself"
+    );
+    let out = s
+        .ok(
+            "releases",
+            json!({ "action": "merge", "name": "1.2.0", "to": "1.0.0" }),
+        )
+        .await;
+    assert_eq!(out["moved"], json!(["T1", "T2"]));
+    assert_eq!(out["releases"].as_array().unwrap().len(), 1);
+    for id in ["T1", "T2", "T3"] {
+        assert_eq!(s.item(id).await["release"], "1.0.0");
+    }
+    s.ok("close", json!({ "id": "T3", "resolution": "fixed" }))
+        .await;
+    s.ok("close", json!({ "id": "T1", "resolution": "fixed" }))
+        .await;
+    s.ok("releases", json!({ "action": "add", "name": "1.5.0" }))
+        .await;
+    s.ok(
+        "releases",
+        json!({ "action": "merge", "name": "1.0.0", "to": "1.5.0" }),
+    )
+    .await;
+    s.ok("releases", json!({ "action": "add", "name": "2.0.0" }))
+        .await;
+    let out = s
+        .ok("releases", json!({ "action": "rm", "name": "2.0.0" }))
+        .await;
+    let names: Vec<&str> = out["releases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["1.5.0"]);
+    assert_eq!(s.item("T2").await["release"], "1.5.0");
+}
+
+#[tokio::test]
 async fn test_releases_are_added_in_version_order_and_kept_by_the_owner() {
     let s = two_releases().await;
     let out = s
@@ -2044,6 +2136,54 @@ async fn test_a_job_report_stores_its_tokens_and_cost_on_the_open_attempt() {
     s.ok("close", json!({ "id": "B1", "resolution": "abc1234" }))
         .await;
     assert_eq!(s.assignments("B1").await[0]["tokens_out"], json!(45));
+}
+
+#[tokio::test]
+async fn test_a_claim_reads_to_land_once_its_job_reports_done_and_job_failed_otherwise() {
+    let s = Scratch::new().await;
+    s.open("B", "Kettle trips the fuse").await;
+    s.open("B", "Toaster sparks").await;
+    for id in ["B1", "B2"] {
+        s.ok("start", json!({ "id": id, "runner": "claude", "job": "j" }))
+            .await;
+    }
+    assert_eq!(s.word("B1").await, "in progress");
+    s.ok(
+        "job-report",
+        json!({ "id": "B1", "end": "2026-10-05T10:20:00Z", "report": "DONE the note" }),
+    )
+    .await;
+    s.ok(
+        "job-report",
+        json!({ "id": "B2", "end": "2026-10-05T10:20:00Z", "exit": 1 }),
+    )
+    .await;
+    assert_eq!(s.word("B1").await, "to land");
+    assert_eq!(s.item("B1").await["claim_report"], "DONE");
+    assert_eq!(s.word("B2").await, "job failed");
+    let (_, graph) = s
+        .send(
+            Method::GET,
+            &format!("/graph?project={SLUG}"),
+            "ownerkey",
+            None,
+        )
+        .await;
+    let word = |id: &str| {
+        graph["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["id"] == id)
+            .map(|n| n["word"].clone())
+    };
+    assert_eq!(
+        (word("B1"), word("B2")),
+        (Some(json!("to land")), Some(json!("job failed")))
+    );
+    s.ok("close", json!({ "id": "B1", "resolution": "abc1234" }))
+        .await;
+    assert_eq!(s.word("B1").await, "done");
 }
 
 #[tokio::test]

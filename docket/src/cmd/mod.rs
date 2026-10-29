@@ -486,6 +486,8 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
         Cmd::Releases {
             action,
             name,
+            new_name,
+            into,
             to,
             move_open_to,
             carry,
@@ -497,6 +499,8 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             &releases::Releases {
                 action: action.as_deref(),
                 name: name.as_deref(),
+                new_name: new_name.as_deref(),
+                into: into.as_deref(),
                 to: to.as_deref(),
                 move_open_to: move_open_to.as_deref(),
                 carry: *carry,

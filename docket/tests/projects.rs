@@ -7,7 +7,7 @@
 mod common;
 
 use std::fs;
-use std::process::{Command, Output};
+use std::process::Output;
 
 use common::{Server, serve};
 
@@ -46,7 +46,7 @@ impl Checkout {
     }
 
     fn docket(&self, key: &str, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_docket"))
+        common::docket_command()
             .args(args)
             .current_dir(&self.repo)
             .env("XDG_CONFIG_HOME", &self.config)
@@ -168,4 +168,13 @@ fn test_rename_is_refused_on_an_agents_key_and_changes_nothing() {
         text(&out)
     );
     assert!(c.roots().contains("\tacme/widgets\t"), "{}", c.roots());
+}
+
+#[test]
+fn test_docket_command_drops_the_job_environment() {
+    let command = common::docket_command();
+    let envs: std::collections::HashMap<_, _> = command.get_envs().collect();
+    for name in common::JOB_ENVIRONMENT {
+        assert_eq!(envs.get(std::ffi::OsStr::new(name)), Some(&None), "{name}");
+    }
 }

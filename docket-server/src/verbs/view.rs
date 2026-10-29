@@ -76,6 +76,7 @@ pub async fn item_view<C: ConnectionTrait>(c: &C, row: &Item) -> Result<ItemView
         claim_runner: held.claim_runner,
         claim_job: held.claim_job,
         claim_on: held.claim_on,
+        claim_report: held.claim_report,
         wait_on: wait.as_ref().map(|w| w.on.to_string()),
         wait_ref: wait.as_ref().map(|w| w.id.clone()),
         wait_since: wait.as_ref().map(|w| w.since.clone()),

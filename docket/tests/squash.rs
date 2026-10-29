@@ -140,7 +140,7 @@ INSERT INTO items (rid, project, key, num, title, state, body, type, opened_at, 
 }
 
 fn squash(dir: &Path, config: &Path, server: &Server, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_docket"))
+    common::docket_command()
         .args(["-p", "acme/kiln", "squash"])
         .args(args)
         .current_dir(dir)
@@ -522,7 +522,7 @@ fn docket(r: &Repo, args: &[&str]) -> String {
 }
 
 fn docket_in(dir: &Path, config: &Path, server: &Server, args: &[&str]) -> String {
-    let out = Command::new(env!("CARGO_BIN_EXE_docket"))
+    let out = common::docket_command()
         .args(["-p", "acme/kiln"])
         .args(args)
         .current_dir(dir)

@@ -209,6 +209,7 @@ fn test_settle_ends_what_the_item_no_longer_holds_and_opens_what_it_does() {
                 runner: Some("codex".into()),
                 job: Some("j".into()),
                 on: Some("workbench".into()),
+                report: None,
             }),
             asked: None,
             updated_at: "z".into(),
@@ -404,4 +405,32 @@ fn test_an_open_ask_takes_the_note_the_item_holds() {
         (got.end, got.open, got.note.as_deref()),
         (false, None, Some("the kiln is hot"))
     );
+}
+
+#[test]
+fn test_rebuild_keeps_the_first_word_of_a_jobs_report_on_its_claim() {
+    let reported = |data| {
+        let mut e = event("job_reported", "b", "build/t1-1", None);
+        e.data = Some(data);
+        rebuild(&[event("claimed", "a", "build/t1-1", None), e])
+    };
+    let done = reported(json!({"end": "2026-01-02T00:50:00Z", "report": "DONE the note"}));
+    assert_eq!(done[0].job_report.as_deref(), Some("DONE"));
+    let silent = reported(json!({"end": "2026-01-02T00:50:00Z", "exit": 1}));
+    assert_eq!(silent[0].job_report.as_deref(), Some(""));
+    let usage = reported(json!({"tokens_out": 7}));
+    assert_eq!(usage[0].job_report, None);
+}
+
+#[test]
+fn test_an_open_claim_holds_its_jobs_report() {
+    let mut e = event("job_reported", "b", "build/t1-1", None);
+    e.data = Some(json!({"end": "c", "report": "FAILED the gates"}));
+    let rows = rebuild(&[event("claimed", "a", "build/t1-1", None), e]);
+    let Held::Claim(c) = Held::of(Kind::Claim, &rows[0]) else {
+        panic!("a claim row holds a claim");
+    };
+    assert_eq!(c.report.as_deref(), Some("FAILED"));
+    let f = HeldFields::of("open", Some(&Held::Claim(c)));
+    assert_eq!(f.claim_report.as_deref(), Some("FAILED"));
 }

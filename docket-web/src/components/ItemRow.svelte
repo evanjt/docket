@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Row } from '../lib/types';
-  import { note } from '../lib/note';
+  import { highlight, note } from '../lib/note';
   import Word from './Word.svelte';
 
   let {
@@ -22,7 +22,8 @@
     release?: string;
   } = $props();
 
-  const why = $derived(note(row as Row));
+  const why = $derived(row.snip ? '' : note(row as Row));
+  const parts = $derived(row.snip ? highlight(row.snip) : []);
 </script>
 
 <li class="row" class:selected data-id={row.id}>
@@ -37,6 +38,7 @@
     {#if release}<span class="release" title="Release {release}">{release}</span>{/if}
     {#if aside}<span class="aside faint">{aside}</span>{/if}
     {#if why}<span class="why">{why}</span>{/if}
+    {#if parts.length}<span class="why">{#each parts as p}{#if p.hit}<mark>{p.text}</mark>{:else}{p.text}{/if}{/each}</span>{/if}
   </a>
 </li>
 
@@ -96,6 +98,12 @@
 
   .row.selected .title {
     font-weight: 550;
+  }
+
+  mark {
+    background: var(--accent-soft);
+    color: var(--ink);
+    border-radius: 2px;
   }
 
   .why {

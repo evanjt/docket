@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applies, filterChanges, nextParams, pagedParams, parseFilter, remainingHref, searchParams, sortRows } from './filter';
+import { applies, filterChanges, groupRows, nextParams, pagedParams, parseFilter, remainingHref, searchHref, searchParams, sortRows } from './filter';
 
 const scale = { priorities: ['critical', 'high', 'normal', 'low'], levels: ['high', 'medium', 'low'] };
 const parse = (s: string, on = scale) => parseFilter(new URLSearchParams(s), on);
@@ -7,7 +7,7 @@ const parse = (s: string, on = scale) => parseFilter(new URLSearchParams(s), on)
 describe('filter state', () => {
   it('round-trips through the query string', () => {
     const f = parse('key=B&priority=high&complexity=low&release=1.1&under=A20&state=open&sort=priority');
-    expect(f).toEqual({ key: 'B', priority: 'high', complexity: 'low', release: '1.1', under: 'A20', area: '', state: 'open', sort: 'priority' });
+    expect(f).toEqual({ key: 'B', priority: 'high', complexity: 'low', release: '1.1', under: 'A20', area: '', state: 'open', word: '', sort: 'priority', group: '' });
     const q = new URLSearchParams();
     for (const [k, v] of Object.entries(filterChanges(f))) if (v) q.set(k, v);
     expect(parseFilter(q, scale)).toEqual(f);
@@ -15,7 +15,7 @@ describe('filter state', () => {
 
   it('drops values outside the options', () => {
     const f = parse('priority=urgent&complexity=huge&state=maybe&sort=random');
-    expect(f).toEqual({ key: '', priority: '', complexity: '', release: '', under: '', area: '', state: '', sort: '' });
+    expect(f).toEqual({ key: '', priority: '', complexity: '', release: '', under: '', area: '', state: '', word: '', sort: '', group: '' });
   });
 
   it('takes the tiers and levels the server lists', () => {
@@ -37,9 +37,22 @@ describe('filter state', () => {
   it('maps to the parameters /next and /search take', () => {
     const f = parse('key=b&priority=high&complexity=low&release=1.1&under=A20&state=open');
     expect(nextParams(f)).toEqual({ key: 'b', priority: 'high', complexity: 'low', under: 'A20' });
-    expect(searchParams(f)).toEqual({ key: 'b', state: 'open', under: 'A20' });
+    expect(searchParams(f)).toEqual({ key: 'b', state: 'open', under: 'A20', word: undefined, release: '1.1', area: undefined, priority: 'high', complexity: 'low' });
     expect(pagedParams(f)).toEqual({ release: '1.1', under: 'A20' });
     expect(pagedParams(parse(''))).toEqual({ release: undefined, under: undefined });
+  });
+
+  it('sends the word, release, area, priority and complexity to /search', () => {
+    const f = parse('word=ready&release=1.1&area=parser&priority=high&complexity=low');
+    expect(searchParams(f)).toMatchObject({ word: 'ready', release: '1.1', area: 'parser', priority: 'high', complexity: 'low' });
+  });
+
+  it('builds a search address that keeps the filter and its word', () => {
+    const f = parse('word=ready&release=1.1&sort=id');
+    const url = new URL(searchHref('me/proj', 'parser', f), 'http://x');
+    expect(url.pathname.endsWith('/me/proj/work')).toBe(true);
+    expect(Object.fromEntries(url.searchParams)).toEqual({ word: 'ready', release: '1.1', sort: 'id', q: 'parser' });
+    expect(new URL(searchHref('me/proj', ' ', f), 'http://x').searchParams.has('q')).toBe(false);
   });
 
   it('applies what the routes leave out to rows', () => {
@@ -77,5 +90,41 @@ describe('filter state', () => {
     expect(rows.filter((r) => applies(r, f, [], scale.priorities)).map((r) => r.id)).toEqual(['B1']);
     expect(nextParams(f)).not.toHaveProperty('area');
     expect(pagedParams(f)).not.toHaveProperty('area');
+  });
+});
+
+describe('groupRows', () => {
+  const rows = [
+    { id: 'T1', word: 'in progress', release: '1.0.0', area: 'core', plan: 'A2' },
+    { id: 'T2', word: 'ready', release: '2.0.0', area: 'web' },
+    { id: 'T3', word: 'to land', release: '1.0.0', area: 'web', plan: 'A1' },
+    { id: 'T4', word: 'ready', release: null, area: 'core', plan: 'A2' },
+    { id: 'T5', word: 'to land', release: '1.0.0', area: null },
+  ];
+  const names = (group: string) => groupRows(rows, group, ['1.0.0', '2.0.0']).map((g) => [g.name, g.rows.map((r) => r.id)]);
+
+  it('groups by word in flow order, each group in the order the rows came', () => {
+    expect(names('word')).toEqual([['ready', ['T2', 'T4']], ['in progress', ['T1']], ['to land', ['T3', 'T5']]]);
+  });
+
+  it('groups by release in release order with the backlog last, and by area and plan with none last', () => {
+    expect(names('release')).toEqual([['1.0.0', ['T1', 'T3', 'T5']], ['2.0.0', ['T2']], ['', ['T4']]]);
+    expect(names('area')).toEqual([['core', ['T1', 'T4']], ['web', ['T2', 'T3']], ['', ['T5']]]);
+    expect(names('plan')).toEqual([['A1', ['T3']], ['A2', ['T1', 'T4']], ['', ['T2', 'T5']]]);
+  });
+
+  it('is one unnamed group when not grouped', () => {
+    expect(names('')).toEqual([['', ['T1', 'T2', 'T3', 'T4', 'T5']]]);
+  });
+
+  it('keeps the group in the query string', () => {
+    const f = parseFilter(new URLSearchParams('group=word&sort=word'), { priorities: [], levels: [] });
+    expect([f.group, f.sort]).toEqual(['word', 'word']);
+    expect(filterChanges(f).group).toBe('word');
+    expect(parseFilter(new URLSearchParams('group=bogus'), { priorities: [], levels: [] }).group).toBe('');
+  });
+
+  it('sorts by word in flow order, then queue order', () => {
+    expect(sortRows(rows, 'word', []).map((r) => r.id)).toEqual(['T2', 'T4', 'T1', 'T3', 'T5']);
   });
 });

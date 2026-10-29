@@ -213,7 +213,7 @@ impl World {
     /// `docket ARGS` as a client on the machine, in a directory there.
     fn docket(&self, name: &str, cwd: &Path, args: &[&str]) -> Output {
         let home = self.home(name);
-        Command::new(env!("CARGO_BIN_EXE_docket"))
+        common::docket_command()
             .args(args)
             .current_dir(cwd)
             .env("HOME", &home)
@@ -244,12 +244,6 @@ impl World {
                 ),
             )
             .env_remove("GIT_SSH_COMMAND")
-            // What the surrounding job or shell sets must not reach the machines under test.
-            .env_remove("DOCKET_PROJECT")
-            .env_remove("DOCKET_JOB")
-            .env_remove("DOCKET_REPO")
-            .env_remove("DOCKET_JOB_STATE")
-            .env_remove("DOCKET_JOBS_FALLBACK")
             .output()
             .unwrap()
     }

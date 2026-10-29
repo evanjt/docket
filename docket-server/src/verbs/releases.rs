@@ -1,6 +1,7 @@
 //! `releases`: a project's releases as rows, the one place they are read and written. `add` places
 //! a release by its version, `move` takes a release's open items to another, `ship` marks one shipped
-//! once nothing in it is open.
+//! once nothing in it is open, `rename` gives one a new name and place, `merge` takes every item of
+//! one into another and deletes it, `rm` deletes one nothing is in.
 
 use axum::Json;
 use axum::extract::{Extension, Query, State};
@@ -90,7 +91,7 @@ pub async fn list(
     ))
 }
 
-/// `POST /do/releases`: add, move or ship one release. The owner's key only.
+/// `POST /do/releases`: add, move, ship, rename, merge or remove one release. The owner's key only.
 ///
 /// # Errors
 /// 403 on an agent's key, 409 for a name the rules refuse or a ship with open items left.
@@ -135,9 +136,41 @@ pub async fn releases(
                 .await?;
             moved
         }
+        "rename" => {
+            let from = existing(&listed, &name)?;
+            let Some(new) = req.rename.as_deref().map(str::trim) else {
+                return Err(Failure::Refused(format!(
+                    "docket releases rename {name} NEW: give the new name"
+                )));
+            };
+            rename(&mut call, &listed, from, &name, new).await?;
+            Vec::new()
+        }
+        "merge" => {
+            let from = existing(&listed, &name)?;
+            let Some(to) = req.to.as_deref().map(str::trim) else {
+                return Err(Failure::Refused(format!(
+                    "docket releases merge {name} --into RELEASE: name the release it joins"
+                )));
+            };
+            merge(&mut call, &listed, from, &name, to, req.carry).await?
+        }
+        "rm" => {
+            let from = existing(&listed, &name)?;
+            let held = items_in(&call, from, false).await?;
+            if let Some(why) = release::rm_refusal(&name, &held) {
+                return Err(Failure::Refused(why));
+            }
+            call.tx
+                .execute("DELETE FROM releases WHERE id=?", vec![from.into()])
+                .await?;
+            close_gap(&call, listed.rows.iter().find(|(i, _)| *i == from)).await?;
+            project_event(&call, &format!("release {name} removed")).await?;
+            Vec::new()
+        }
         other => {
             return Err(Failure::Invalid(format!(
-                "action is one of add, move, ship, not {}",
+                "action is one of add, move, ship, rename, merge, rm, not {}",
                 docket_core::text::quoted(other)
             )));
         }
@@ -191,11 +224,17 @@ async fn add(
 }
 
 async fn open_in(call: &Call, release: i64) -> Result<Vec<String>, Failure> {
+    items_in(call, release, true).await
+}
+
+/// The ids of the items in a release, by key and number: the open ones, or every one.
+async fn items_in(call: &Call, release: i64, open_only: bool) -> Result<Vec<String>, Failure> {
+    let state = if open_only { " AND state='open'" } else { "" };
     let rows = call
         .tx
         .conn
         .query_all_raw(sql(
-            "SELECT id FROM items WHERE release_id=? AND state='open' ORDER BY key, num",
+            &format!("SELECT id FROM items WHERE release_id=?{state} ORDER BY key, num"),
             vec![release.into()],
         ))
         .await?;
@@ -204,6 +243,106 @@ async fn open_in(call: &Call, release: i64) -> Result<Vec<String>, Failure> {
         out.push(r.try_get_by_index::<String>(0)?);
     }
     Ok(out)
+}
+
+/// A project event naming a change to the releases.
+async fn project_event(call: &Call, note: &str) -> Result<(), Failure> {
+    call.tx
+        .event(&call.slug, None, "edited", Some(note), None, None)
+        .await?;
+    Ok(())
+}
+
+/// The later releases moved down one over the place a removed release held, so positions stay a
+/// run from nought.
+async fn close_gap(call: &Call, gone: Option<&(i64, Release)>) -> Result<(), Failure> {
+    let Some((_, gone)) = gone else {
+        return Ok(());
+    };
+    call.tx
+        .execute("SET CONSTRAINTS ALL DEFERRED", vec![])
+        .await?;
+    call.tx
+        .execute(
+            "UPDATE releases SET position=position-1 WHERE project=? AND position>?",
+            vec![call.slug.clone().into(), gone.position.into()],
+        )
+        .await?;
+    Ok(())
+}
+
+/// A release under a new name at the place its version gives it, every item in it rewritten for the
+/// dump.
+async fn rename(
+    call: &mut Call,
+    listed: &Listed,
+    id: i64,
+    old: &str,
+    new: &str,
+) -> Result<(), Failure> {
+    let at = release::rename_place(&listed.all(), old, new)?;
+    let was = listed
+        .rows
+        .iter()
+        .find(|(i, _)| *i == id)
+        .map_or(0, |(_, r)| r.position);
+    call.tx
+        .execute("SET CONSTRAINTS ALL DEFERRED", vec![])
+        .await?;
+    call.tx
+        .execute(
+            "UPDATE releases SET position=position-1 WHERE project=? AND position>?",
+            vec![call.slug.clone().into(), was.into()],
+        )
+        .await?;
+    call.tx
+        .execute(
+            "UPDATE releases SET position=position+1 WHERE project=? AND position>=? AND id<>?",
+            vec![call.slug.clone().into(), at.into(), id.into()],
+        )
+        .await?;
+    call.tx
+        .execute(
+            "UPDATE releases SET name=?, position=? WHERE id=?",
+            vec![new.into(), at.into(), id.into()],
+        )
+        .await?;
+    let carried: Vec<i64> = crate::store::column(
+        &call.tx.conn,
+        "SELECT rid FROM items WHERE release_id=?",
+        vec![id.into()],
+    )
+    .await?;
+    for rid in carried {
+        call.tx.touch(rid);
+    }
+    project_event(call, &format!("release {old} renamed to {new}")).await
+}
+
+/// Every item of a release moved to another, the open ones checked for order as `move` checks
+/// them, and the emptied release deleted.
+async fn merge(
+    call: &mut Call,
+    listed: &Listed,
+    from: i64,
+    from_name: &str,
+    to: &str,
+    carry: bool,
+) -> Result<Vec<String>, Failure> {
+    let Some((to_id, target)) = listed.rows.iter().find(|(_, r)| r.name == to) else {
+        return Err(Failure::Refused(format!("{to} is not a release here")));
+    };
+    let open = open_in(call, from).await?;
+    if let Some(why) = release::merge_refusal(from_name, to, target.shipped_at.is_some(), &open) {
+        return Err(Failure::Refused(why));
+    }
+    let moved = move_items(call, from, from_name, Some(*to_id), to, carry, true).await?;
+    call.tx
+        .execute("DELETE FROM releases WHERE id=?", vec![from.into()])
+        .await?;
+    close_gap(call, listed.rows.iter().find(|(i, _)| *i == from)).await?;
+    project_event(call, &format!("release {from_name} merged into {to}")).await?;
+    Ok(moved)
 }
 
 /// The open items of one release moved to another, each with an edit event naming the move.
@@ -223,14 +362,28 @@ async fn move_open(
     let to_name = name_of(&call.tx.conn, to_id)
         .await?
         .unwrap_or_else(|| "the backlog".to_string());
-    let ids = open_in(call, from).await?;
-    let mut rids = Vec::with_capacity(ids.len());
-    for id in &ids {
+    move_items(call, from, from_name, to_id, &to_name, carry, false).await
+}
+
+/// The items of one release moved to `to_id`, each with an edit event naming the move: the open
+/// ones, or with `closed` every one. Only the open ones are held to the release order.
+async fn move_items(
+    call: &mut Call,
+    from: i64,
+    from_name: &str,
+    to_id: Option<i64>,
+    to_name: &str,
+    carry: bool,
+    closed: bool,
+) -> Result<Vec<String>, Failure> {
+    let open = open_in(call, from).await?;
+    let mut rids = Vec::with_capacity(open.len());
+    for id in &open {
         rids.push(call.item(id).await?.rid);
     }
     let order = Order::load(&call.tx.conn, &call.slug).await?;
     if carry {
-        let note = format!("release {to_name} (carried with {})", ids.join(", "));
+        let note = format!("release {to_name} (carried with {})", open.join(", "));
         for (rid, _, release) in order.carried_all(&rids, to_id) {
             call.tx.update(rid, &[Field::ReleaseId(release)]).await?;
             call.tx
@@ -240,6 +393,11 @@ async fn move_open(
     } else if !call.ctx.force {
         order.refuse(&order.moving_all(&rids, to_id))?;
     }
+    let ids = if closed {
+        items_in(call, from, false).await?
+    } else {
+        open
+    };
     let note = format!("release {from_name} to {to_name}");
     for id in &ids {
         let r = call.item(id).await?;

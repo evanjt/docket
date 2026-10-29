@@ -311,7 +311,7 @@ fn test_with_sets_and_unsets() {
 fn test_releases_are_rows_never_set_as_a_fact() {
     assert_eq!(
         refusal(check("releases", "1.0.0 1.1.0")),
-        "releases are rows: docket releases add, move and ship change them"
+        "releases are rows: docket releases add, move, ship, rename, merge and rm change them"
     );
     assert_eq!(check("releases", ""), Ok(()));
 }

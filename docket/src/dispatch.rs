@@ -175,6 +175,51 @@ pub fn limited_runners(machines: &[Machine], now: &str) -> BTreeMap<String, Stri
     out
 }
 
+/// A claim held by a job a lead started on a machine, and whether the job has reported its end.
+pub struct JobClaim {
+    pub project: String,
+    pub id: String,
+    pub machine: String,
+    pub job: String,
+    pub branch: String,
+    pub ended: bool,
+}
+
+/// The claims among a project's `/wip` rows that a job holds on a machine. A job has ended once its
+/// claim holds the word its end left.
+#[must_use]
+pub fn job_claims(slug: &str, rows: &serde_json::Value) -> Vec<JobClaim> {
+    let mut out = Vec::new();
+    for r in rows.as_array().into_iter().flatten() {
+        if let (Some(id), Some(machine), Some(job), Some(branch)) = (
+            r["id"].as_str(),
+            r["claim_on"].as_str(),
+            r["claim_job"].as_str(),
+            r["claim_branch"].as_str(),
+        ) {
+            out.push(JobClaim {
+                project: slug.to_string(),
+                id: id.to_string(),
+                machine: machine.to_string(),
+                job: job.to_string(),
+                branch: branch.to_string(),
+                ended: !r["claim_report"].is_null(),
+            });
+        }
+    }
+    out
+}
+
+/// Whether a job of the claims `held` has ended by `now`, the claims read since: its claim holds the
+/// word its end left, or is held no more.
+#[must_use]
+pub fn any_ended(held: &[JobClaim], now: &[JobClaim]) -> bool {
+    held.iter().any(|h| {
+        !now.iter()
+            .any(|c| !c.ended && c.project == h.project && c.id == h.id && c.branch == h.branch)
+    })
+}
+
 /// The end a job reported for the claim on `branch`, from the item's log: the data of the newest
 /// `job_reported` event of that claim that carries an `end`.
 #[must_use]

@@ -36,13 +36,27 @@ fn test_releases_ship_takes_where_the_open_items_go() {
     let shown = format!("{:?}", cli.cmd);
     assert!(shown.contains("\"ship\""), "{shown}");
     assert!(shown.contains("move_open_to: Some(\"1.1.0\")"), "{shown}");
-    assert!(Cli::try_parse_from(["docket", "releases", "rename", "1.0.0"]).is_err());
+    assert!(Cli::try_parse_from(["docket", "releases", "relabel", "1.0.0"]).is_err());
     assert!(
         command()
             .render_help()
             .to_string()
             .contains("\n  releases ")
     );
+}
+
+#[test]
+fn test_releases_rename_merge_and_rm_parse() {
+    let shown = |args: &[&str]| {
+        let mut line = vec!["docket", "releases"];
+        line.extend(args);
+        format!("{:?}", Cli::try_parse_from(line).unwrap().cmd)
+    };
+    let rename = shown(&["rename", "1.0.0", "1.2.0"]);
+    assert!(rename.contains("new_name: Some(\"1.2.0\")"), "{rename}");
+    let merge = shown(&["merge", "1.1.0", "--into", "1.0.0"]);
+    assert!(merge.contains("into: Some(\"1.0.0\")"), "{merge}");
+    assert!(shown(&["rm", "1.0.0"]).contains("\"rm\""));
 }
 
 #[test]

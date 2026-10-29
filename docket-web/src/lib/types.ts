@@ -36,6 +36,8 @@ export interface Row {
   claim_runner?: string | null;
   claim_job?: string | null;
   claim_on?: string | null;
+  /** The word the claim's job left when it ended, empty for an end with no report; none while it runs. */
+  claim_report?: string | null;
   wait_on?: string | null;
   wait_ref?: string | null;
   wait_since?: string | null;
@@ -292,4 +294,14 @@ export interface Claim {
 export interface Summary {
   claims: Claim[];
   problems: Problem[];
+}
+
+/** One release as `/releases` lists it. */
+export interface ReleaseRowOut {
+  id: number;
+  name: string;
+  position: number;
+  target_date: string | null;
+  shipped_at: string | null;
+  note: string | null;
 }

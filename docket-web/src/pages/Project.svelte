@@ -1,8 +1,11 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { api } from '../lib/api';
   import { provide } from '../lib/context';
   import { board } from '../lib/flow';
+  import { fieldText } from '../lib/searchbox';
   import { releaseList } from '../lib/releases';
+  import { parseFilter, searchHref } from '../lib/filter';
   import { live, resource } from '../lib/live.svelte';
   import { href, type Tab } from '../lib/route';
   import { at, go, withParams } from '../lib/router.svelte';
@@ -20,6 +23,37 @@
 
   let { slug, tab }: { slug: string; tab: Tab } = $props();
   let creating = $state(false);
+  let searchBox: HTMLInputElement | undefined = $state();
+  let typed = $state(at.params.get('q') ?? '');
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const urlQuery = $derived(at.params.get('q') ?? '');
+
+  $effect(() => {
+    const q = urlQuery;
+    typed = fieldText(untrack(() => typed), q);
+  });
+
+  /** Typing goes to the Work tab's results, keeping the filter in the query string. */
+  function search(text: string) {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      const t = text.trim();
+      if (tab === 'work') go(withParams({ q: t || undefined, i: undefined }), true);
+      else go(searchHref(slug, t, parseFilter(at.params, { priorities, levels })), true);
+    }, 220);
+  }
+
+  function onkey(e: KeyboardEvent) {
+    const t = e.target as HTMLElement;
+    if (t.closest('input, textarea, select, [contenteditable]')) {
+      if (e.key === 'Escape' && t === searchBox) searchBox?.blur();
+      return;
+    }
+    if (e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      e.preventDefault();
+      searchBox?.focus();
+    }
+  }
 
   const graph = resource(
     () => api.graph(slug),
@@ -96,12 +130,23 @@
   }
 </script>
 
+<svelte:window onkeydown={onkey} />
+
 <div class="project">
   <header class="head">
     <div class="name">
       <h1><span class="owner">{owner}</span>{name}</h1>
       {#if session.me?.owner}<button class="btn small" onclick={() => (creating = true)}>New item</button>{/if}
     </div>
+    <input
+      bind:this={searchBox}
+      class="field search"
+      type="search"
+      placeholder="Search ids, titles, files and bodies"
+      bind:value={typed}
+      oninput={() => search(typed)}
+      aria-label="Search"
+    />
     <nav class="tabs" aria-label="Pages of {slug}">
       {#each TABS as t (t.tab)}
         <a href={href(slug, t.tab)} class:active={tab === t.tab} aria-current={tab === t.tab ? 'page' : undefined}
@@ -178,6 +223,12 @@
   .owner {
     color: var(--faint);
     font-weight: 500;
+  }
+
+  .search {
+    flex: 1 1 220px;
+    max-width: 360px;
+    margin-bottom: 10px;
   }
 
   .tabs {

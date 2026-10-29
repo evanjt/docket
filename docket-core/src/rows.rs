@@ -67,6 +67,9 @@ pub struct ItemRow {
     pub claim_job: Option<String>,
     #[serde(default)]
     pub claim_on: Option<String>,
+    /// The word the claim's job left when it ended, none while it runs.
+    #[serde(default)]
+    pub claim_report: Option<String>,
     /// What its dependencies hold it on, `item` or `condition`: `/items` sends none, so a reader fills
     /// it from `/waiting`.
     #[serde(default)]
@@ -111,6 +114,7 @@ impl ItemRow {
         self.claim_since = f.claim_since;
         self.claim_job = f.claim_job;
         self.claim_on = f.claim_on;
+        self.claim_report = f.claim_report;
     }
 }
 
@@ -150,6 +154,9 @@ pub struct Row {
     pub claim_job: Option<String>,
     #[serde(default)]
     pub claim_on: Option<String>,
+    /// The word the claim's job left when it ended, none while it runs.
+    #[serde(default)]
+    pub claim_report: Option<String>,
     #[serde(default)]
     pub wait_on: Option<String>,
     #[serde(default)]

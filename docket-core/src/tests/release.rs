@@ -91,3 +91,69 @@ fn test_a_release_ships_only_when_nothing_in_it_is_open() {
         "1.0.0 still holds 1 open: T1. Close them, or pass --move-open-to a later release."
     );
 }
+
+#[test]
+fn test_a_rename_is_placed_by_its_version_among_the_other_releases() {
+    let all = [
+        release("1.0.0", 0, true),
+        release("1.1.0", 1, false),
+        release("2.0.0", 2, false),
+    ];
+    assert_eq!(rename_place(&all, "1.1.0", "2.1.0"), Ok(2));
+    assert_eq!(rename_place(&all, "1.1.0", "1.0.5"), Ok(1));
+    assert_eq!(rename_place(&all, "2.0.0", "0.9.0"), Ok(0));
+}
+
+#[test]
+fn test_a_rename_is_refused_to_a_taken_name_a_bad_name_or_the_same_name() {
+    let all = [release("1.0.0", 0, false), release("1.1.0", 1, false)];
+    assert_eq!(
+        rename_place(&all, "1.1.0", "1.0.0"),
+        Err(Refused("1.0.0 is already a release".to_string()))
+    );
+    assert_eq!(
+        rename_place(&all, "1.1.0", "1.1.0"),
+        Err(Refused("1.1.0 already has that name".to_string()))
+    );
+    assert!(rename_place(&all, "1.1.0", "1.2").is_err());
+    assert!(rename_place(&all, "1.1.0", "current").is_err());
+}
+
+#[test]
+fn test_a_merge_is_refused_into_itself_or_into_a_shipped_release_while_items_are_open() {
+    assert_eq!(
+        merge_refusal("1.0.0", "1.0.0", false, &[]),
+        Some("1.0.0 cannot be merged into itself".to_string())
+    );
+    assert_eq!(
+        merge_refusal(
+            "1.1.0",
+            "1.0.0",
+            true,
+            &["T4".to_string(), "T5".to_string()]
+        ),
+        Some(
+            "1.0.0 has shipped and 1.1.0 still holds 2 open: T4, T5. Close them or move them \
+             to a release not shipped first."
+                .to_string()
+        )
+    );
+    assert_eq!(merge_refusal("1.1.0", "1.0.0", true, &[]), None);
+    assert_eq!(
+        merge_refusal("1.0.0", "1.1.0", false, &["T4".to_string()]),
+        None
+    );
+}
+
+#[test]
+fn test_a_release_is_removed_only_when_nothing_is_in_it() {
+    assert_eq!(rm_refusal("1.0.0", &[]), None);
+    assert_eq!(
+        rm_refusal("1.0.0", &["T1".to_string(), "T2".to_string()]),
+        Some(
+            "1.0.0 holds 2 items: T1, T2. Merge it into another release with docket releases \
+             merge, or move them first."
+                .to_string()
+        )
+    );
+}

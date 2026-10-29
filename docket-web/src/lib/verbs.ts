@@ -57,3 +57,22 @@ export function editRequest(
 export function moveRequest(id: string, release: string, common: { project: string; branch: string | null }): object {
   return { ...common, id, release, set: [], carry: false };
 }
+
+/** The request of one `releases` action: rename and merge read `to`, add reads a target date, ship and rm read the name alone. */
+export function releaseRequest(
+  action: 'add' | 'rename' | 'merge' | 'ship' | 'rm',
+  name: string,
+  opts: { to?: string; targetDate?: string },
+  common: { project: string; branch: string | null },
+): object {
+  const base = { ...common, action, name };
+  if (action === 'rename') return { ...base, rename: opts.to ?? '' };
+  if (action === 'merge') return { ...base, to: opts.to ?? '' };
+  if (action === 'add' && opts.targetDate) return { ...base, target_date: opts.targetDate };
+  return base;
+}
+
+/** What a release row offers beyond rename and merge: remove when it holds nothing, ship when nothing in it is open. */
+export function releaseActions(row: { open: number; closed: number }): { rm: boolean; ship: boolean } {
+  return { rm: row.open + row.closed === 0, ship: row.open === 0 };
+}

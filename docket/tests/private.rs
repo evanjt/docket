@@ -51,7 +51,7 @@ impl Checkout {
     }
 
     fn docket(&self, key: &str, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_docket"))
+        common::docket_command()
             .args(args)
             .current_dir(&self.repo)
             .env("XDG_CONFIG_HOME", &self.config)

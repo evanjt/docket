@@ -17,8 +17,9 @@ use docket_core::machine::{Limit, Machine};
 
 use crate::ctx::Ctx;
 use crate::dispatch::{
-    Here, Via, branch_for, catch_up, commit_change, commit_message, ended_in, git, gone,
-    limited_runners, nonce, push_to_machine, ranked, read_machines_now, role_for, runner_counts,
+    Here, JobClaim as Claim, Via, any_ended, branch_for, catch_up, commit_change, commit_message,
+    ended_in, git, gone, job_claims, limited_runners, nonce, push_to_machine, ranked,
+    read_machines_now, role_for, runner_counts,
 };
 use crate::fail::{Fail, Result};
 use crate::job::{self, Change};
@@ -372,10 +373,7 @@ fn wait_for_an_end(
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => std::thread::sleep(every),
             Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
         }
-        if held
-            .iter()
-            .any(|c| reported_end(ctx, &c.project, &c.id, &c.branch).is_some())
-        {
+        if claims(ctx, slug.is_none()).is_ok_and(|now| any_ended(held, &now)) {
             return;
         }
         if read_machines_now(read_at.elapsed(), fallback()) {
@@ -1219,17 +1217,8 @@ fn limit_note(machines: &[Machine], runner: &str, now: &str) -> String {
     out
 }
 
-/// A claim held by a job a lead started on a machine.
-struct Claim {
-    project: String,
-    id: String,
-    machine: String,
-    job: String,
-    branch: String,
-}
-
 /// The claims of jobs on the server, this project's or every project's. The server holds each one
-/// with its job and machine, so no machine is asked.
+/// with its job, its machine and the word its end left, so no machine is asked.
 fn claims(ctx: &mut Ctx, all: bool) -> Result<Vec<Claim>> {
     let slugs = if all {
         ctx.api.slugs()?
@@ -1239,33 +1228,16 @@ fn claims(ctx: &mut Ctx, all: bool) -> Result<Vec<Claim>> {
     let mut out = Vec::new();
     for slug in slugs {
         let rows: Value = ctx.api.get("/wip", &[("project", slug.clone())])?;
-        for r in rows.as_array().into_iter().flatten() {
-            if let (Some(id), Some(machine), Some(job), Some(branch)) = (
-                r["id"].as_str(),
-                r["claim_on"].as_str(),
-                r["claim_job"].as_str(),
-                r["claim_branch"].as_str(),
-            ) {
-                out.push(Claim {
-                    project: slug.clone(),
-                    id: id.to_string(),
-                    machine: machine.to_string(),
-                    job: job.to_string(),
-                    branch: branch.to_string(),
-                });
-            }
-        }
+        out.extend(job_claims(&slug, &rows));
     }
     Ok(out)
 }
 
 /// The claims whose job has not reported its end.
 fn live_claims(ctx: &mut Ctx, all: bool) -> Result<Vec<Claim>> {
-    let all = claims(ctx, all)?;
-    Ok(all
-        .into_iter()
-        .filter(|c| reported_end(ctx, &c.project, &c.id, &c.branch).is_none())
-        .collect())
+    let mut out = claims(ctx, all)?;
+    out.retain(|c| !c.ended);
+    Ok(out)
 }
 
 /// The jobs running on each machine, counted from their claims.

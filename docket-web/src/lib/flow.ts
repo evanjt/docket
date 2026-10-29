@@ -2,14 +2,16 @@ import type { EventRow, Graph, GraphNode, Kind, Progress } from './types';
 import { day, epoch } from './time';
 
 /** The flow read left to right, then the words that sit beside it. */
-export const FLOW = ['ready', 'in progress'] as const;
-export const ASIDE = ['blocked', 'waiting on owner', 'parked'] as const;
+export const FLOW = ['ready', 'in progress', 'to land'] as const;
+export const ASIDE = ['job failed', 'blocked', 'waiting on owner', 'parked'] as const;
 export const CLOSED = ['done', 'dropped'];
 
 /** What each word means, as the TUI's help words it. */
 export const MEANING: Record<string, string> = {
   ready: 'waiting for an agent to take it',
   'in progress': 'a job or a person is working on it now',
+  'to land': 'its job reported DONE: the build waits for the lead to land it',
+  'job failed': 'its job ended without a build to land: the claim waits to be given back',
   'under way': 'a plan whose tickets are open: not running work itself',
   'audit due': 'a plan whose tickets are all closed, waiting for its audit',
   blocked: 'held by a dependency that is not yet satisfied',
@@ -29,6 +31,13 @@ export const GROUPINGS: { kind: Kind; title: string }[] = [
 /** The custom property that colours a word; a word of several is joined with dashes. */
 export function wordVar(word: string): string {
   return `var(--w-${word.replace(/ /g, '-')})`;
+}
+
+/** Where a word stands in reading order: the flow, then the words beside it, then the closed ones; unknown words last. */
+export function wordRank(word: string | undefined): number {
+  const order: readonly string[] = [...FLOW, ...ASIDE, ...CLOSED];
+  const at = order.indexOf(word ?? '');
+  return at < 0 ? order.length : at;
 }
 
 export function isClosed(word: string): boolean {

@@ -2,7 +2,7 @@ use super::*;
 
 use crate::scratch::Scratch;
 
-const MIGRATIONS: [&str; 29] = [
+const MIGRATIONS: [&str; 30] = [
     "m20261001_000001_schema",
     "m20261002_000001_machines_and_leads",
     "m20261005_000001_owner_facts",
@@ -32,6 +32,7 @@ const MIGRATIONS: [&str; 29] = [
     "m20261006_235900_outcome_ended",
     "m20261007_073521_events_close_index",
     "m20261009_073000_project_rename",
+    "m20261029_090535_job_report",
 ];
 
 /// A project with one row in every table that references its slug, as the tree stands just before
@@ -1229,4 +1230,43 @@ async fn test_the_closes_of_a_project_read_from_an_index_on_its_events_by_kind()
             .is_some_and(|d| d.ends_with("(project, kind, rid, at)")),
         "{index:?}"
     );
+}
+
+#[tokio::test]
+async fn test_each_claim_takes_the_report_word_its_jobs_end_left() {
+    let s = Scratch::bare(2).await;
+    Migrator::up(&s.db, Some(steps_before("m20261029_090535_job_report")))
+        .await
+        .unwrap();
+    s.seed(
+        r#"INSERT INTO projects (slug, created_at, updated_at) VALUES ('pottery/kiln', 'c', 'u');
+INSERT INTO areas (id, project, name, position) VALUES (1, 'pottery/kiln', 'wheel', 1);
+INSERT INTO items (rid, project, key, num, title, state, opened_at, updated_at, area_id) VALUES
+  (1, 'pottery/kiln', 'T', 1, 'Wedge the clay', 'open', 'o', 'u', 1),
+  (2, 'pottery/kiln', 'T', 2, 'Trim the foot', 'open', 'o', 'u', 1),
+  (3, 'pottery/kiln', 'T', 3, 'Glaze the cup', 'open', 'o', 'u', 1);
+INSERT INTO assignments (rid, assignee, kind, started_at, ended_at, branch, host) VALUES
+  (1, 'agent', 'claim', 's1', 'e1', 'build/t1-1', 'bench'),
+  (1, 'agent', 'claim', 's2', NULL, 'build/t1-2', 'bench'),
+  (2, 'agent', 'claim', 's3', NULL, 'build/t2-1', 'bench'),
+  (3, 'agent', 'claim', 's4', NULL, 'build/t3-1', 'bench');
+INSERT INTO events (uid, project, rid, at, host, branch, kind, data) VALUES
+  ('a', 'pottery/kiln', 1, 's1', 'bench', 'build/t1-1', 'claimed', NULL),
+  ('b', 'pottery/kiln', 1, 'r1', 'bench', 'build/t1-1', 'job_reported', '{"end": "x", "report": "FAILED the gates"}'),
+  ('c', 'pottery/kiln', 1, 'e1', 'bench', 'build/t1-1', 'released', NULL),
+  ('d', 'pottery/kiln', 1, 's2', 'bench', 'build/t1-2', 'claimed', NULL),
+  ('e', 'pottery/kiln', 1, 'r2', 'bench', 'build/t1-2', 'job_reported', '{"end": "y", "report": "DONE the note"}'),
+  ('f', 'pottery/kiln', 2, 's3', 'bench', 'build/t2-1', 'claimed', NULL),
+  ('g', 'pottery/kiln', 2, 'r3', 'bench', 'build/t2-1', 'job_reported', '{"end": "z", "exit": 1}'),
+  ('h', 'pottery/kiln', 3, 's4', 'bench', 'build/t3-1', 'claimed', NULL);"#,
+    )
+    .await;
+    Migrator::up(&s.db, Some(1)).await.unwrap();
+    let got = pairs(
+        &s,
+        "SELECT started_at, COALESCE(job_report, '-') FROM assignments ORDER BY started_at",
+    )
+    .await;
+    let want = [("s1", "FAILED"), ("s2", "DONE"), ("s3", ""), ("s4", "-")];
+    assert_eq!(got, want.map(|(a, b)| (a.to_string(), b.to_string())));
 }

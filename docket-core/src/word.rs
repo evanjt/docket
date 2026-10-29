@@ -125,6 +125,8 @@ pub enum Word {
     Done,
     Dropped,
     InProgress,
+    ToLand,
+    JobFailed,
     Blocked,
     WaitingOnOwner,
     Parked,
@@ -140,12 +142,37 @@ impl Word {
             Word::Done => "done",
             Word::Dropped => "dropped",
             Word::InProgress => "in progress",
+            Word::ToLand => "to land",
+            Word::JobFailed => "job failed",
             Word::Blocked => "blocked",
             Word::WaitingOnOwner => "waiting on owner",
             Word::Parked => "parked",
             Word::UnderWay => "under way",
             Word::AuditDue => "audit due",
             Word::Ready => "ready",
+        }
+    }
+}
+
+/// Where the job behind an open claim stands: running until it reports an end, then done when its
+/// report says DONE and failed for any other report or none.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum JobEnd {
+    #[default]
+    Running,
+    Done,
+    Failed,
+}
+
+impl JobEnd {
+    /// The end a claim's stored report word names: none while the job has not reported its end, empty
+    /// for an end reported with no report line.
+    #[must_use]
+    pub fn of(report: Option<&str>) -> Self {
+        match report {
+            None => JobEnd::Running,
+            Some("DONE") => JobEnd::Done,
+            Some(_) => JobEnd::Failed,
         }
     }
 }
@@ -157,6 +184,8 @@ pub struct Standing<'a> {
     pub state: &'a str,
     /// An assignment of the item is open.
     pub open_assignment: bool,
+    /// Where the job behind the open claim stands.
+    pub job_end: JobEnd,
     /// A dependency of the item is not yet satisfied.
     pub unsatisfied_dependency: bool,
     /// The item's assignee is the owner, or it is a question without a decision.
@@ -169,13 +198,15 @@ pub struct Standing<'a> {
 }
 
 impl<'a> Standing<'a> {
-    /// The standing of an item from its stored columns: the claim is its open assignment, a wait
-    /// its unsatisfied dependency, the user's turn the owner's, and every item is released.
+    /// The standing of an item from its stored columns: the claim is its open assignment, with the
+    /// end its job reported, a wait its unsatisfied dependency, the user's turn the owner's, and
+    /// every item is released.
     #[must_use]
-    pub fn of(state: &'a str, claimed: bool, waiting: bool, turn: Option<&str>) -> Self {
+    pub fn of(state: &'a str, claim: Option<JobEnd>, waiting: bool, turn: Option<&str>) -> Self {
         Standing {
             state,
-            open_assignment: claimed,
+            open_assignment: claim.is_some(),
+            job_end: claim.unwrap_or_default(),
             unsatisfied_dependency: waiting,
             owner_turn: turn == Some("user"),
             released: true,
@@ -215,7 +246,11 @@ pub fn status(item: &Standing<'_>) -> Word {
         _ => {}
     }
     if item.open_assignment {
-        Word::InProgress
+        match item.job_end {
+            JobEnd::Running => Word::InProgress,
+            JobEnd::Done => Word::ToLand,
+            JobEnd::Failed => Word::JobFailed,
+        }
     } else if item.unsatisfied_dependency {
         Word::Blocked
     } else if item.owner_turn {

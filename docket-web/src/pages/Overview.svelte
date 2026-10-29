@@ -18,8 +18,6 @@
   const ctx = project();
   const READ = 300;
   const DAYS = 14;
-  /** The most open and close events the chart reads, so a burst of thousands cannot stall the page. */
-  const MOST = 20_000;
   const NEXT = 8;
   const MOVES = 6;
 
@@ -55,12 +53,7 @@
   const counts = $derived(checkCounts(summary.data?.problems ?? [], ctx.slug));
   const OPEN_WORDS = ['ready', 'in progress', 'plans under way', 'waiting on owner', 'blocked', 'held later'];
   const host = (h: string | null | undefined) => (h ?? '').split('.')[0];
-  /** The ends jobs reported since the oldest claim was made: all a claim's end can be among. */
-  const reports = resource(() => {
-    const since = (wip.data ?? []).map((r) => r.claim_since).filter((t): t is string => !!t).sort()[0];
-    return since ? api.since(ctx.slug, since, ['job_reported'], MOST) : null;
-  });
-  const use = $derived(machines.data && wip.data ? machineUse(machines.data, wip.data, reports.data ?? [], session.me?.host ?? '', now) : []);
+  const use = $derived(machines.data && wip.data ? machineUse(machines.data, wip.data, session.me?.host ?? '', now) : []);
   const COUNTED = ['claimed', 'released'];
 </script>
 

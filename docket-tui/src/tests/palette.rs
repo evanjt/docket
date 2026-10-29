@@ -139,6 +139,25 @@ fn test_split_keeps_quoted_runs_whole() {
 }
 
 #[test]
+fn test_parse_release_rename_merge_and_rm_post_their_requests() {
+    let (_, body) = post("releases rename 9.9.9 9.9.8", &[]);
+    assert_eq!(
+        (&body["action"], &body["name"], &body["rename"]),
+        (&json!("rename"), &json!("9.9.9"), &json!("9.9.8"))
+    );
+    let (_, body) = post("releases merge 9.9.9 --into 9.9.10", &[]);
+    assert_eq!(
+        (&body["action"], &body["to"]),
+        (&json!("merge"), &json!("9.9.10"))
+    );
+    let (_, body) = post("releases rm 9.9.9", &[]);
+    assert_eq!(
+        (&body["action"], &body["name"]),
+        (&json!("rm"), &json!("9.9.9"))
+    );
+}
+
+#[test]
 fn test_parse_setup_verbs_post_their_requests() {
     let (verb, body) = post(
         "releases add 9.9.9 --target 2030-01-01 --note 'a line'",

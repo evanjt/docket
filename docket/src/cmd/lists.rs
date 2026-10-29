@@ -65,6 +65,17 @@ pub fn next(ctx: &mut Ctx, q: &Queue) -> Result<i32> {
     {
         println!("Halt: {why}\n");
     }
+    if !ctx.json {
+        let stalls = ctx.read("/next/stalls", &[])?;
+        for line in stalls["stalls"].as_array().into_iter().flatten() {
+            if let Some(line) = line.as_str() {
+                println!("Stall: {line}");
+            }
+        }
+        if stalls["stalls"].as_array().is_some_and(|l| !l.is_empty()) {
+            println!();
+        }
+    }
     if !ctx.json
         && let Some(line) = crate::cmd::published::offer(ctx)
     {
@@ -130,7 +141,7 @@ pub fn wip(ctx: &mut Ctx, host: Option<&String>) -> Result<i32> {
     let pairs = [("host", host.cloned())];
     let rows = ctx.read("/wip", &pairs)?;
     if ctx.json {
-        print_rows(ctx, &rows, "Nothing claimed.");
+        ctx.emit(&items_json(&rows, &[], &["claim_land"]));
         return Ok(0);
     }
     let rows = rows_of(&rows);
@@ -139,10 +150,8 @@ pub fn wip(ctx: &mut Ctx, host: Option<&String>) -> Result<i32> {
         return Ok(0);
     }
     let shares = ctx.read("/shares", &pairs)?;
-    for (i, (word, held)) in list::wip_groups(&rows, crate::cmd::status::now())
-        .into_iter()
-        .enumerate()
-    {
+    let now = crate::cmd::status::now();
+    for (i, (word, held)) in list::wip_groups(&rows, now).into_iter().enumerate() {
         if i > 0 {
             println!();
         }
@@ -155,7 +164,7 @@ pub fn wip(ctx: &mut Ctx, host: Option<&String>) -> Result<i32> {
                 .unwrap_or_default();
             println!(
                 "{}",
-                list::wip_row(&word, &r, minutes, about["flag"].as_str())
+                list::wip_row(&word, &r, minutes, about["flag"].as_str(), now)
             );
             for s in about["shares"].as_array().into_iter().flatten() {
                 println!("       {}", shares_text(s));

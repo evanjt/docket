@@ -281,12 +281,38 @@ fn test_the_audit_skill_files_only_critical_and_high_gaps() {
 }
 
 #[test]
-fn test_both_lead_variants_land_in_a_batch_and_resolve_conflicts_themselves() {
+fn test_both_lead_variants_land_through_docket_land_and_never_run_a_gate() {
     let lead = SKILLS.iter().find(|s| s.name == "lead").unwrap();
     for text in [lead.claude, lead.codex] {
-        assert!(text.contains("lead/batch"));
-        assert!(text.contains("A conflict is yours to resolve"));
+        assert!(text.contains("docket land"));
+        assert!(text.contains("docket land --back"));
+        assert!(text.contains("docket land --log"));
+        assert!(text.contains("Stall:"));
+        assert!(text.contains("The lead never runs a gate itself"));
+        assert!(!text.contains("git merge --ff-only"));
+        assert!(!text.contains("lead/batch"));
+        assert!(!text.contains("../merge-batch"));
         assert!(!text.contains("never resolved by hand"));
+    }
+}
+
+#[test]
+fn test_both_lead_variants_set_an_unset_gate_fact_from_the_gates_fact() {
+    let lead = SKILLS.iter().find(|s| s.name == "lead").unwrap();
+    for text in [lead.claude, lead.codex] {
+        assert!(text.contains("docket skills gate"));
+        assert!(text.contains("When `gate` is unset"));
+        assert!(text.contains("derived from the `gates` fact"));
+    }
+}
+
+#[test]
+fn test_both_work_variants_hand_a_branch_to_docket_land_where_the_gate_fact_is_set() {
+    let work = SKILLS.iter().find(|s| s.name == "work").unwrap();
+    for text in [work.claude, work.codex] {
+        assert!(text.contains("docket land T14"));
+        assert!(text.contains("`gate` fact"));
+        assert!(text.contains("gate failed or conflict"));
     }
 }
 

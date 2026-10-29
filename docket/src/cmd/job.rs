@@ -46,13 +46,25 @@ pub fn job(flags: &Flags, what: &JobCmd) -> Result<i32> {
                 .filter(|r| name.as_ref().is_none_or(|n| &r.name == n))
                 .filter(|r| flags.project.as_ref().is_none_or(|p| &r.project == p))
                 .collect();
+            let gates = match (&name, &flags.project) {
+                (None, Some(p)) => job::gate_runs(&root, p, job::now()),
+                _ => Vec::new(),
+            };
             if flags.json {
-                println!("{}", serde_json::to_string(&rows).unwrap_or_default());
-            } else if rows.is_empty() {
+                let mut all: Vec<serde_json::Value> = rows
+                    .iter()
+                    .filter_map(|r| serde_json::to_value(r).ok())
+                    .collect();
+                all.extend(gates);
+                println!("{}", serde_json::Value::Array(all));
+            } else if rows.is_empty() && gates.is_empty() {
                 println!("no jobs on this machine");
             } else {
                 for r in &rows {
                     println!("{}", line(r));
+                }
+                for g in &gates {
+                    println!("{}", crate::cmd::dispatch::line(g));
                 }
             }
             Ok(0)

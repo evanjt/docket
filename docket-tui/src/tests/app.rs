@@ -374,3 +374,24 @@ fn test_browser_rows_show_their_area_and_an_area_filter_keeps_only_its_rows() {
     assert_eq!(ids(&mut a, "Lanterns"), ["T3"]);
     assert_eq!(ids(&mut a, "kites"), [] as [std::string::String; 0]);
 }
+
+#[test]
+fn test_a_claimed_row_names_the_landing_stage_of_its_build() {
+    let now = docket_core::pace::epoch("2026-10-29T12:00:00Z").unwrap();
+    let mut r = docket_core::rows::Row {
+        claim_branch: Some("build/x".into()),
+        claim_host: Some("devbox.lan".into()),
+        claim_since: Some("2026-10-29T09:00:00Z".into()),
+        ..docket_core::rows::Row::default()
+    };
+    assert!(!view::project::claim_text(&r, now).contains("ago"));
+    r.claim_land = Some(docket_core::assignment::Land {
+        stage: docket_core::assignment::Stage::GateFailed,
+        at: "2026-10-29T11:48:00Z".into(),
+        note: None,
+        batch: None,
+    });
+    let text = view::project::claim_text(&r, now);
+    assert!(text.starts_with("build/x on devbox  3h 00m"), "{text}");
+    assert!(text.contains("gate failed 12m ago"), "{text}");
+}

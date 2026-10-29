@@ -183,6 +183,8 @@ pub struct JobClaim {
     pub job: String,
     pub branch: String,
     pub ended: bool,
+    /// When its landing stage last moved, if it has one.
+    pub land_at: Option<String>,
 }
 
 /// The claims among a project's `/wip` rows that a job holds on a machine. A job has ended once its
@@ -204,10 +206,27 @@ pub fn job_claims(slug: &str, rows: &serde_json::Value) -> Vec<JobClaim> {
                 job: job.to_string(),
                 branch: branch.to_string(),
                 ended: !r["claim_report"].is_null(),
+                land_at: r["claim_land"]["at"].as_str().map(str::to_string),
             });
         }
     }
     out
+}
+
+/// The names of the gate runs a machine's job rows show running.
+#[must_use]
+pub fn running_gate_runs(rows: &[serde_json::Value]) -> Vec<String> {
+    rows.iter()
+        .filter(|r| r["role"] == "gate" && r["state"] == "running")
+        .filter_map(|r| r["name"].as_str().map(str::to_string))
+        .collect()
+}
+
+/// Whether a gate run of `started` no longer shows running in `now`.
+#[must_use]
+pub fn gate_run_ended(started: &[String], now: &[serde_json::Value]) -> bool {
+    let still = running_gate_runs(now);
+    started.iter().any(|n| !still.contains(n))
 }
 
 /// Whether a job of the claims `held` has ended by `now`, the claims read since: its claim holds the
@@ -218,6 +237,19 @@ pub fn any_ended(held: &[JobClaim], now: &[JobClaim]) -> bool {
         !now.iter()
             .any(|c| !c.ended && c.project == h.project && c.id == h.id && c.branch == h.branch)
     })
+}
+
+/// Whether a land event has happened between the claims `before` and `now`: a claim's landing
+/// stage moved or appeared, or a claim that had one is held no more.
+#[must_use]
+pub fn land_moved(before: &[JobClaim], now: &[JobClaim]) -> bool {
+    let same =
+        |a: &JobClaim, b: &JobClaim| a.project == b.project && a.id == b.id && a.branch == b.branch;
+    now.iter().any(|c| {
+        c.land_at.is_some() && !before.iter().any(|b| same(b, c) && b.land_at == c.land_at)
+    }) || before
+        .iter()
+        .any(|b| b.land_at.is_some() && !now.iter().any(|c| same(b, c)))
 }
 
 /// The end a job reported for the claim on `branch`, from the item's log: the data of the newest

@@ -50,7 +50,15 @@ pub fn show(ctx: &mut Ctx, item: &str) -> Result<i32> {
         }
         let mut out = item_json(&v, &[], &[]);
         if let Json::Dict(fields) = &mut out {
-            for k in ["related", "parent", "origin", "children"] {
+            for k in [
+                "claim_report",
+                "claim_ended_at",
+                "claim_land",
+                "related",
+                "parent",
+                "origin",
+                "children",
+            ] {
                 fields.push((k.into(), Json::from_value(&v[k])));
             }
             let cites = v["cites"].as_array().into_iter().flatten();

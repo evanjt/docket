@@ -27,7 +27,9 @@ pub const BRIEFS: [(&str, &str); 3] = [
 ];
 
 /// The verbs only the lead runs: a job asking for one is refused.
-pub const LEAD_VERBS: [&str; 6] = ["start", "unclaim", "release", "close", "drop", "reopen"];
+pub const LEAD_VERBS: [&str; 7] = [
+    "start", "unclaim", "release", "close", "drop", "reopen", "land",
+];
 
 /// The shell that runs the session, records its exit code once it ends, then has the reporter post
 /// the end to the server. `$1` is the job's directory, `$2` the reporter's path or nothing, the rest
@@ -740,6 +742,57 @@ pub fn rows(root: &Path, at: u64) -> Vec<(Row, u64)> {
     out
 }
 
+/// The gate runs of a project as job rows: each `.land-` directory under its jobs, with the
+/// batch members its run recorded. A run is running while its process lives and no exit is written.
+#[must_use]
+pub fn gate_runs(root: &Path, slug: &str, at: u64) -> Vec<Value> {
+    let Ok(dirs) = fs::read_dir(project_dir(root, slug)) else {
+        return Vec::new();
+    };
+    let mut out: Vec<Value> = dirs
+        .flatten()
+        .filter(|d| d.file_name().to_string_lossy().starts_with(".land-"))
+        .filter_map(|d| {
+            let dir = d.path();
+            let exit = read(&dir, "exit");
+            let live = number(&dir, "pid").is_some_and(alive);
+            let state = match exit.as_deref().map(str::trim) {
+                Some("0") => "done",
+                Some(_) => "failed",
+                None if live => "running",
+                None if number(&dir, "pid").is_none() => return None,
+                None => "dead",
+            };
+            let from = fs::metadata(dir.join("pid"))
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map_or(at, |t| t.as_secs());
+            let to = if state == "running" {
+                at
+            } else {
+                fs::metadata(dir.join("exit"))
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                    .map_or(at, |t| t.as_secs())
+            };
+            Some(serde_json::json!({
+                "name": d.file_name().to_string_lossy(),
+                "project": slug,
+                "id": "",
+                "role": "gate",
+                "state": state,
+                "minutes": to.saturating_sub(from) / 60,
+                "report": read(&dir, "members").unwrap_or_default().trim(),
+                "dir": dir.display().to_string(),
+            }))
+        })
+        .collect();
+    out.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+    out
+}
+
 /// The directory of the job with this name, within one project when one is given.
 ///
 /// # Errors
@@ -1141,6 +1194,18 @@ fn provision(dir: &Path, cmd: Option<&str>) -> Result<(), String> {
         out.status,
         text.trim()
     ))
+}
+
+/// A command run in the background under the recording shell, as a job's session is, with nothing
+/// to report its end: its exit code, output and pid are written in `dir`.
+///
+/// # Errors
+/// The command cannot be started, or its pid not written.
+pub fn detach(dir: &Path, cwd: &Path, program: &str, argv: &[String]) -> io::Result<()> {
+    let child = spawn(dir, cwd, program, argv, &[], &Launch::default())?;
+    let pid = child.id().to_string();
+    fs::write(dir.join("pid"), &pid)?;
+    fs::write(dir.join("pgid"), &pid)
 }
 
 /// The session under the recording shell, in a new session and process group, reading nothing.

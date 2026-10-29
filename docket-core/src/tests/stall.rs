@@ -246,3 +246,65 @@ fn test_a_wait_is_the_oldest_dependency_still_held_by_what_holds_it() {
     assert_eq!((w.on, w.item), ("condition", 4));
     assert!(w.is_condition());
 }
+
+fn input() -> Input {
+    Input {
+        machines: vec![(4, 1), (2, 2)],
+        ready: 3,
+        lead: true,
+        last_dispatch: Some(100 * DAY - 20 * 60),
+        landing: vec![],
+        gate_running: false,
+    }
+}
+
+#[test]
+fn test_free_slots_and_ready_items_with_no_dispatch_for_stall_after_give_the_slot_line() {
+    let now = 100 * DAY;
+    assert_eq!(
+        stalls(now, 15, &input()),
+        ["3 slots free and 3 items ready, no dispatch for 20 minutes"]
+    );
+    assert_eq!(stalls(now, 30, &input()).len(), 0);
+}
+
+#[test]
+fn test_no_lead_no_free_slot_or_no_ready_item_gives_no_slot_line() {
+    let now = 100 * DAY;
+    let mut i = input();
+    i.lead = false;
+    assert_eq!(stalls(now, 15, &i).len(), 0);
+    let mut i = input();
+    i.machines = vec![(2, 2)];
+    assert_eq!(stalls(now, 15, &i).len(), 0);
+    let mut i = input();
+    i.ready = 0;
+    assert_eq!(stalls(now, 15, &i).len(), 0);
+}
+
+#[test]
+fn test_a_build_waiting_to_land_with_no_gate_run_gives_the_landing_line() {
+    let now = 100 * DAY;
+    let mut i = input();
+    i.lead = false;
+    i.landing = vec![
+        ("T14".to_string(), now - 20 * 60),
+        ("T15".to_string(), now - 60),
+    ];
+    assert_eq!(
+        stalls(now, 15, &i),
+        ["T14 has waited 20 minutes to land, no gate run going"]
+    );
+    i.gate_running = true;
+    assert_eq!(stalls(now, 15, &i).len(), 0);
+}
+
+#[test]
+fn test_a_gating_stage_older_than_the_job_timeout_is_no_gate_run_going() {
+    let now = 100 * DAY;
+    let since = [now - 30 * 60, now - 130 * 60];
+    assert!(gate_going(now, 120, &since[..1]));
+    assert!(!gate_going(now, 120, &since[1..]));
+    assert!(gate_going(now, 120, &since));
+    assert!(!gate_going(now, 120, &[]));
+}

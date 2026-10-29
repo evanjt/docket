@@ -312,6 +312,33 @@ fn machines(d: &mut Doc, data: &ProjectData, width: usize) {
 }
 
 /// CLAIMED NOW: every claim, its branch, the host it was claimed on and for how long.
+/// A claim's branch, host, how long it has been held and its runner and job, then the landing stage
+/// of its build once it is queued.
+#[must_use]
+pub fn claim_text(r: &Row, now: i64) -> String {
+    let host = r
+        .claim_host
+        .as_deref()
+        .map_or("", |h| h.split('.').next().unwrap_or(""));
+    let since = r
+        .claim_since
+        .as_deref()
+        .and_then(docket_core::pace::epoch)
+        .map_or_else(String::new, |t| duration(now - t));
+    let branch = r.claim_branch.clone().unwrap_or_default();
+    let runner = match (r.claim_runner.as_deref(), r.claim_job.as_deref()) {
+        (Some(runner), Some(job)) => format!("  {runner} {job}"),
+        (None, Some(job)) => format!("  {job}"),
+        (Some(runner), None) => format!("  {runner}"),
+        (None, None) => String::new(),
+    };
+    let land = r
+        .claim_land
+        .as_ref()
+        .map_or_else(String::new, |l| format!("  [{}]", l.words(now)));
+    format!("{branch} on {host}  {since}{runner}{land}")
+}
+
 fn claimed(d: &mut Doc, board: &Board, wip: &[Row], now: i64, width: usize) {
     d.line(vec![spot(
         format!("CLAIMED NOW  {}", wip.len()),
@@ -322,28 +349,9 @@ fn claimed(d: &mut Doc, board: &Board, wip: &[Row], now: i64, width: usize) {
         d.plain(" nothing claimed", style::dim());
     }
     for r in wip.iter().take(ROWS) {
-        let host = r
-            .claim_host
-            .as_deref()
-            .map_or("", |h| h.split('.').next().unwrap_or(""));
-        let since = r
-            .claim_since
-            .as_deref()
-            .and_then(docket_core::pace::epoch)
-            .map_or_else(String::new, |t| duration(now - t));
-        let branch = r.claim_branch.clone().unwrap_or_default();
-        let runner = match (r.claim_runner.as_deref(), r.claim_job.as_deref()) {
-            (Some(runner), Some(job)) => format!("  {runner} {job}"),
-            (None, Some(job)) => format!("  {job}"),
-            (Some(runner), None) => format!("  {runner}"),
-            (None, None) => String::new(),
-        };
         let mut segs = vec![seg(" ", Style::default())];
         segs.extend(item_spot(board, &r.id, 7));
-        segs.push(seg(
-            format!("{branch} on {host}  {since}{runner}"),
-            Style::default(),
-        ));
+        segs.push(seg(claim_text(r, now), Style::default()));
         d.line(fit(segs, width));
     }
     more(d, wip.len());

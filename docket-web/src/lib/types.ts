@@ -159,6 +159,8 @@ export interface Status {
   total: number;
   by_word: Record<string, number>;
   by_key: Record<string, Record<string, number>>;
+  /** Lines for a free slot and a ready item left idle, or a build left waiting to land. */
+  stalls?: string[];
 }
 
 export interface EventRow {

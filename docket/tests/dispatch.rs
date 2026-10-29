@@ -1063,3 +1063,273 @@ fn test_a_job_is_refused_unless_its_machine_names_an_agent_key() {
         );
     }
 }
+
+/// The stand-in agent's change when several of its jobs land together: a file named after the job,
+/// so no two conflict.
+const WRITES_ITS_OWN_FILE: &str = r#"echo "$DOCKET_JOB" > "$DOCKET_JOB.txt"
+printf '{"type":"result","result":"NOTE wrote its file\\nMESSAGE Write its own file\\nDONE"}\n'
+exit 0"#;
+
+/// A claim of `id` made by hand on `branch`, which holds one commit adding `file` to the lead's
+/// checkout, the checkout left on main.
+fn hand_branch(w: &World, id: &str, branch: &str, file: &str, line: &str) {
+    let alpha = w.home("alpha").join("src/p");
+    sh(
+        &alpha,
+        &format!(
+            "git checkout -q -b {branch} main && printf '{line}\\n' > {file} && git add {file} \
+             && git -c user.name=o -c user.email=o@example.org commit -q -m 'Hand {line}' \
+             && git checkout -q main"
+        ),
+    );
+    let out = w.lead(&["--branch", branch, "start", id]);
+    assert!(out.status.success(), "{}", text(&out));
+}
+
+/// Polls until `done` holds for the shown item, or fails after a minute.
+fn until(w: &World, id: &str, what: &str, done: impl Fn(&serde_json::Value) -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        let shown = w.show(id);
+        if done(&shown) {
+            return;
+        }
+        if std::time::Instant::now() > deadline {
+            let runs = sh(
+                &w.home("alpha"),
+                "cat .state/docket/jobs/*/.land-*/stderr 2>/dev/null || true",
+            );
+            panic!("{id} never {what}: {shown}\ngate run: {runs}");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+}
+
+fn stage(shown: &serde_json::Value) -> &str {
+    shown["claim_land"]["stage"].as_str().unwrap_or_default()
+}
+
+fn set_fact(w: &World, key: &str, value: &str) {
+    let out = w.lead(&["skills", "set", key, value]);
+    assert!(out.status.success(), "{}", text(&out));
+}
+
+#[test]
+fn test_land_is_refused_until_the_gate_fact_is_set() {
+    let w = World::new();
+    hand_branch(&w, "T4", "hand/t4", "four.txt", "four");
+    let out = w.lead(&["land", "T4"]);
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(
+        text(&out).contains("docket skills set gate"),
+        "{}",
+        text(&out)
+    );
+    assert!(w.show("T4")["claim_land"].is_null());
+}
+
+#[test]
+fn test_two_jobs_and_a_hand_branch_land_as_one_batch_and_close_with_their_merge_shas() {
+    let mut w = World::new();
+    w.does = WRITES_ITS_OWN_FILE.into();
+    for id in ["T1", "T3"] {
+        let out = w.lead(&["dispatch", id, "--on", "beta"]);
+        assert!(out.status.success(), "{}", text(&out));
+    }
+    for id in ["T1", "T3"] {
+        until(&w, id, "ended", |s| s["claim_report"] == "DONE");
+    }
+    hand_branch(&w, "T4", "hand/t4", "four.txt", "four");
+    let branches: Vec<String> = ["T1", "T3", "T4"]
+        .iter()
+        .map(|id| w.show(id)["claim_branch"].as_str().unwrap().to_string())
+        .collect();
+    set_fact(&w, "gate", "echo gated here");
+
+    let out = w.lead(&["land", "T1", "T3", "T4"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains("queued"), "{}", text(&out));
+    for id in ["T1", "T3", "T4"] {
+        until(&w, id, "closed", |s| s["state"] == "done");
+    }
+
+    let alpha = w.home("alpha").join("src/p");
+    let merges = sh(&alpha, "git log --first-parent --format='%H %P|%s' main");
+    let lines: Vec<&str> = merges.lines().collect();
+    assert_eq!(
+        lines.len(),
+        4,
+        "three merges on start, fast-forwarded: {merges}"
+    );
+    let bases: Vec<&str> = lines[..3]
+        .iter()
+        .map(|l| l.split(' ').nth(1).unwrap())
+        .collect();
+    assert_eq!(bases[2], lines[3].split(' ').next().unwrap(), "{merges}");
+    for ((id, branch), subject) in ["T1", "T3", "T4"].iter().zip(&branches).zip([
+        "Write its own file",
+        "Write its own file",
+        "Hand four",
+    ]) {
+        let shown = w.show(id);
+        let resolution = shown["resolution"].as_str().unwrap();
+        let line = lines[..3]
+            .iter()
+            .find(|l| l.starts_with(resolution))
+            .unwrap_or_else(|| panic!("{id} closed as {resolution}, no merge: {merges}"));
+        let brought = line.split(['|', ' ']).nth(2).unwrap();
+        let said = sh(&alpha, &format!("git log -1 --format=%s {brought}"));
+        assert!(said.starts_with(subject), "{id}: {said}");
+        assert_eq!(sh(&alpha, &format!("git branch --list {branch}")), "");
+    }
+    let subjects = sh(&alpha, "git log --merges --format=%s main");
+    assert!(subjects.contains("Merge Hand four"), "{subjects}");
+    assert!(subjects.contains("Merge Write its own file"), "{subjects}");
+    assert_eq!(
+        sh(&alpha, "git worktree list").lines().count(),
+        1,
+        "the batch's worktree is gone"
+    );
+    let log = w.lead(&["land", "--log"]);
+    assert!(text(&log).contains("gated here"), "{}", text(&log));
+}
+
+#[test]
+fn test_a_failed_gate_keeps_its_batch_out_and_a_later_build_lands_in_the_next() {
+    let w = World::new();
+    hand_branch(&w, "T4", "hand/t4", "four.txt", "four");
+    hand_branch(&w, "T5", "hand/t5", "five.txt", "five");
+    set_fact(&w, "land_bisect", "off");
+    set_fact(&w, "gate", "echo broken here && false");
+    let out = w.lead(&["land", "T4", "T5"]);
+    assert!(out.status.success(), "{}", text(&out));
+    for id in ["T4", "T5"] {
+        until(&w, id, "failed its gate", |s| stage(s) == "gate_failed");
+    }
+    let alpha = w.home("alpha").join("src/p");
+    assert_eq!(sh(&alpha, "git log --format=%s main"), "start");
+    let t4 = w.show("T4");
+    assert_eq!(t4["state"], "open");
+    assert!(
+        t4["claim_land"]["note"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("broken here"),
+        "{t4}"
+    );
+    assert_eq!(
+        t4["claim_land"]["batch"],
+        w.show("T5")["claim_land"]["batch"]
+    );
+
+    set_fact(&w, "gate", "true");
+    hand_branch(&w, "T6", "hand/t6", "six.txt", "six");
+    let out = w.lead(&["land", "T6"]);
+    assert!(out.status.success(), "{}", text(&out));
+    until(&w, "T6", "closed", |s| s["state"] == "done");
+    for id in ["T4", "T5"] {
+        assert_eq!(stage(&w.show(id)), "gate_failed");
+    }
+
+    let back = w.lead(&["land", "--back", "T4", "breaks the build"]);
+    assert!(back.status.success(), "{}", text(&back));
+    until(&w, "T5", "closed", |s| s["state"] == "done");
+    let t4 = w.show("T4");
+    assert_eq!(t4["state"], "open");
+    assert!(t4["claim_branch"].is_null(), "{t4}");
+    let subjects = sh(&alpha, "git log --merges --format=%s main");
+    assert!(!subjects.contains("Hand four"), "{subjects}");
+    assert!(subjects.contains("Hand five"), "{subjects}");
+}
+
+#[test]
+fn test_a_branch_that_conflicts_with_its_batch_is_left_out_naming_its_files() {
+    let w = World::new();
+    hand_branch(&w, "T4", "hand/t4", "notes.txt", "four");
+    hand_branch(&w, "T5", "hand/t5", "notes.txt", "five");
+    set_fact(&w, "gate", "true");
+    let out = w.lead(&["land", "T4", "T5"]);
+    assert!(out.status.success(), "{}", text(&out));
+    until(&w, "T4", "closed", |s| s["state"] == "done");
+    until(&w, "T5", "conflicted", |s| stage(s) == "conflict");
+    let t5 = w.show("T5");
+    assert_eq!(t5["claim_land"]["note"], "notes.txt", "{t5}");
+    assert_eq!(t5["claim_branch"], "hand/t5");
+    let alpha = w.home("alpha").join("src/p");
+    assert_eq!(sh(&alpha, "git show main:notes.txt"), "four");
+    assert_eq!(
+        sh(&alpha, "git branch --list hand/t5"),
+        "hand/t5",
+        "the lead keeps the conflicting branch"
+    );
+}
+
+#[test]
+fn test_a_failed_batch_is_split_until_the_failing_build_goes_back_and_the_rest_land() {
+    let w = World::new();
+    let counter = w.machines.join("gate-runs");
+    hand_branch(&w, "T1", "hand/t1", "one.txt", "one");
+    hand_branch(&w, "T3", "hand/t3", "three.txt", "three");
+    hand_branch(&w, "T4", "hand/t4", "marker", "four");
+    hand_branch(&w, "T5", "hand/t5", "five.txt", "five");
+    set_fact(
+        &w,
+        "gate",
+        &format!("echo run >> {} && test ! -e marker", counter.display()),
+    );
+    let out = w.lead(&["land", "T1", "T3", "T4", "T5"]);
+    assert!(out.status.success(), "{}", text(&out));
+    for id in ["T1", "T3", "T5"] {
+        until(&w, id, "closed", |s| s["state"] == "done");
+    }
+    until(&w, "T4", "sent back", |s| s["claim_branch"].is_null());
+    let t4 = w.show("T4");
+    assert_eq!(t4["state"], "open");
+    let alpha = w.home("alpha").join("src/p");
+    let subjects = sh(&alpha, "git log --merges --format=%s main");
+    assert!(!subjects.contains("Hand four"), "{subjects}");
+    for kept in ["Hand one", "Hand three", "Hand five"] {
+        assert!(subjects.contains(kept), "{subjects}");
+    }
+    let runs = fs::read_to_string(&counter).unwrap().lines().count();
+    assert!(
+        runs <= 4,
+        "the batch's gate run and at most three more: {runs}"
+    );
+    let events = text(&w.lead(&["log", "T4"]));
+    assert!(events.contains("gating"), "{events}");
+}
+
+#[test]
+fn test_a_gate_run_whose_close_is_refused_leaves_no_build_gating() {
+    let w = World::new();
+    let alpha = w.home("alpha").join("src/p");
+    hand_branch(&w, "T4", "hand/t4", "four.txt", "four");
+    hand_branch(&w, "T5", "hand/t5", "five.txt", "five");
+    set_fact(
+        &w,
+        "gate",
+        &format!(
+            "cd {} && docket --branch hand/t4 close T4 elsewhere; true",
+            alpha.display()
+        ),
+    );
+    let out = w.lead(&["land", "T4", "T5"]);
+    assert!(out.status.success(), "{}", text(&out));
+    until(&w, "T4", "closed", |s| s["state"] == "done");
+    let exit = || {
+        sh(
+            &w.home("alpha"),
+            "cat .state/docket/jobs/*/.land-*/exit 2>/dev/null || true",
+        )
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while exit().is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the gate run never ended"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    assert_eq!(stage(&w.show("T5")), "queued");
+}

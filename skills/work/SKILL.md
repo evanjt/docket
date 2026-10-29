@@ -82,6 +82,20 @@ fact; an item filed with no parent names its own.
 
 ### 4. Merge back and close
 
+Where the `gate` fact is set (`docket skills gate`), do not merge or gate in
+this session. A session whose failing test now passes hands its branch to the
+gate queue and takes its next ticket while the gate runs:
+
+    docket land T14
+
+`land` queues the build; the one background gate run for the checkout merges
+it, runs the `gate` command, fast-forwards the branch and closes the item.
+`docket land --log` prints a failed gate. Before claiming another ticket,
+look after your own: a build of yours that reads gate failed or conflict in
+`docket wip` is fixed first (resolve a conflict on its branch and `docket land
+T14` again; after a failed gate, fix the failing lines and queue it again).
+Where `gate` is unset, the merge stays as below.
+
     docket skills merge        # the merge command; run it and read git's exit code
 
 Plain git, no wrapper, into the branch the session started from. Read git's

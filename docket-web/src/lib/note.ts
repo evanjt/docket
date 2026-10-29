@@ -25,3 +25,11 @@ export function ended(r: Pick<Row, 'claim_ended_at'>, now = Date.now() / 1000): 
   const when = ago(r.claim_ended_at, now);
   return when ? `ended ${when}` : '';
 }
+
+/** Where a build stands on its way to landing, as "gate failed 12m ago (batch b7)"; empty until it is queued. */
+export function landing(r: Pick<Row, 'claim_land'>, now = Date.now() / 1000): string {
+  const l = r.claim_land;
+  if (!l) return '';
+  const when = ago(l.at, now);
+  return [l.stage.replace('_', ' '), when, l.batch ? `(batch ${l.batch})` : ''].filter(Boolean).join(' ');
+}

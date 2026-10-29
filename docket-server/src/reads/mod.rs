@@ -55,6 +55,7 @@ fn wide(gate: &Arc<Semaphore>) -> Router<DatabaseConnection> {
 fn narrow() -> Router<DatabaseConnection> {
     Router::new()
         .route("/next/halt", get(queue::halt))
+        .route("/next/stalls", get(queue::stalls))
         .route("/releases", get(crate::verbs::releases::list))
         .route("/areas", get(crate::verbs::areas::list))
         .route("/labels", get(crate::verbs::labels::list))

@@ -227,3 +227,43 @@ async fn test_an_unknown_act_session_or_project_is_refused() {
         StatusCode::NOT_FOUND
     );
 }
+
+#[tokio::test]
+async fn test_a_led_project_with_a_free_slot_and_a_ready_item_reports_the_idle_minutes() {
+    let (db, app) = scratch().await;
+    db.seed(&format!(
+        "UPDATE projects SET skills='{{\"stall_after\": \"5\"}}' WHERE slug='{SLUG}'; \
+         INSERT INTO releases (id, project, name, position) VALUES (1, '{SLUG}', 'r1', 0); \
+         INSERT INTO items (rid, project, key, num, title, state, body, release_id, opened_at, updated_at) \
+           VALUES (1, '{SLUG}', 'T', 1, 'Proof the dough', 'open', '', 1, 'o', 'u'); \
+         INSERT INTO machines (name, ssh, slots, runners, updated_at) \
+           VALUES ('oven', 'u@h', 2, '[\"claude\"]', 'u'); \
+         INSERT INTO leads (project, host, session, branch, since, renewed_at) \
+           VALUES ('{SLUG}', 'alpha', 's', 'main', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')"
+    ))
+    .await;
+    db.seed(crate::tests::TYPES_BY_KEY).await;
+    let (status, out) = send(
+        &app,
+        Method::GET,
+        &format!("/next/stalls?project={SLUG}"),
+        "alphakey",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let line = out["stalls"][0].as_str().unwrap();
+    assert!(
+        line.starts_with("2 slots free and 1 items ready, no dispatch for "),
+        "{out}"
+    );
+    let (_, status) = send(
+        &app,
+        Method::GET,
+        &format!("/status?project={SLUG}"),
+        "alphakey",
+        None,
+    )
+    .await;
+    assert_eq!(status["stalls"], out["stalls"]);
+}

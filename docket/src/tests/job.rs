@@ -1043,3 +1043,18 @@ fn test_a_parked_worktree_has_its_submodule_back_at_the_pinned_commit_and_clean(
     assert_eq!(git_as(&inside, &["status", "--porcelain"]), "");
     assert_eq!(git_as(&slot, &["status", "--porcelain"]), "");
 }
+
+#[test]
+fn test_a_gate_run_directory_reads_as_a_row_with_its_members() {
+    let root = std::env::temp_dir().join(format!("gate-rows-{}", std::process::id()));
+    let dir = root.join("proj").join(".land-checkout");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("members"), "T1 T2").unwrap();
+    fs::write(dir.join("exit"), "0").unwrap();
+    let rows = gate_runs(&root, "proj", now());
+    fs::remove_dir_all(&root).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["role"], "gate");
+    assert_eq!(rows[0]["state"], "done");
+    assert_eq!(rows[0]["report"], "T1 T2");
+}

@@ -6,7 +6,7 @@ use crate::item::Refused;
 use crate::text::quoted;
 
 /// Every fact a project carries, in the order `docket skills` prints them, with its one-line meaning.
-pub const FACTS: [(&str, &str); 22] = [
+pub const FACTS: [(&str, &str); 26] = [
     ("owner", "the owner's name, as the skills address them"),
     (
         "worktree",
@@ -46,6 +46,18 @@ pub const FACTS: [(&str, &str); 22] = [
         "the checks a job reruns after merging main, in words a job can follow",
     ),
     (
+        "gate",
+        "the shell command docket land runs in a batch's worktree, whose exit 0 lets the batch land; unset, docket land refuses",
+    ),
+    (
+        "land_batch",
+        "the most finished builds docket land merges and gates in one run",
+    ),
+    (
+        "land_bisect",
+        "on splits a failed batch of builds in halves and gates them again until the build that fails is found, off sends the whole batch back for the lead to read",
+    ),
+    (
         "mode",
         "what a lead does: run dispatches, drain lets running jobs finish and dispatches none, pause dispatches nothing",
     ),
@@ -72,6 +84,10 @@ pub const FACTS: [(&str, &str); 22] = [
     (
         "lead_lapse",
         "minutes a lead claim holds without a renewal before another session may take the lead over",
+    ),
+    (
+        "stall_after",
+        "minutes a free slot with a ready item, or a build waiting to land with no gate run, may sit idle before status and next print a Stall line",
     ),
     (
         "owner_limit",
@@ -133,7 +149,7 @@ pub const AGENT_SETTINGS: [&str; 5] =
     ["models", "job_timeout", "stale_claim", "lead_lapse", "mode"];
 
 /// The value a fact takes when neither the project nor the owner sets one.
-pub const DEFAULTS: [(&str, &str); 9] = [
+pub const DEFAULTS: [(&str, &str); 12] = [
     ("models", DEFAULT_MODELS),
     ("owner", "the owner"),
     ("checkout", "."),
@@ -141,8 +157,11 @@ pub const DEFAULTS: [(&str, &str); 9] = [
     ("job_timeout", "120"),
     ("stale_claim", "120"),
     ("lead_lapse", "10"),
+    ("stall_after", "15"),
     ("owner_limit", "20"),
     ("failure_limit", "2"),
+    ("land_batch", "6"),
+    ("land_bisect", "on"),
 ];
 
 /// Facts docket writes itself, never set by hand.
@@ -286,6 +305,22 @@ pub fn dispatch_refused(
         .then(|| format!("mode is {mode}: docket dispatch starts no job until mode is run"))
 }
 
+/// The most builds one gate run takes: the `land_batch` fact, or its default.
+#[must_use]
+pub fn land_batch(skills: &BTreeMap<String, String>) -> usize {
+    effective(skills, "land_batch")
+        .and_then(|v| v.parse().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(6)
+}
+
+/// Whether a failed batch is split and gated again to find its failing build: the `land_bisect`
+/// fact, on by default.
+#[must_use]
+pub fn land_bisect(skills: &BTreeMap<String, String>) -> bool {
+    effective(skills, "land_bisect").is_none_or(|v| v != "off")
+}
+
 /// The facts docket reads out of a stored set, leaving out retired and unknown keys.
 #[must_use]
 pub fn known(skills: &BTreeMap<String, String>) -> BTreeMap<String, String> {
@@ -297,15 +332,20 @@ pub fn known(skills: &BTreeMap<String, String>) -> BTreeMap<String, String> {
 }
 
 /// The values a fact may take, checked when it is set so the loop never reads a typo.
-pub const CHOICES: [(&str, &[&str]); 1] = [("mode", &["run", "drain", "pause"])];
+pub const CHOICES: [(&str, &[&str]); 2] = [
+    ("mode", &["run", "drain", "pause"]),
+    ("land_bisect", &["on", "off"]),
+];
 
 /// Facts that hold a whole number above 0.
-pub const COUNTS: [&str; 5] = [
+pub const COUNTS: [&str; 7] = [
     "stale_claim",
     "job_timeout",
     "lead_lapse",
+    "stall_after",
     "owner_limit",
     "failure_limit",
+    "land_batch",
 ];
 
 /// The keys a `models` entry may name: a build's complexity, then the audit, plan and lead roles.

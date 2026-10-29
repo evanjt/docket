@@ -101,8 +101,9 @@ docket job kill lead-t14-123 # stops its whole process group
 then returns. The job's directory under `$XDG_STATE_HOME/docket/jobs` (or `DOCKET_JOB_STATE`) holds
 `meta.json`, the brief, the event stream, the pid and the exit code. A job builds and commits on its
 branch and ends its final message with `DONE <sha>`, `WAITING Q<n>` or `FAILED <reason>`; `docket`
-refuses `start`, `release`, `close`, `drop` and `reopen` inside one (`DOCKET_JOB` set), which are
-the lead's. `DOCKET_JOB_RUNNER_CLAUDE` and `DOCKET_JOB_RUNNER_CODEX` replace the program run.
+refuses `start`, `release`, `close`, `drop`, `reopen` and `land` inside one (`DOCKET_JOB` set),
+which are the lead's. `DOCKET_JOB_RUNNER_CLAUDE` and `DOCKET_JOB_RUNNER_CODEX` replace the program
+run.
 
 ## Dispatch
 
@@ -127,6 +128,27 @@ that machine), commits it on the lead's machine with that message, and clears th
 inside a submodule becomes a commit in the lead's own clone of that submodule, on a branch named
 for the job and pushed nowhere, and the job's commit points at it. A change that cannot be
 committed leaves the job where it ran, to collect again. `jobs --wait` returns once one of the running jobs ends.
+
+```bash
+docket land [T14 ...]                # queue finished builds; default: every claim reading to land
+docket land --back T14 "why"         # give one build of a failed gate run back, requeue the rest
+docket land --log                    # the current or last gate run's log
+```
+
+`land` runs in the project checkout on the branch the work lands on. It collects an ended job's
+change first, records `land queue` on each item, and starts one gate run for the checkout in the
+background unless one holds its lock, then returns. The gate run takes up to `land_batch` queued
+builds at a time (6 by default), oldest first, merges each `--no-ff` under its commit's subject in a
+worktree off the work branch's head, and leaves out one that conflicts, naming its files. It runs
+the `gate` fact's command there; on exit 0 it fast-forwards the work branch, closes each item with
+the sha of the merge that brought it in, and removes the branches and the worktree. A failed gate
+of more than one build splits the batch in two halves, each gated in turn on the work branch's head
+under a batch named from the one it came from (`land gating` events): a passing half lands, a
+failing half is split again, until one build fails alone, which is sent back as `land --back` does,
+with the log's tail on its item; the other builds land. A batch of one goes back at once. With
+`land_bisect` off, a failed gate keeps its builds out with the log's tail on each and the rest of
+the queue goes on. It never pushes. With no `gate` fact, `land` refuses. The gate run's directory sits beside the project's
+jobs, as `.land-` and the checkout's path: its lock, pid, exit code, stderr and `gate.log`.
 
 ## Private names
 

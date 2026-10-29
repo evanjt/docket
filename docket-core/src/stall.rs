@@ -334,6 +334,64 @@ pub fn idle_since(events: &[(&str, i64)]) -> Option<i64> {
         .max()
 }
 
+/// What the stall lines read: the state of the fleet and of the landing queue at one moment.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Input {
+    /// Each machine as `(slots, running jobs)`; a claim whose job has reported no end is running.
+    pub machines: Vec<(i64, i64)>,
+    /// The ready items a lead could dispatch.
+    pub ready: usize,
+    /// Whether a lead holds the project.
+    pub lead: bool,
+    /// When the project's newest dispatch was made, in epoch seconds.
+    pub last_dispatch: Option<i64>,
+    /// Each build waiting to land as `(item id, epoch seconds since its job ended or it was queued)`.
+    pub landing: Vec<(String, i64)>,
+    /// Whether a gate run is going.
+    pub gate_running: bool,
+}
+
+/// Whether a gate run is going: some build entered the `gating` stage (epoch seconds, in
+/// `gating_since`) less than `job_timeout` minutes before `now`. A run that dies leaves its builds
+/// gating, so an older stage is no run going.
+#[must_use]
+pub fn gate_going(now: i64, job_timeout: i64, gating_since: &[i64]) -> bool {
+    gating_since.iter().any(|at| (now - at) / 60 < job_timeout)
+}
+
+/// The lines that say work sits idle, once it has for `after` minutes at `now` (epoch seconds): free
+/// slots and ready items under a lead that has dispatched nothing, and each build waiting to land
+/// while no gate run goes.
+#[must_use]
+pub fn stalls(now: i64, after: i64, input: &Input) -> Vec<String> {
+    let mut out = Vec::new();
+    let free: i64 = input.machines.iter().map(|(s, r)| (s - r).max(0)).sum();
+    if input.lead
+        && free > 0
+        && input.ready > 0
+        && let Some(last) = input.last_dispatch
+    {
+        let idle = (now - last) / 60;
+        if idle >= after {
+            out.push(format!(
+                "{free} slots free and {} items ready, no dispatch for {idle} minutes",
+                input.ready
+            ));
+        }
+    }
+    if !input.gate_running {
+        for (id, since) in &input.landing {
+            let waited = (now - since) / 60;
+            if waited >= after {
+                out.push(format!(
+                    "{id} has waited {waited} minutes to land, no gate run going"
+                ));
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 #[path = "tests/stall.rs"]
 mod tests;

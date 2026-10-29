@@ -65,6 +65,7 @@
       {#if wip.data?.length}{wip.data.length} claimed right now.{:else if wip.data}Nothing is claimed right now.{/if}
       {#if yours.length}<a href={href(ctx.slug, 'yours')} class="you">{yours.length} waiting on you.</a>{/if}
     </p>
+    {#each status.data.stalls ?? [] as line (line)}<p class="lede stall">Stall: {line}</p>{/each}
     {#if planTotals}<p class="lede">Plans: {planTotals.open} open, {planTotals.auditDue} audit due</p>{/if}
   {:else if status.error}
     <p class="error">{status.error}</p>
@@ -288,6 +289,10 @@
     margin: 14px 0 0;
     font-size: 15px;
     color: var(--muted);
+  }
+
+  .lede.stall {
+    color: var(--danger);
   }
 
   .lede .you {

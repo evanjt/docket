@@ -52,6 +52,12 @@ writes the owner level.
 ssh by `docket`, never by you. A refused `lead take` means another lead holds
 the project: say who in one line and stop.
 
+Read `docket skills gate`. When `gate` is unset, `docket land` refuses, so set it
+before the loop: `docket skills set gate "..."` to a shell command that runs the
+project's `gates` fact in a fresh worktree, with what the `traps` fact says a
+fresh worktree needs (installing dependencies, the test database). Say in your
+first report line that the setting is derived from the `gates` fact.
+
 ## The loop
 
 ### 1. Hold the lead
@@ -73,18 +79,18 @@ nothing, see the running jobs through, then stop. run: carry on.
 
 Each row carries the role it is taken in. A `Halt:` line above the rows means the
 last three ended attempts all failed: dispatch nothing more and stop after the
-running jobs.
+running jobs. A `Stall:` line means a slot is free and an item is ready, or a build waits
+to land with no gate run: dispatch or `docket land` it in this pass.
 
 `docket jobs` shows every machine's jobs; `docket machines` their slots.
 
 ### 3. Dispatch until the slots are full
 
-A slot never waits for a landing. Collect every job that reported DONE at
-once and put it in the next gate run (step 4), and keep dispatching from your
-branch while a gate runs. No finished build waits longer than the gate run in
-progress: it goes into the next batch, merged onto the batch in the gate, so
-it does not go stale as the branch moves. When several end together, land them
-as one batch with one gate run rather than one gate run each.
+A slot never waits for a landing. Every job that reported DONE goes to
+`docket land` at once (step 4) and dispatching goes on while the gate runs. No
+finished build waits longer than the gate run in progress: it goes into the
+next batch, merged onto the head the previous batch left, so it does not go
+stale as the branch moves.
 
 An item whose Evidence or Fix needs the change of another claimed or collected
 item is not dispatched until that change has landed: its job would build on a
@@ -125,55 +131,46 @@ the audit's runner holds the most assignments under the plan; `dispatch` chooses
 It returns when a running job ends, or after five minutes so you renew the
 lead. Run it in the foreground and wait for it. Then, for each job that ended since you last looked, by its report:
 
-**DONE, for a ticket.** Collect it at once and put it in the next gate run;
-dispatching goes on meanwhile. Bring its change here and commit it:
+**DONE, for a ticket.** Hand it to the gate queue at once; dispatching goes on
+meanwhile:
 
-    docket collect T14
+    docket land T14
 
-A job never commits: `collect` takes the change it left in its worktree,
-commits it here on the job's branch with the message the job proposed, adds
-the job's `OBSERVE` lines to the item, and clears the job from its machine. Commits are made on this machine only; the
-others build and test. A change inside a submodule is committed in this
-checkout's clone of it, on a branch of the job's name, and the job's commit
-points at it: push it nowhere. A collect that cannot commit keeps the job, so
-fix what it names and collect again.
+`land` collects the job's change (the commit on the job's branch with the
+message the job proposed, its `OBSERVE` lines added to the item), queues the
+build, and starts the one background gate run for the checkout if none is
+going. That run merges the queued builds onto the head of the work branch in a
+worktree, runs the `gate` fact's command, fast-forwards the branch and closes
+each item with its sha; a build that finishes while it gates goes into its next
+batch. `docket land` with no id queues every finished build. A collect that
+cannot commit keeps the job, so fix what it names and land again. A report of
+DONE with no commit on the job's branch is a lost change, sent back as FAILED.
 
-Check the branch moved past your branch (`git log --oneline -1 <the job's
-branch>`): a report of DONE with no commit is a lost change, sent back as
-FAILED.
+The lead never runs a gate itself and never merges a build by hand: no
+worktree for a batch, no fast-forward, no background command of its own.
+`docket jobs` lists the gate run beside the jobs, with the builds of its
+batch, and `docket jobs --wait` returns when it exits.
 
-Collect every job that ended, then merge them all into one batch branch in a
-worktree, so your checkout only ever fast-forwards:
+- **A conflict `land` names** is the lead's to resolve, there and then. Merge
+  the work branch into the job's branch in a worktree, read both sides and the
+  items behind them, keep what each change meant, commit, and queue it again
+  with `docket land T14`:
 
-    git worktree add ../merge-batch -b lead/batch <your branch>
-    git -C ../merge-batch merge --no-ff -m "Merge <the job's commit subject>" <each job's branch>
+      git worktree add ../merge-T14 <the job's branch>
+      git -C ../merge-T14 merge --no-ff -m "Merge <the job's commit subject>" <your branch>
+      git worktree remove ../merge-T14
 
-**A conflict is yours to resolve, there and then.** Read both sides and the
-items behind them, keep what each change meant, finish the merge and go on to
-the next branch. Never leave a finished build waiting for a job to rebase it.
+  Never leave a finished build waiting for a job to
+  rebase it.
+- **A failed gate.** Read it with `docket land --log`. Where the failure is
+  the batch's merge or something mechanical (formatting, a generated file), fix
+  it on the job's branch and queue it again. Where the batch split finds a
+  build's own behaviour failing, send that build back with the failing lines
+  and dispatch it again at once; the rest of its batch is queued again by
+  `land`:
 
-Then land the batch with the project's merge command (`docket skills` prints
-it), which runs the gates, or with the gates by hand and
-`git merge --ff-only lead/batch`. Start the gate run in the background, never
-in the foreground, with its output in `../merge-batch.log` and its exit code
-written to `../merge-batch.exit` when it ends, and go on dispatching while it
-runs. Read the exit file on each pass. When a gate fails:
-
-- On your resolution, or on something mechanical (formatting, a generated
-  file): fix it in the batch with a commit of its own and land again.
-- On a build's own behaviour: drop that one branch from the batch, land the
-  rest, and send it back with the failing lines in the item:
-
-      docket edit T14 --append "fails <gate> on <sha>: <the failing lines>"
-      docket --branch <the job's branch> unclaim T14 --outcome gate "fails <gate> on <sha>: fix on the new head"
+      docket land --back T14 "fails <gate> on <sha>: <the failing lines>"
       docket dispatch T14
-
-Once landed, close each item with its own commit, now on your branch, and
-delete the merged branches and the worktree:
-
-    docket --branch <the job's branch> close T14 <its sha>
-    git branch -d <the job's branch> lead/batch
-    git worktree remove ../merge-batch
 
 `docket stale` lists the job branches whose item is closed or that no claim or job names, and
 whether each holds commits the work ref lacks; `docket stale --prune` removes those with none.
@@ -218,9 +215,10 @@ nothing more and stop after the running jobs.
 ### 5. Again
 
 Back to step 1. Never end a turn without a watch armed: while a job or a gate
-run is going, wait with `docket jobs --wait --timeout 300` in the foreground,
-read the gate run's exit file when it returns, and go round the loop again.
-Work you do yourself (a measurement, a reference run) never waits for a quiet
+run is going, `docket jobs --wait --timeout 300` is running, and it returns on
+every job that ends, on the gate run's exit and after five minutes. On each
+return go round the loop again. A `Stall:` line from `next` is acted on in the
+same pass. Work you do yourself (a measurement, a reference run) never waits for a quiet
 machine or for the gate: start it on a machine the gate does not measure.
 
 Stop when no job, no gate run and no work of your own is running, and step 3
@@ -230,9 +228,9 @@ another session.
 ## Rules
 
 - Never build a ticket, review or answer anything yourself: a job does it.
-  Merging is yours, including every conflict and the mechanical fixes a gate
-  asks of a merge. Only a build whose own behaviour fails goes back to a job.
-- Every claim is a running job or a build in the next gate run. A finished
+  Landing is yours through `docket land`, including every conflict it names
+  and the mechanical fixes a gate asks of a merge. Only a build whose own behaviour fails goes back to a job.
+- Every claim is a running job or a build in the gate queue. A finished
   build is collected in the same pass and lands in the next gate run, or is
   given back with its reason; it is never held for another reason.
 - Never push. Never `--force` a claim, and never unclaim one you did not make.

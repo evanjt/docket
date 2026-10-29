@@ -732,6 +732,23 @@ pub enum Cmd {
         #[arg(long, short = 'm')]
         message: Option<String>,
     },
+    /// queue finished builds to land and keep one gate run going in this checkout until the queue is
+    /// empty: each batch merged onto the work branch in a worktree, gated with the gate fact's
+    /// command, fast-forwarded and its items closed; never pushed
+    Land {
+        /// the items to queue, an ended job's change collected first; default: every claim reading
+        /// to land
+        ids: Vec<String>,
+        /// give one build of a failed gate run back and queue the rest of its batch again
+        #[arg(long, num_args = 2, value_names = ["ID", "WHY"], conflicts_with_all = ["ids", "log"])]
+        back: Vec<String>,
+        /// print the current or last gate run's log
+        #[arg(long, conflicts_with = "ids")]
+        log: bool,
+        /// be the gate run, on this work branch, as docket land starts it
+        #[arg(long, hide = true, value_name = "BRANCH")]
+        run: Option<String>,
+    },
     /// what a public repository must not carry: the owner's private names, read from the server
     #[command(hide = true)]
     Private {
@@ -938,9 +955,9 @@ const GROUPS: [(&str, &[&str]); 3] = [
         "Agent",
         &[
             "next", "list", "complex", "show", "log", "new", "add", "start", "unclaim", "close",
-            "drop", "reopen", "wait", "dep", "resume", "ask", "decide", "rate", "priority", "edit",
-            "label", "link", "parent", "search", "similar", "deps", "files", "check", "stale",
-            "squash",
+            "land", "drop", "reopen", "wait", "dep", "resume", "ask", "decide", "rate", "priority",
+            "edit", "label", "link", "parent", "search", "similar", "deps", "files", "check",
+            "stale", "squash",
         ],
     ),
     ("Lead", &["wip", "machines"]),

@@ -511,3 +511,24 @@ fn test_an_open_claim_with_a_landing_and_no_job_reads_as_a_finished_build() {
     let f = HeldFields::of("open", Some(&Held::Claim(c)));
     assert_eq!(f.claim_land.unwrap().stage, Stage::Queued);
 }
+
+#[test]
+fn test_a_landing_stage_is_worded_with_its_age_and_batch() {
+    let now = crate::pace::epoch("2026-10-29T12:00:00Z").unwrap();
+    let land = |stage, batch: Option<&str>| Land {
+        stage,
+        at: "2026-10-29T11:48:00Z".into(),
+        note: None,
+        batch: batch.map(str::to_string),
+    };
+    assert_eq!(land(Stage::Queued, None).words(now), "queued 12m ago");
+    assert_eq!(
+        land(Stage::Gating, Some("b7")).words(now),
+        "gating 12m ago (batch b7)"
+    );
+    assert_eq!(
+        land(Stage::GateFailed, Some("b7")).words(now),
+        "gate failed 12m ago (batch b7)"
+    );
+    assert_eq!(land(Stage::Conflict, None).words(now), "conflict 12m ago");
+}

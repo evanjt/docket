@@ -3,6 +3,8 @@
 //! event into a row opened or ended; the server applies it as each event is written, and `rebuild`
 //! folds it over an item's events, so the rows can always be rebuilt from the history.
 
+use std::fmt::Write;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -65,6 +67,22 @@ pub struct Land {
     pub at: String,
     pub note: Option<String>,
     pub batch: Option<String>,
+}
+
+impl Land {
+    /// The stage with its age at `now`, `gate failed 12m ago (batch NAME)`; the batch is left out
+    /// when none is known, and so is the age when the stamp is not one.
+    #[must_use]
+    pub fn words(&self, now: i64) -> String {
+        let mut out = self.stage.as_str().to_string();
+        if let Some(at) = crate::pace::epoch(&self.at) {
+            let _ = write!(out, " {} ago", crate::pace::duration(now - at));
+        }
+        if let Some(batch) = self.batch.as_deref().filter(|b| !b.is_empty()) {
+            let _ = write!(out, " (batch {batch})");
+        }
+        out
+    }
 }
 
 /// What an attempt is: an agent's claim, or the item handed to the owner.

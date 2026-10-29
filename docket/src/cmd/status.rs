@@ -44,6 +44,8 @@ pub struct Read {
     pub now: i64,
     /// The line offering a squash, when one is due.
     pub squash: Option<String>,
+    /// The lines for a free slot and a ready item left idle, or a build left waiting to land.
+    pub stalls: Vec<String>,
 }
 
 /// # Errors
@@ -68,6 +70,12 @@ pub fn status(ctx: &mut Ctx) -> Result<i32> {
         next: ctx.read("/next", &[("n", Some("8".into()))])?,
         now: now(),
         squash: crate::cmd::published::offer(ctx),
+        stalls: status["stalls"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|l| l.as_str().map(str::to_string))
+            .collect(),
     };
     if ctx.json {
         let mut out = json_status(&read);
@@ -101,6 +109,7 @@ pub fn json_status(r: &Read) -> Value {
         ),
         "metrics": r.metrics,
         "next": r.next,
+        "stalls": r.stalls,
     })
 }
 
@@ -119,6 +128,7 @@ pub fn render(slug: &str, r: &Read) -> Vec<String> {
         out.push(forecast.line());
     }
     out.push(flow_line(&r.total));
+    out.extend(r.stalls.iter().map(|l| format!("Stall: {l}")));
     let progress = &r.whole.progress;
     #[allow(clippy::cast_precision_loss)]
     out.push(format!(

@@ -147,7 +147,13 @@ pub fn list(ctx: &mut Ctx, word: Option<&String>, by: ListSort) -> Result<i32> {
         let all: Vec<Json> = found
             .iter()
             .flat_map(|(_, rows)| rows)
-            .map(|r| item_json(&serde_json::to_value(r).unwrap_or(Value::Null), &[], &[]))
+            .map(|r| {
+                item_json(
+                    &serde_json::to_value(r).unwrap_or(Value::Null),
+                    &[],
+                    &["claim_land"],
+                )
+            })
             .collect();
         ctx.emit(&Json::List(all));
         return Ok(0);
@@ -156,28 +162,47 @@ pub fn list(ctx: &mut Ctx, word: Option<&String>, by: ListSort) -> Result<i32> {
         println!("Nothing open.");
         return Ok(0);
     }
+    let now = crate::cmd::status::now();
     for (i, (name, rows)) in found.iter().enumerate() {
         if i > 0 {
             println!();
         }
         println!("{name} ({})", rows.len());
         for r in rows {
-            println!("{}", fmt_row(r, None));
+            println!("{}", list_row(r, now));
         }
     }
     Ok(0)
 }
 
-/// The text of one claim row under its group: the row, then how long it has been.
-#[must_use]
-pub fn wip_row(word: &str, r: &Row, minutes: Option<i64>, flag: Option<&str>) -> String {
-    let mut text = fmt_row(r, flag);
-    let note = minutes_text(word, minutes);
+/// A row with `note` after the end of its first line.
+fn with_note(mut text: String, note: &str) -> String {
     if !note.is_empty() {
         let first = text.find('\n').unwrap_or(text.len());
-        text.insert_str(first, &note);
+        text.insert_str(first, note);
     }
     text
+}
+
+/// The landing stage of a claim's build with its age, after two spaces, or nothing before it is queued.
+fn land_note(r: &Row, now: i64) -> String {
+    r.claim_land
+        .as_ref()
+        .map_or_else(String::new, |l| format!("  [{}]", l.words(now)))
+}
+
+/// The text of one row of `list`: the row, then the landing stage of a build that waits to land.
+#[must_use]
+pub fn list_row(r: &Row, now: i64) -> String {
+    with_note(fmt_row(r, None), &land_note(r, now))
+}
+
+/// The text of one claim row under its group: the row, then how long it has been and where its
+/// build stands on its way to landing.
+#[must_use]
+pub fn wip_row(word: &str, r: &Row, minutes: Option<i64>, flag: Option<&str>, now: i64) -> String {
+    let note = minutes_text(word, minutes) + &land_note(r, now);
+    with_note(fmt_row(r, flag), &note)
 }
 
 #[cfg(test)]

@@ -6,12 +6,14 @@ use sea_orm::{DatabaseConnection, FromQueryResult};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use docket_core::assignment::{Held, Outcome};
+use docket_core::assignment::{Held, Land, Outcome, Stage};
 use docket_core::flow::tally;
 use docket_core::item::turn_of;
 use docket_core::member::{Edge, Tie, descendants};
+use docket_core::pace::epoch;
 use docket_core::queue::{Candidate, Filter, Ranked, Role, next as queue};
-use docket_core::word::{Kind, PRIORITIES};
+use docket_core::stall::{Input, gate_going, stalls as stalls_of};
+use docket_core::word::{JobEnd, Kind, PRIORITIES};
 
 use crate::auth::Caller;
 use crate::reads::public::{
@@ -204,6 +206,15 @@ pub async fn next(
     State(db): State<DatabaseConnection>,
     Query(q): Query<NextQuery>,
 ) -> Result<Json<Value>, Failure> {
+    let (board, picked) = picked(&db, &q).await?;
+    Ok(Json(Value::Array(
+        shaped(&db, &q.project, &board, picked).await?,
+    )))
+}
+
+/// The board and the queue's rows for a `next` query, before they are shaped for the reader.
+async fn picked(db: &DatabaseConnection, q: &NextQuery) -> Result<(Board, Vec<Ranked>), Failure> {
+    let db = db.clone();
     one_of(
         "complexity",
         q.complexity.as_deref(),
@@ -267,9 +278,7 @@ pub async fn next(
     };
     let candidates: Vec<Candidate> = board.items.iter().map(|r| candidate(r, &board)).collect();
     let picked = queue(&candidates, &board.ties, &filter, q.n);
-    Ok(Json(Value::Array(
-        shaped(&db, &q.project, &board, picked).await?,
-    )))
+    Ok((board, picked))
 }
 
 /// The items of the board changing the repository `repo`: by their nearest repo label, else the
@@ -408,6 +417,176 @@ pub async fn halt(
     ))
 }
 
+/// `GET /next/stalls`: the lines that say a free slot and a ready item sit idle under a lead, or a
+/// build waits to land with no gate run, for the project's `stall_after` minutes. Empty when none.
+///
+/// # Errors
+/// 404 for an unknown project.
+pub async fn stalls(
+    State(db): State<DatabaseConnection>,
+    Query(q): Query<InProject>,
+) -> Result<Json<Value>, Failure> {
+    project_of(&db, &q.project).await?;
+    Ok(Json(
+        json!({ "stalls": stall_lines(&db, &q.project).await? }),
+    ))
+}
+
+/// The stall lines of a project that exists, as `/next/stalls` and `/status` serve them.
+async fn stall_lines(db: &DatabaseConnection, slug: &str) -> Result<Vec<String>, Failure> {
+    let db = db.clone();
+    let q = InProject {
+        project: slug.to_string(),
+    };
+    let skills = docket_core::fact::merged(
+        &crate::facts::stored(&db, &q.project).await.map_err(lift)?,
+        &crate::facts::owner(&db).await.map_err(lift)?,
+    );
+    let after: i64 = docket_core::fact::effective(&skills, "stall_after")
+        .and_then(|v| v.parse().ok())
+        .filter(|m: &i64| *m > 0)
+        .unwrap_or(15);
+    let claims = Open::find_by_statement(sql(
+        "SELECT i.key || i.num::text AS id, a.machine, a.job, a.job_report, a.job_started_at, \
+         a.job_ended_at, a.started_at, a.land FROM assignments a JOIN items i ON i.rid=a.rid \
+         WHERE i.project=? AND a.kind='claim' AND a.ended_at IS NULL",
+        vec![q.project.clone().into()],
+    ))
+    .all(&db)
+    .await
+    .map_err(|e| internal(&e))?;
+    let machines = MachineSlots::find_by_statement(sql("SELECT name, slots FROM machines", vec![]))
+        .all(&db)
+        .await
+        .map_err(|e| internal(&e))?;
+    let last_dispatch = Newest::find_by_statement(sql(
+        "SELECT MAX(a.started_at) AS at FROM assignments a JOIN items i ON i.rid=a.rid \
+         WHERE i.project=? AND a.kind='claim' AND a.job IS NOT NULL",
+        vec![q.project.clone().into()],
+    ))
+    .one(&db)
+    .await
+    .map_err(|e| internal(&e))?
+    .and_then(|n| n.at)
+    .and_then(|at| epoch(&at));
+    let job_timeout: i64 = docket_core::fact::effective(&skills, "job_timeout")
+        .and_then(|v| v.parse().ok())
+        .filter(|m: &i64| *m > 0)
+        .unwrap_or(120);
+    let now = i64::try_from(super::board::now_secs()).unwrap_or(0);
+    let gating: Vec<i64> = claims
+        .iter()
+        .filter_map(|c| c.land().filter(|l| l.stage == Stage::Gating))
+        .filter_map(|l| epoch(&l.at))
+        .collect();
+    let gate_running = gate_going(now, job_timeout, &gating);
+    let ready = picked(
+        &db,
+        &NextQuery {
+            project: slug.to_string(),
+            n: usize::MAX,
+            complexity: None,
+            key: None,
+            id: None,
+            label: None,
+            area: None,
+            repo: None,
+            release: None,
+            under: None,
+            role: None,
+            priority: None,
+            current_release: false,
+        },
+    )
+    .await?
+    .1
+    .len();
+    let lead = crate::lead::held(&db, slug).await.map_err(lift)?;
+    let input = Input {
+        machines: machines
+            .iter()
+            .map(|m| {
+                let used = claims
+                    .iter()
+                    .filter(|c| c.running() && c.machine.as_deref() == Some(m.name.as_str()))
+                    .count();
+                (m.slots, i64::try_from(used).unwrap_or(0))
+            })
+            .collect(),
+        ready,
+        lead: lead.is_some(),
+        last_dispatch: last_dispatch.max(lead.as_ref().and_then(|l| epoch(&l.since))),
+        landing: claims
+            .iter()
+            .filter_map(|c| Some((c.id.clone(), c.waiting_since()?)))
+            .collect(),
+        gate_running,
+    };
+    Ok(stalls_of(now, after, &input))
+}
+
+fn lift(f: crate::verbs::Failure) -> Failure {
+    use crate::verbs::Failure as V;
+    match f {
+        V::NotFound(t) => failure(StatusCode::NOT_FOUND, &t),
+        V::Db(e) => internal(&e),
+        V::Refused(t) | V::Forbidden(t) | V::Invalid(t) => failure(StatusCode::BAD_REQUEST, &t),
+    }
+}
+
+#[derive(FromQueryResult)]
+struct Open {
+    id: String,
+    machine: Option<String>,
+    job: Option<String>,
+    job_report: Option<String>,
+    job_ended_at: Option<String>,
+    land: Option<Value>,
+}
+
+impl Open {
+    fn land(&self) -> Option<Land> {
+        self.land
+            .clone()
+            .and_then(|l| serde_json::from_value(l).ok())
+    }
+
+    fn job_end(&self) -> JobEnd {
+        JobEnd::of_claim(
+            self.job.as_deref(),
+            self.job_report.as_deref(),
+            self.land.is_some(),
+        )
+    }
+
+    /// Whether a job runs the claim: it has one and it has reported no end.
+    fn running(&self) -> bool {
+        self.job.is_some() && self.job_end() == JobEnd::Running
+    }
+
+    /// When a finished build began waiting to land: its queueing, or the end of its job before it is
+    /// queued. None for a claim not waiting, one gating or one that failed its gate.
+    fn waiting_since(&self) -> Option<i64> {
+        match self.land() {
+            Some(l) => (l.stage == Stage::Queued).then(|| epoch(&l.at)).flatten(),
+            None => (self.job_end() == JobEnd::Done)
+                .then(|| self.job_ended_at.as_deref().and_then(epoch))
+                .flatten(),
+        }
+    }
+}
+
+#[derive(FromQueryResult)]
+struct MachineSlots {
+    name: String,
+    slots: i64,
+}
+
+#[derive(FromQueryResult)]
+struct Newest {
+    at: Option<String>,
+}
+
 #[derive(FromQueryResult)]
 struct Ended {
     outcome: String,
@@ -450,5 +629,6 @@ pub async fn status(
         "total": total.values().sum::<u64>(),
         "by_word": total,
         "by_key": by_key,
+        "stalls": stall_lines(&db, &q.project).await?,
     })))
 }

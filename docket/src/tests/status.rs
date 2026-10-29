@@ -89,6 +89,7 @@ fn read() -> Read {
         next: json!([{"id": "T3", "title": "Fix the loaf count", "complexity": "low"}]),
         now: 1000 + 3 * 3600,
         squash: None,
+        stalls: Vec::new(),
     }
 }
 
@@ -235,4 +236,16 @@ fn test_counts_read_the_word_map_the_status_route_answers_with() {
         counts(&by_word),
         vec![("done".to_string(), 4), ("ready".to_string(), 2)]
     );
+}
+
+#[test]
+fn test_status_text_prints_each_stall_line_under_the_flow_line() {
+    let mut r = read();
+    r.stalls = vec!["T9 has waited 20 minutes to land, no gate run going".to_string()];
+    let text = render("o/p", &r).join("\n");
+    assert!(
+        text.contains("Stall: T9 has waited 20 minutes to land, no gate run going"),
+        "{text}"
+    );
+    assert!(!render("o/p", &read()).join("\n").contains("Stall:"));
 }

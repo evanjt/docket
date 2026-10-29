@@ -7,6 +7,7 @@ pub mod dispatch;
 pub mod instructions;
 pub mod job;
 pub mod labels;
+pub mod land;
 pub mod lead;
 pub mod list;
 pub mod lists;
@@ -115,14 +116,15 @@ pub fn run(ctx: &mut Ctx, cmd: Option<&Cmd>) -> Result<i32> {
         | Cmd::Lead { .. }
         | Cmd::Dispatch { .. }
         | Cmd::Jobs { .. }
-        | Cmd::Collect { .. } => run_lead(ctx, cmd),
+        | Cmd::Collect { .. }
+        | Cmd::Land { .. } => run_lead(ctx, cmd),
         Cmd::Private { what } => private::private(ctx, what),
         Cmd::Admin { what } => admin::admin(ctx, what),
         _ => run_write(ctx, cmd),
     }
 }
 
-/// The machines and the lead claim, which a lead reads and holds.
+/// The machines and the lead claim, which a lead reads and holds, and the jobs and landings it moves.
 fn run_lead(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
     match cmd {
         Cmd::Machines => machines::machines(ctx),
@@ -179,7 +181,24 @@ fn run_lead(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             onto,
             message,
         } => dispatch::collect(ctx, id, *discard, onto.as_deref(), message.as_deref()),
-        _ => unreachable!("run_lead is given only the machine, lead and dispatch commands"),
+        Cmd::Land {
+            ids,
+            back,
+            log,
+            run,
+        } => land::land(
+            ctx,
+            &land::Ask {
+                ids,
+                back: match back.as_slice() {
+                    [id, why] => Some((id.as_str(), why.as_str())),
+                    _ => None,
+                },
+                log: *log,
+                run: run.as_deref(),
+            },
+        ),
+        _ => unreachable!("run_lead is given only the machine, lead, dispatch and land commands"),
     }
 }
 

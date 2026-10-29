@@ -40,7 +40,12 @@ Run from the project root. Note the branch the session started on (`git branch
    says what breaks in a fresh worktree. Write the failing test first, see it
    fail, then name the one owner of the fact or its full inventory (every write
    site, caller and copy), then fix through it. Never `git stash`. Run the gates `AGENTS.md` names.
-4. `docket skills merge` prints the merge; run it and read git's exit code.
+4. Where the `gate` fact is set (`docket skills gate`), do not merge or gate
+   here: hand the branch to the gate queue with `docket land T14` and take the
+   next ticket while the gate runs. Before claiming another, look after your
+   own: a build of yours that reads gate failed or conflict in `docket wip` is
+   fixed first (`docket land --log` prints the failure; queue it again with
+   `docket land T14`). Where `gate` is unset, `docket skills merge` prints the merge; run it and read git's exit code.
    If another session merged first, rebase and merge again. Check content:
    `git show HEAD:<file> | grep <symbol>`. Never push. Then
    `docket close T14 <sha>`. A plan it names as unblocked is due for an audit,

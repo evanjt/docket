@@ -123,7 +123,9 @@ fn test_check_refuses_an_unknown_key_naming_every_fact() {
         "{why}"
     );
     assert!(
-        why.ends_with("stale_claim, lead_lapse, owner_limit, failure_limit, prices, flow"),
+        why.ends_with(
+            "stale_claim, lead_lapse, stall_after, owner_limit, failure_limit, prices, flow"
+        ),
         "{why}"
     );
 }
@@ -505,4 +507,27 @@ fn test_dispatch_refused_outside_run_at_either_level() {
         dispatch_refused(&skills(&[("mode", "run")]), &skills(&[("mode", "pause")])),
         None
     );
+}
+
+#[test]
+fn test_land_batch_defaults_to_six_and_holds_a_count() {
+    assert_eq!(land_batch(&skills(&[])), 6);
+    assert_eq!(land_batch(&skills(&[("land_batch", "2")])), 2);
+    assert!(check("land_batch", "0").is_err());
+    assert_eq!(check("land_batch", "3"), Ok(()));
+}
+
+#[test]
+fn test_land_bisect_is_on_unless_set_off() {
+    assert!(land_bisect(&skills(&[])));
+    assert!(land_bisect(&skills(&[("land_bisect", "on")])));
+    assert!(!land_bisect(&skills(&[("land_bisect", "off")])));
+    assert!(check("land_bisect", "maybe").is_err());
+}
+
+#[test]
+fn test_the_gate_is_a_command_with_no_default() {
+    assert!(meaning("gate").is_some_and(|m| m.contains("exit 0")));
+    assert_eq!(value(&skills(&[]), "gate"), Value::Unset);
+    assert_eq!(check("gate", "make check"), Ok(()));
 }

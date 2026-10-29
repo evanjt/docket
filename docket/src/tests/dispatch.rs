@@ -736,3 +736,51 @@ fn test_the_leads_message_replaces_the_one_a_job_proposed() {
     );
     assert_eq!(commit_message(None, None), None);
 }
+
+#[test]
+fn test_a_gate_run_that_was_running_ends_the_wait_once_its_row_stops_running() {
+    let row =
+        |state: &str| serde_json::json!([{"role": "gate", "name": ".land-x", "state": state}]);
+    let started = running_gate_runs(row("running").as_array().unwrap());
+    assert_eq!(started, vec![".land-x".to_string()]);
+    assert!(!gate_run_ended(
+        &started,
+        row("running").as_array().unwrap()
+    ));
+    assert!(gate_run_ended(&started, row("done").as_array().unwrap()));
+    assert!(gate_run_ended(&started, &[]));
+    assert!(!gate_run_ended(&[], row("done").as_array().unwrap()));
+}
+
+#[test]
+fn test_a_land_event_moves_a_claims_landing_stage_or_ends_a_landing_claim() {
+    let rows = |a: Option<&str>, b: bool| {
+        let mut out = vec![serde_json::json!(
+            {"id": "T1", "claim_on": "bench", "claim_job": "t1-j", "claim_branch": "lead/t1-1",
+             "claim_report": "DONE", "claim_land": a.map(|at| serde_json::json!({"stage": "queued", "at": at}))}
+        )];
+        if b {
+            out.push(serde_json::json!(
+                {"id": "T2", "claim_on": "bench", "claim_job": "t2-j", "claim_branch": "lead/t2-1",
+                 "claim_report": "DONE", "claim_land": {"stage": "gating", "at": "2026-01-01T00:00:00Z"}}
+            ));
+        }
+        job_claims("o/p", &serde_json::Value::Array(out))
+    };
+    let before = rows(None, true);
+    assert!(!land_moved(&before, &rows(None, true)));
+    assert!(land_moved(
+        &before,
+        &rows(Some("2026-01-01T00:00:01Z"), true)
+    ));
+    assert!(land_moved(&before, &rows(None, false)));
+    let queued = rows(Some("2026-01-01T00:00:01Z"), true);
+    assert!(!land_moved(
+        &queued,
+        &rows(Some("2026-01-01T00:00:01Z"), true)
+    ));
+    assert!(land_moved(
+        &queued,
+        &rows(Some("2026-01-01T00:00:02Z"), true)
+    ));
+}

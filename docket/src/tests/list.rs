@@ -1,5 +1,7 @@
 use docket_core::pace::epoch;
 
+use docket_core::assignment::{Land, Stage};
+
 use super::*;
 
 const NOW: &str = "2026-10-29T12:00:00Z";
@@ -63,9 +65,44 @@ fn test_wip_groups_put_each_claim_under_its_word_with_its_minutes() {
 #[test]
 fn test_a_wip_row_words_the_minutes_by_what_they_count_from() {
     let r = claimed("T2", "in progress", "2026-10-29T11:15:00Z", None);
-    assert!(wip_row("in progress", &r, Some(45), None).starts_with("T2"));
-    assert!(wip_row("in progress", &r, Some(45), None).contains("45 min since the claim"));
-    assert!(wip_row("to land", &r, Some(60), None).contains("60 min since the job ended"));
+    assert!(wip_row("in progress", &r, Some(45), None, 0).starts_with("T2"));
+    assert!(wip_row("in progress", &r, Some(45), None, 0).contains("45 min since the claim"));
+    assert!(wip_row("to land", &r, Some(60), None, 0).contains("60 min since the job ended"));
+}
+
+fn landing(stage: Stage, at: &str) -> Land {
+    Land {
+        stage,
+        at: at.into(),
+        note: None,
+        batch: None,
+    }
+}
+
+#[test]
+fn test_a_to_land_wip_row_names_its_landing_stage_and_age() {
+    let now = epoch(NOW).unwrap();
+    let mut r = claimed(
+        "T3",
+        "to land",
+        "2026-10-29T08:00:00Z",
+        Some("2026-10-29T11:00:00Z"),
+    );
+    r.claim_land = Some(landing(Stage::GateFailed, "2026-10-29T11:48:00Z"));
+    let text = wip_row("to land", &r, Some(60), None, now);
+    let first = text.lines().next().unwrap();
+    assert!(first.contains("60 min since the job ended"), "{text}");
+    assert!(first.contains("gate failed 12m ago"), "{text}");
+}
+
+#[test]
+fn test_a_list_row_names_the_landing_stage_of_a_to_land_claim() {
+    let now = epoch(NOW).unwrap();
+    let mut r = claimed("T3", "to land", "2026-10-29T08:00:00Z", None);
+    r.claim_land = Some(landing(Stage::Conflict, "2026-10-29T11:48:00Z"));
+    assert!(list_row(&r, now).contains("conflict 12m ago"));
+    r.claim_land = None;
+    assert!(!list_row(&r, now).contains("ago"));
 }
 
 #[test]

@@ -18,8 +18,8 @@ use docket_core::machine::{Limit, Machine};
 use crate::ctx::Ctx;
 use crate::dispatch::{
     Here, JobClaim as Claim, Via, any_ended, branch_for, catch_up, commit_change, commit_message,
-    ended_in, git, gone, job_claims, limited_runners, nonce, push_to_machine, ranked,
-    read_machines_now, role_for, runner_counts,
+    ended_in, gate_run_ended, git, gone, job_claims, land_moved, limited_runners, nonce,
+    push_to_machine, ranked, read_machines_now, role_for, runner_counts, running_gate_runs,
 };
 use crate::fail::{Fail, Result};
 use crate::job::{self, Change};
@@ -311,7 +311,7 @@ pub fn jobs(ctx: &mut Ctx, wait: bool, every: u64, timeout: u64, all: bool) -> R
     let machines = machines(ctx)?;
     if wait {
         let held = live_claims(ctx, all)?;
-        if !held.is_empty() {
+        if !held.is_empty() || !gate_rows(slug.as_deref()).is_empty() {
             wait_for_an_end(
                 ctx,
                 &held,
@@ -335,6 +335,13 @@ pub fn jobs(ctx: &mut Ctx, wait: bool, every: u64, timeout: u64, all: bool) -> R
         }
     }
     Ok(0)
+}
+
+/// The gate runs of the project on this machine as job rows that are running; none without a project.
+fn gate_rows(slug: Option<&str>) -> Vec<String> {
+    slug.map_or_else(Vec::new, |s| {
+        running_gate_runs(&job::gate_runs(&job::state_root(), s, job::now()))
+    })
 }
 
 /// Block until one of `held` reports its end, the timeout passes, or a machine read after the
@@ -362,9 +369,11 @@ fn wait_for_an_end(
         .iter()
         .map(|c| (c.machine.clone(), c.job.clone()))
         .collect();
+    let gates = gate_rows(slug);
     let every = Duration::from_secs(every.max(1));
     let until = (timeout > 0).then(|| Instant::now() + Duration::from_secs(timeout));
     let mut read_at = Instant::now();
+    let before = claims(ctx, slug.is_none()).unwrap_or_default();
     loop {
         if until.is_some_and(|u| Instant::now() >= u) {
             return;
@@ -373,10 +382,17 @@ fn wait_for_an_end(
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => std::thread::sleep(every),
             Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
         }
-        if claims(ctx, slug.is_none()).is_ok_and(|now| any_ended(held, &now)) {
+        if let Some(s) = slug
+            && gate_run_ended(&gates, &job::gate_runs(&job::state_root(), s, job::now()))
+        {
             return;
         }
-        if read_machines_now(read_at.elapsed(), fallback()) {
+        if claims(ctx, slug.is_none())
+            .is_ok_and(|now| any_ended(held, &now) || land_moved(&before, &now))
+        {
+            return;
+        }
+        if !held.is_empty() && read_machines_now(read_at.elapsed(), fallback()) {
             read_at = Instant::now();
             if gone(&waited, &read_all(machines, here, slug)) {
                 return;
@@ -418,19 +434,8 @@ pub fn collect(
             "{id} holds no job's claim: docket dispatch {id} starts one"
         )));
     };
-    let machines = machines(ctx)?;
-    let Some(m) = machines.iter().find(|m| m.name == on) else {
-        return Err(Fail::refused(format!(
-            "{id}'s job ran on {on}, which is not a machine: docket machines"
-        )));
-    };
-    let via = Via::of(m, &here);
-    let row = via
-        .docket(&strings(&["-p", &slug, "job", "status", name, "--json"]))
-        .ok()
-        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-        .and_then(|v| v.as_array().and_then(|a| a.first().cloned()))
-        .ok_or_else(|| Fail::refused(format!("no job {name} on {on}: docket jobs")))?;
+    let (via, row) = job_of(ctx, &slug, &here, &id, on, name)?;
+    let row = row.ok_or_else(|| Fail::refused(format!("no job {name} on {on}: docket jobs")))?;
     if row["state"] == "running" {
         return Err(Fail::refused(format!(
             "{name} is still running on {on}: docket jobs --wait"
@@ -473,6 +478,47 @@ pub fn collect(
     };
     said.print(ctx.json);
     Ok(i32::from(!conflicts.is_empty()))
+}
+
+/// How to reach the machine a claim's job ran on, and the job's row read there: `None` when the
+/// machine holds no job of that name, as once the job is collected.
+fn job_of(
+    ctx: &mut Ctx,
+    slug: &str,
+    here: &str,
+    id: &str,
+    on: &str,
+    name: &str,
+) -> Result<(Via, Option<Value>)> {
+    let machines = machines(ctx)?;
+    let Some(m) = machines.iter().find(|m| m.name == on) else {
+        return Err(Fail::refused(format!(
+            "{id}'s job ran on {on}, which is not a machine: docket machines"
+        )));
+    };
+    let via = Via::of(m, here);
+    let row = via
+        .docket(&strings(&["-p", slug, "job", "status", name, "--json"]))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|v| v.as_array().and_then(|a| a.first().cloned()));
+    Ok((via, row))
+}
+
+/// Whether the job behind an item's claim has ended and waits to be collected: `None` when the claim
+/// has no job, or its machine holds the job no more, as once it is collected.
+///
+/// # Errors
+/// The job's machine is not one of the fleet, or the server cannot be read.
+pub fn job_waits(ctx: &mut Ctx, item: &Value) -> Result<Option<bool>> {
+    let (Some(on), Some(name)) = (item["claim_on"].as_str(), item["claim_job"].as_str()) else {
+        return Ok(None);
+    };
+    let slug = ctx.project()?;
+    let here = ctx.host()?;
+    let id = item["id"].as_str().unwrap_or_default();
+    let (_, row) = job_of(ctx, &slug, &here, id, on, name)?;
+    Ok(row.map(|r| r["state"] != "running"))
 }
 
 /// A job in one repository landed: its change committed here on the job's branch, the job
@@ -1418,4 +1464,15 @@ fn same_repo(a: &Path, b: &Path) -> bool {
 
 fn strings(words: &[&str]) -> Vec<String> {
     words.iter().map(|w| (*w).to_string()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::line;
+
+    #[test]
+    fn test_a_gate_run_row_prints_its_members() {
+        let r = serde_json::json!({"machine": "", "name": ".land-x", "state": "running", "role": "gate", "minutes": 3, "report": "T1 T2"});
+        assert!(line(&r).contains("T1 T2"));
+    }
 }

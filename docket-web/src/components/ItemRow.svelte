@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Row } from '../lib/types';
-  import { ended, highlight, note } from '../lib/note';
+  import { ended, highlight, landing, note } from '../lib/note';
   import Word from './Word.svelte';
 
   let {
@@ -24,6 +24,7 @@
 
   const why = $derived(row.snip ? '' : note(row as Row));
   const endedAgo = $derived(ended(row));
+  const landAgo = $derived(landing(row));
   const parts = $derived(row.snip ? highlight(row.snip) : []);
 </script>
 
@@ -39,6 +40,7 @@
     {#if release}<span class="release" title="Release {release}">{release}</span>{/if}
     {#if aside}<span class="aside faint">{aside}</span>{/if}
     {#if endedAgo}<span class="aside faint">{endedAgo}</span>{/if}
+    {#if landAgo}<span class="aside faint">{landAgo}</span>{/if}
     {#if why}<span class="why">{why}</span>{/if}
     {#if parts.length}<span class="why">{#each parts as p}{#if p.hit}<mark>{p.text}</mark>{:else}{p.text}{/if}{/each}</span>{/if}
   </a>

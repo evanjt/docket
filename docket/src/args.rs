@@ -97,6 +97,45 @@ pub struct Recent {
     pub key: Option<String>,
 }
 
+#[derive(Args, Debug, Clone)]
+pub struct SearchArgs {
+    #[arg(required = true)]
+    pub words: Vec<String>,
+    #[arg(long)]
+    pub key: Option<String>,
+    #[arg(long, value_parser = STATES, default_value = "any")]
+    pub state: String,
+    #[arg(short = 'n', default_value_t = 20)]
+    pub n: i64,
+    /// pass the query through as a web search text: quoted phrases, `or`, `-word`
+    #[arg(long)]
+    pub raw: bool,
+    /// only items carrying this label
+    #[arg(long, alias = "theme")]
+    pub label: Option<String>,
+    /// only items not carrying this label
+    #[arg(long, alias = "without-theme")]
+    pub without_label: Option<String>,
+    /// only items with this status word, such as `ready` or `in progress`
+    #[arg(long)]
+    pub word: Option<String>,
+    /// only items in this release
+    #[arg(long)]
+    pub release: Option<String>,
+    /// only items in this area
+    #[arg(long)]
+    pub area: Option<String>,
+    /// only items of this priority
+    #[arg(long)]
+    pub priority: Option<String>,
+    /// only items of this complexity
+    #[arg(long)]
+    pub complexity: Option<String>,
+    /// skip this many matches
+    #[arg(long, default_value_t = 0)]
+    pub offset: i64,
+}
+
 #[derive(Subcommand, Debug)]
 pub enum Cmd {
     /// counts, claims, checks and the next few as text (the bare command on a pipe)
@@ -494,25 +533,7 @@ pub enum Cmd {
         no_files: bool,
     },
     /// full-text search, ranked, with a snippet
-    Search {
-        #[arg(required = true)]
-        words: Vec<String>,
-        #[arg(long)]
-        key: Option<String>,
-        #[arg(long, value_parser = STATES, default_value = "any")]
-        state: String,
-        #[arg(short = 'n', default_value_t = 20)]
-        n: i64,
-        /// pass the FTS5 query through untouched
-        #[arg(long)]
-        raw: bool,
-        /// only items carrying this label
-        #[arg(long, alias = "theme")]
-        label: Option<String>,
-        /// only items not carrying this label
-        #[arg(long, alias = "without-theme")]
-        without_label: Option<String>,
-    },
+    Search(SearchArgs),
     /// items close to this one by title, files and symbols
     Similar {
         id: String,
@@ -675,6 +696,14 @@ pub enum Cmd {
         /// a question
         #[arg(long)]
         discard: bool,
+        /// merge this branch (the work ref's head) into the job's branch after committing; a
+        /// conflict leaves the job's commit, merges nothing and names the files
+        #[arg(long)]
+        onto: Option<String>,
+        /// commit under this message instead of the one the job proposed; the private check
+        /// still reads it
+        #[arg(long, short = 'm')]
+        message: Option<String>,
     },
     /// what a public repository must not carry: the owner's private names, read from the server
     #[command(hide = true)]

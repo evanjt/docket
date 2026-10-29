@@ -199,14 +199,17 @@ pub async fn release(
 }
 
 /// Hands the item to the owner when the attempt just ended failed and the item has now failed the
-/// project's `failure_limit` times. It goes past the owner's limit on open asks: the owner is the
+/// project's `failure_limit` times. Only an attempt that reached a job counts: one released failed
+/// before any job reported anything failed for a reason outside the item. It goes past the owner's limit on open asks: the owner is the
 /// only one left who can move it.
 async fn assign_past_failure_limit(call: &mut Call, rid: i64) -> Result<(), Failure> {
     let conn = &call.tx.conn;
     let last: Option<String> = scalar(
         conn,
-        "SELECT outcome FROM assignments WHERE rid=? AND kind='claim' AND ended_at IS NOT NULL \
-         ORDER BY id DESC LIMIT 1",
+        "SELECT COALESCE(CASE WHEN job_started_at IS NOT NULL OR job_ended_at IS NOT NULL \
+         OR job_exit IS NOT NULL OR tokens_in IS NOT NULL OR tokens_out IS NOT NULL \
+         OR cost_reported IS NOT NULL THEN outcome END, '') FROM assignments \
+         WHERE rid=? AND kind='claim' AND ended_at IS NOT NULL ORDER BY id DESC LIMIT 1",
         vec![rid.into()],
     )
     .await?;
@@ -215,7 +218,9 @@ async fn assign_past_failure_limit(call: &mut Call, rid: i64) -> Result<(), Fail
     }
     let failed: Option<i64> = scalar(
         conn,
-        "SELECT COUNT(*) FROM assignments WHERE rid=? AND kind='claim' AND outcome='failed'",
+        "SELECT COUNT(*) FROM assignments WHERE rid=? AND kind='claim' AND outcome='failed' \
+         AND (job_started_at IS NOT NULL OR job_ended_at IS NOT NULL OR job_exit IS NOT NULL \
+         OR tokens_in IS NOT NULL OR tokens_out IS NOT NULL OR cost_reported IS NOT NULL)",
         vec![rid.into()],
     )
     .await?;

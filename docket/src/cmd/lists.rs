@@ -10,7 +10,7 @@ use docket_core::changelog::{Section, render};
 use docket_core::rows::Row;
 use docket_core::word::ItemType;
 
-use crate::args::{OwnerQueue, Queue, Recent};
+use crate::args::{OwnerQueue, Queue, Recent, SearchArgs};
 use crate::ctx::{Ctx, id};
 use crate::fail::Result;
 use crate::jsonout::{Json, cut, or_none};
@@ -475,30 +475,24 @@ fn match_line(r: &Row, width: usize) -> String {
 
 /// # Errors
 /// As `next`, or the query does not parse.
-#[allow(clippy::too_many_arguments)]
-pub fn search(
-    ctx: &mut Ctx,
-    words: &[String],
-    key: Option<&String>,
-    state: &str,
-    n: i64,
-    raw: bool,
-    label: Option<&String>,
-    without_label: Option<&String>,
-) -> Result<i32> {
+pub fn search(ctx: &mut Ctx, s: &SearchArgs) -> Result<i32> {
+    let set = |v: Option<&String>| v.cloned().filter(|t| !t.is_empty());
     let rows = ctx.read(
         "/search",
         &[
-            ("q", Some(words.join(" "))),
-            ("key", key.cloned().filter(|k| !k.is_empty())),
-            ("state", Some(state.to_string())),
-            ("n", Some(n.to_string())),
-            ("raw", raw.then(|| "true".to_string())),
-            ("label", label.cloned().filter(|t| !t.is_empty())),
-            (
-                "without_label",
-                without_label.cloned().filter(|t| !t.is_empty()),
-            ),
+            ("q", Some(s.words.join(" "))),
+            ("key", set(s.key.as_ref())),
+            ("state", Some(s.state.clone())),
+            ("n", Some(s.n.to_string())),
+            ("raw", s.raw.then(|| "true".to_string())),
+            ("label", set(s.label.as_ref())),
+            ("without_label", set(s.without_label.as_ref())),
+            ("word", set(s.word.as_ref())),
+            ("release", set(s.release.as_ref())),
+            ("area", set(s.area.as_ref())),
+            ("priority", set(s.priority.as_ref())),
+            ("complexity", set(s.complexity.as_ref())),
+            ("offset", (s.offset > 0).then(|| s.offset.to_string())),
         ],
     )?;
     if ctx.json {

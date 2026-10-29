@@ -27,6 +27,43 @@ fn running(pairs: &[(&str, usize)]) -> BTreeMap<String, usize> {
 }
 
 #[test]
+fn test_the_machines_fact_filters_the_fleet() {
+    let fleet = || {
+        vec![
+            machine("bench", 1, &["claude"]),
+            machine("loft", 4, &["claude"]),
+        ]
+    };
+    let names = |v: Vec<Machine>| v.into_iter().map(|m| m.name).collect::<Vec<_>>();
+    assert_eq!(
+        names(allowed(fleet(), Some("local"), "bench").unwrap()),
+        ["bench"]
+    );
+    assert_eq!(
+        names(allowed(fleet(), Some("loft"), "bench").unwrap()),
+        ["loft"]
+    );
+    assert_eq!(
+        names(allowed(fleet(), Some("bench, loft"), "bench").unwrap()),
+        ["bench", "loft"]
+    );
+    assert_eq!(
+        names(allowed(fleet(), None, "bench").unwrap()),
+        ["bench", "loft"]
+    );
+    assert!(
+        allowed(fleet(), Some("attic"), "bench")
+            .unwrap_err()
+            .contains("attic")
+    );
+    assert!(
+        allowed(fleet(), Some("local"), "attic")
+            .unwrap_err()
+            .contains("attic")
+    );
+}
+
+#[test]
 fn test_the_role_is_the_ready_rows_unless_the_lead_names_one() {
     let plan = serde_json::json!({ "id": "A1", "role": "plan" });
     assert_eq!(role_for(Some(&plan), None, "A1").unwrap(), "plan");
@@ -583,4 +620,84 @@ fn test_a_lead_outside_its_root_keeps_its_own_repository_unless_the_item_names_o
         own: None,
     };
     assert_eq!(lost.repo(Some("lanterns"), "."), None);
+}
+
+/// A repository with `main` and a job branch cut from its first commit, each since given a file.
+fn diverged(tmp: &Path, job_file: &str, main_file: &str) -> PathBuf {
+    let repo = tmp.join("lead");
+    std::fs::create_dir_all(&repo).unwrap();
+    git_in(&repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join("shared.txt"), "one\n").unwrap();
+    git_in(&repo, &["add", "-A"]);
+    git_in(&repo, &["commit", "-qm", "start"]);
+    git_in(&repo, &["branch", "job"]);
+    std::fs::write(repo.join(main_file), "main\n").unwrap();
+    git_in(&repo, &["add", "-A"]);
+    git_in(&repo, &["commit", "-qm", "main moves"]);
+    git_in(&repo, &["checkout", "-q", "job"]);
+    std::fs::write(repo.join(job_file), "job\n").unwrap();
+    git_in(&repo, &["add", "-A"]);
+    git_in(&repo, &["commit", "-qm", "job change"]);
+    git_in(&repo, &["checkout", "-q", "main"]);
+    repo
+}
+
+#[test]
+fn test_catch_up_merges_the_head_into_a_job_branch_and_leaves_no_worktree() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = diverged(tmp.path(), "job.txt", "main.txt");
+    let job_tip = git_in(&repo, &["rev-parse", "job"]);
+
+    let conflicts = catch_up(&repo, "job", "main").unwrap();
+
+    assert_eq!(conflicts.len(), 0, "{conflicts:?}");
+    assert_eq!(git_in(&repo, &["rev-list", "--count", "job..main"]), "0");
+    let parents = git_in(&repo, &["log", "-1", "--format=%P", "job"]);
+    assert!(parents.contains(&job_tip), "{parents}");
+    assert_eq!(git_in(&repo, &["show", "job:job.txt"]), "job");
+    assert_eq!(git_in(&repo, &["show", "job:main.txt"]), "main");
+    assert_eq!(git_in(&repo, &["worktree", "list"]).lines().count(), 1);
+}
+
+#[test]
+fn test_catch_up_names_the_conflicting_files_and_leaves_the_branch_as_it_was() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = diverged(tmp.path(), "shared.txt", "shared.txt");
+    let job_tip = git_in(&repo, &["rev-parse", "job"]);
+
+    let conflicts = catch_up(&repo, "job", "main").unwrap();
+
+    assert_eq!(conflicts, ["shared.txt"]);
+    assert_eq!(git_in(&repo, &["rev-parse", "job"]), job_tip);
+    assert_eq!(git_in(&repo, &["worktree", "list"]).lines().count(), 1);
+    assert_eq!(git_in(&repo, &["status", "--porcelain"]), "");
+}
+
+#[test]
+fn test_catch_up_does_nothing_when_the_branch_already_holds_the_head() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = diverged(tmp.path(), "job.txt", "main.txt");
+    catch_up(&repo, "job", "main").unwrap();
+    let tip = git_in(&repo, &["rev-parse", "job"]);
+
+    let conflicts = catch_up(&repo, "job", "main").unwrap();
+    assert_eq!(conflicts.len(), 0);
+    assert_eq!(git_in(&repo, &["rev-parse", "job"]), tip);
+}
+
+#[test]
+fn test_the_leads_message_replaces_the_one_a_job_proposed() {
+    assert_eq!(
+        commit_message(Some("Lead's words"), Some("Job's words")),
+        Some("Lead's words")
+    );
+    assert_eq!(
+        commit_message(None, Some("Job's words")),
+        Some("Job's words")
+    );
+    assert_eq!(
+        commit_message(Some(""), Some("Job's words")),
+        Some("Job's words")
+    );
+    assert_eq!(commit_message(None, None), None);
 }

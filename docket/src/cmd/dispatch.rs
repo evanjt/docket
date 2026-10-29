@@ -17,8 +17,8 @@ use docket_core::machine::{Limit, Machine};
 
 use crate::ctx::Ctx;
 use crate::dispatch::{
-    Here, Via, branch_for, commit_change, ended_in, git, gone, limited_runners, nonce,
-    push_to_machine, ranked, read_machines_now, role_for, runner_counts,
+    Here, Via, branch_for, catch_up, commit_change, commit_message, ended_in, git, gone,
+    limited_runners, nonce, push_to_machine, ranked, read_machines_now, role_for, runner_counts,
 };
 use crate::fail::{Fail, Result};
 use crate::job::{self, Change};
@@ -242,7 +242,12 @@ fn place(
 ) -> Result<(Model, Vec<Machine>)> {
     let slug = ctx.project()?;
     let facts = ctx.api.facts(&slug)?;
-    let machines = machines(ctx)?;
+    let machines = crate::dispatch::allowed(
+        machines(ctx)?,
+        fact::effective(&facts.skills, "machines").as_deref(),
+        here,
+    )
+    .map_err(Fail::refused)?;
     let now = clock::now();
     let model = model(
         ask,
@@ -393,7 +398,13 @@ fn wait_for_an_end(
 /// # Errors
 /// The item has no job's claim, its job is still running or cannot be read, it proposed no message,
 /// or git fails.
-pub fn collect(ctx: &mut Ctx, id: &str, discard: bool) -> Result<i32> {
+pub fn collect(
+    ctx: &mut Ctx,
+    id: &str,
+    discard: bool,
+    onto: Option<&str>,
+    message: Option<&str>,
+) -> Result<i32> {
     let slug = ctx.project()?;
     let here = ctx.host()?;
     let id = crate::ctx::id(id)?;
@@ -440,11 +451,12 @@ pub fn collect(ctx: &mut Ctx, id: &str, discard: bool) -> Result<i32> {
         name,
         on,
         branch,
+        message,
     };
-    let (committed, commits) = if several.is_empty() {
-        land_one(ctx, &ran, &item, &row, discard)?
+    let (committed, commits, conflicts) = if several.is_empty() {
+        land_one(ctx, &ran, &item, &row, discard, onto)?
     } else {
-        land_several(ctx, &ran, &several, &row, discard)?
+        land_several(ctx, &ran, &several, &row, discard, onto)?
     };
     append_observations(ctx, &id, name, &row)?;
     report_usage(ctx, &slug, &id, branch, &row);
@@ -458,21 +470,25 @@ pub fn collect(ctx: &mut Ctx, id: &str, discard: bool) -> Result<i32> {
         commits: &commits,
         row: &row,
         discard,
+        onto,
+        conflicts: &conflicts,
     };
     said.print(ctx.json);
-    Ok(0)
+    Ok(i32::from(!conflicts.is_empty()))
 }
 
 /// A job in one repository landed: its change committed here on the job's branch, the job
-/// cleared. Returns the short sha, `None` for an empty change, and the commits the branch holds
-/// past this repository's HEAD.
+/// cleared, and `onto` merged into the branch when given. Returns the short sha, `None` for an
+/// empty change, the commits the branch holds past this repository's HEAD, and the files `onto`
+/// conflicts in, which leave the branch unmerged.
 fn land_one(
     ctx: &mut Ctx,
     ran: &Ran,
     item: &Value,
     row: &Value,
     discard: bool,
-) -> Result<(Option<String>, String)> {
+    onto: Option<&str>,
+) -> Result<Landed> {
     let (via, slug, name, branch) = (ran.via, ran.slug, ran.name, ran.branch);
     // The repository the job recorded it ran for; a machine whose docket records none sends no
     // field, and the item's says.
@@ -505,7 +521,28 @@ fn land_one(
         remove(via, slug, name, same)?;
         None
     };
-    Ok((committed, commits_past_head(&repo, branch)?))
+    let conflicts = match onto {
+        Some(onto) if !discard => catch_up_branch(&repo, branch, onto)?,
+        _ => Vec::new(),
+    };
+    Ok((committed, commits_past_head(&repo, branch)?, conflicts))
+}
+
+/// What a landing returns: the short sha(s) committed, the commits the branch holds past HEAD, and
+/// the files a catch-up merge conflicts in.
+type Landed = (Option<String>, String, Vec<String>);
+
+/// `onto` merged into `branch` when the branch exists here; the conflicting files otherwise.
+fn catch_up_branch(repo: &Path, branch: &str, onto: &str) -> Result<Vec<String>> {
+    let reference = format!("refs/heads/{branch}");
+    if git(repo, &["rev-parse", "--verify", "--quiet", &reference]).is_err() {
+        return Ok(Vec::new());
+    }
+    catch_up(repo, branch, onto).map_err(|why| {
+        Fail::refused(format!(
+            "the job is collected, but {onto} was not merged into {branch}: {why}"
+        ))
+    })
 }
 
 /// The commits `branch` holds past the repository's HEAD, one line each; none when it is absent.
@@ -554,13 +591,14 @@ fn land_several(
     repos: &[String],
     row: &Value,
     discard: bool,
-) -> Result<(Option<String>, String)> {
+    onto: Option<&str>,
+) -> Result<Landed> {
     let (via, slug, name, branch) = (ran.via, ran.slug, ran.name, ran.branch);
     let sides = sides_of(ctx, ran, repos)?;
     let same = sides.iter().any(|s| s.same);
     if discard {
         remove(via, slug, name, same)?;
-        return Ok((None, String::new()));
+        return Ok((None, String::new(), Vec::new()));
     }
     let landings = commit_all(ctx, ran, &sides, row)?;
     move_all(ran, &landings)?;
@@ -577,7 +615,13 @@ fn land_several(
     }
     let mut landed = Vec::new();
     let mut commits = Vec::new();
+    let mut conflicts = Vec::new();
     for l in &landings {
+        if let Some(onto) = onto {
+            for file in catch_up_branch(&l.side.local, branch, onto)? {
+                conflicts.push(format!("{}: {file}", l.side.repo));
+            }
+        }
         if let Some(m) = &l.made {
             let short =
                 git(&l.side.local, &["rev-parse", "--short", &m.sha]).map_err(Fail::refused)?;
@@ -590,6 +634,7 @@ fn land_several(
     Ok((
         (!landed.is_empty()).then(|| landed.join(" ")),
         commits.join("\n"),
+        conflicts,
     ))
 }
 
@@ -701,14 +746,17 @@ fn move_all(ran: &Ran, landings: &[Landing]) -> Result<()> {
 
 /// The message a job proposed for its change, which a change needs to be committed.
 fn proposed<'a, 'b>(
-    ran: &Ran,
+    ran: &Ran<'a>,
     row: &'a Value,
     mut changes: impl Iterator<Item = &'b Change>,
 ) -> Result<&'a str> {
-    let message = row["message"]
-        .as_str()
-        .or_else(|| row["note"].as_str())
-        .filter(|m| !m.is_empty());
+    let message = commit_message(
+        ran.message,
+        row["message"]
+            .as_str()
+            .or_else(|| row["note"].as_str())
+            .filter(|m| !m.is_empty()),
+    );
     if message.is_none() && changes.any(|c| !c.is_empty()) {
         return Err(Fail::refused(format!(
             "{} left a change but proposed no MESSAGE line to commit it with: docket job log {} on {}",
@@ -805,6 +853,8 @@ struct Ran<'a> {
     name: &'a str,
     on: &'a str,
     branch: &'a str,
+    /// The lead's own commit message, which replaces the job's proposed one.
+    message: Option<&'a str>,
 }
 
 /// The job's change committed here in `repo` on `base`, then the job cleared, so a change that
@@ -901,6 +951,8 @@ struct Collected<'a> {
     commits: &'a str,
     row: &'a Value,
     discard: bool,
+    onto: Option<&'a str>,
+    conflicts: &'a [String],
 }
 
 impl Collected<'_> {
@@ -910,6 +962,7 @@ impl Collected<'_> {
             let out = serde_json::json!({
                 "id": id, "branch": branch, "machine": on, "job": name, "committed": self.committed,
                 "commits": self.commits.lines().collect::<Vec<_>>(), "status": row, "discarded": self.discard,
+                "onto": self.onto, "conflicts": self.conflicts,
             });
             println!("{out}");
             return;
@@ -923,6 +976,16 @@ impl Collected<'_> {
         }
         if !self.commits.is_empty() {
             println!("{}", self.commits);
+        }
+        if let Some(onto) = self.onto.filter(|_| !self.discard) {
+            if self.conflicts.is_empty() {
+                println!("{onto} merged into {branch}");
+            } else {
+                println!(
+                    "{onto} conflicts with {branch}, which is left unmerged, in:\n{}",
+                    self.conflicts.join("\n")
+                );
+            }
         }
         println!(
             "{} {}",

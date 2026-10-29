@@ -4,7 +4,8 @@
   import { resource } from '../lib/live.svelte';
   import { href } from '../lib/route';
   import { session } from '../lib/session.svelte';
-  import { ago, epoch } from '../lib/time';
+  import { byRecent } from '../lib/projects';
+  import { ago } from '../lib/time';
   import type { Count, Status } from '../lib/types';
 
   const counts = resource(() => api.counts());
@@ -17,11 +18,12 @@
   let showQuiet = $state(false);
   const WORDS = [...FLOW, ...ASIDE];
 
-  const rows = $derived(
-    [...(counts.data ?? [])]
-      .filter((c) => showQuiet || c.open > 0)
-      .sort((a, b) => (epoch(b.last_event) ?? 0) - (epoch(a.last_event) ?? 0)),
-  );
+  const rows = $derived.by(() => {
+    const all = counts.data ?? [];
+    const bySlug = new Map(all.map((c) => [c.slug, c]));
+    const shown = all.filter((c) => showQuiet || c.open > 0).map((c) => c.slug);
+    return byRecent(shown, all).map((s) => bySlug.get(s)!);
+  });
   const quiet = $derived((counts.data ?? []).filter((c) => c.open === 0).length);
   const totals = $derived(
     (counts.data ?? []).reduce((a: { open: number; done: number }, c: Count) => ({ open: a.open + c.open, done: a.done + c.done }), { open: 0, done: 0 }),

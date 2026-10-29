@@ -4,14 +4,18 @@ import { reading, aborted, supersede } from './reads';
 import { concerns, paced, parse, settled } from './sse';
 
 /** Bumped after every change the server reports, and after every write from this page. */
-export const live = $state({ version: 0, graph: 0, connected: false });
+export const live = $state({ version: 0, graph: 0, counts: 0, connected: false });
 
 const SETTLE_MS = 1000;
 const CEILING_MS = 5000;
 const GRAPH_MS = 60_000;
+const COUNTS_MS = 3000;
 const RETRY_MS = [1000, 2000, 5000, 10000];
 
 const reloadGraph = paced(GRAPH_MS, () => live.graph++);
+
+/** Moves the per-project counts for a change to any project, which the page's own refresh skips. */
+const reloadCounts = paced(COUNTS_MS, () => live.counts++);
 
 /** Reads again everything on screen, once a burst of changes has settled, and at least every `CEILING_MS`. */
 export const refresh = settled(SETTLE_MS, CEILING_MS, () => {
@@ -39,8 +43,9 @@ export async function follow(signal: AbortSignal) {
             if (!live.connected && attempt > 0) refresh();
             live.connected = true;
             attempt = 0;
-          } else if (e.event === 'change' && concerns(e.data, here.slug)) {
-            refresh();
+          } else if (e.event === 'change') {
+            reloadCounts();
+            if (concerns(e.data, here.slug)) refresh();
           }
         }
       }

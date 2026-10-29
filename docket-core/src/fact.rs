@@ -6,7 +6,7 @@ use crate::item::Refused;
 use crate::text::quoted;
 
 /// Every fact a project carries, in the order `docket skills` prints them, with its one-line meaning.
-pub const FACTS: [(&str, &str); 21] = [
+pub const FACTS: [(&str, &str); 22] = [
     ("owner", "the owner's name, as the skills address them"),
     (
         "worktree",
@@ -52,6 +52,10 @@ pub const FACTS: [(&str, &str); 21] = [
     (
         "models",
         "the runner, model and effort a job or a lead runs on, by complexity and role, as \"high=claude:MODEL:high medium=codex:MODEL low=... unrated=... audit=... plan=... lead=...\"",
+    ),
+    (
+        "machines",
+        "the machines this project's jobs may run on: local for the machine the lead runs on, or machine names separated by commas as docket machines prints them; unset, any machine",
     ),
     (
         "releases",

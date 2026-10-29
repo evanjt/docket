@@ -407,6 +407,97 @@ async fn test_search_ranks_with_snippets_and_refuses_bad_queries() {
     );
 }
 
+const SEARCH_SEED: &str = r"
+INSERT INTO projects (slug, skills, created_at, updated_at) VALUES ('o/q', '{}', 'c', 'u');
+INSERT INTO areas (id, project, name, description, position, priority) VALUES
+  (11, 'o/q', 'lanterns', '', 1, NULL), (12, 'o/q', 'kites', '', 2, NULL);
+INSERT INTO releases (id, project, name, position) VALUES (11, 'o/q', '1.0', 0), (12, 'o/q', '1.1', 1);
+INSERT INTO items (rid, project, key, num, title, state, body, opened_at, updated_at) VALUES
+  (600, 'o/q', 'T', 3, 'Plain third', 'open', '', 'o60', 'u60'),
+  (601, 'o/q', 'T', 4, 'A lantern for the garden', 'open', 'see T3', 'o61', 'u61'),
+  (602, 'o/q', 'T', 5, 'Lantern wick', 'open', 'T3 first', 'o62', 'u62'),
+  (603, 'o/q', 'T', 6, 'Lantern frame', 'open', 'T3 again', 'o63', 'u63'),
+  (604, 'o/q', 'T', 30, 'Thirty', 'open', '', 'o64', 'u64');
+UPDATE items SET release_id=11, area_id=11, priority='low', complexity='low' WHERE rid=601;
+UPDATE items SET release_id=12, area_id=12, priority='high', complexity='high' WHERE rid IN (602, 603);
+UPDATE items SET state='done', resolution='ok' WHERE rid=603;
+INSERT INTO assignments (rid, assignee, kind, started_at, branch, host) VALUES (602, 'agent', 'claim', 'c', 'b', 'h');
+INSERT INTO search (rid, id, title, body, files) VALUES
+  (600, 'T3', 'Plain third', '', ''),
+  (601, 'T4', 'A lantern for the garden', 'see T3', ''),
+  (602, 'T5', 'Lantern wick', 'T3 first', ''),
+  (603, 'T6', 'Lantern frame', 'T3 again', ''),
+  (604, 'T30', 'Thirty', '', '');
+";
+
+async fn search_ids(path: &str) -> Vec<String> {
+    let (app, s) = seeded().await;
+    s.seed(SEARCH_SEED).await;
+    let req = Request::builder()
+        .uri(path)
+        .header(AUTHORIZATION, "Bearer secret")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(status, StatusCode::OK, "{path}: {body}");
+    body.as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[tokio::test]
+async fn test_search_takes_the_last_word_as_a_prefix() {
+    let found = search_ids("/search?project=o/q&q=lant&state=any").await;
+    assert_eq!(found.len(), 3, "{found:?}");
+    assert!(!found.contains(&"T3".to_string()));
+    assert_eq!(
+        search_ids("/search?project=o/q&q=garden%20lant&state=any").await,
+        ["T4"]
+    );
+    let reversed = search_ids("/search?project=o/q&q=lant%20garden&state=any").await;
+    assert_eq!(reversed.len(), 0);
+}
+
+#[tokio::test]
+async fn test_search_puts_an_exact_id_first() {
+    for q in ["T3", "t3"] {
+        let found = search_ids(&format!("/search?project=o/q&q={q}&state=any")).await;
+        assert_eq!(found[0], "T3", "{q}: {found:?}");
+        assert!(found.len() > 1);
+    }
+}
+
+#[tokio::test]
+async fn test_search_filters_by_release_area_priority_complexity_and_word_before_the_page() {
+    let base = "/search?project=o/q&q=lant&state=any";
+    assert_eq!(search_ids(&format!("{base}&release=1.0")).await, ["T4"]);
+    assert_eq!(search_ids(&format!("{base}&area=lanterns")).await, ["T4"]);
+    assert_eq!(search_ids(&format!("{base}&priority=low")).await, ["T4"]);
+    assert_eq!(search_ids(&format!("{base}&complexity=low")).await, ["T4"]);
+    let mut high = search_ids(&format!("{base}&release=1.1")).await;
+    high.sort_unstable();
+    assert_eq!(high, ["T5", "T6"]);
+    assert_eq!(
+        search_ids(&format!("{base}&word=in%20progress")).await,
+        ["T5"]
+    );
+    assert_eq!(search_ids(&format!("{base}&word=done")).await, ["T6"]);
+    let all = search_ids(&format!("{base}&release=1.1")).await;
+    assert_eq!(
+        search_ids(&format!("{base}&release=1.1&n=1&offset=1")).await,
+        [all[1].clone()]
+    );
+    assert_eq!(
+        search_ids(&format!("{base}&word=ready&n=1&offset=1")).await,
+        Vec::<String>::new()
+    );
+}
+
 #[tokio::test]
 async fn test_similar_matches_title_words_and_cited_files_and_skips_itself() {
     assert_eq!(ids("/similar/T11").await, ["T1"]);

@@ -292,8 +292,8 @@ The tests need a Postgres on which they can create databases, named by `DATABASE
 a database of its own and drops it when done:
 
 ```bash
-docker run -d --name docket-test-pg -e POSTGRES_PASSWORD=pg -p 127.0.0.1:5433:5432 postgres:18
-DATABASE_URL=postgres://postgres:pg@127.0.0.1:5433/postgres cargo test
+docker run -d --name docket-test-pg -e POSTGRES_PASSWORD=pg -p 127.0.0.1:55433:5432 postgres:18
+DATABASE_URL=postgres://postgres:pg@127.0.0.1:55433/postgres cargo test
 ```
 
 The web client's tests need no server:

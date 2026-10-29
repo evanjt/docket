@@ -644,6 +644,19 @@ fn test_a_lead_runs_a_job_on_its_own_machine_by_the_models_fact() {
 }
 
 #[test]
+fn test_a_project_confined_to_local_dispatches_on_the_leads_machine_though_another_has_more_slots()
+{
+    let w = World::new();
+    let more = w.lead(&["machine", "set", "beta", "--slots", "6"]);
+    assert!(more.status.success(), "{}", text(&more));
+    let set = w.lead(&["skills", "set", "machines", "local"]);
+    assert!(set.status.success(), "{}", text(&set));
+    let out = w.lead(&["dispatch", "T3"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(w.show("T3")["claim_on"], "alpha");
+}
+
+#[test]
 fn test_a_dispatch_whose_push_fails_gives_the_claim_back() {
     let w = World::new();
     let beta = w.home("beta").join("src/p");

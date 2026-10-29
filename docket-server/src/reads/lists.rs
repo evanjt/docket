@@ -418,7 +418,7 @@ fn twenty() -> i64 {
 ///
 /// # Errors
 /// 400 when `release` is not one of the project's releases.
-async fn in_release(
+pub(crate) async fn in_release(
     db: &DatabaseConnection,
     slug: &str,
     release: &str,

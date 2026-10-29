@@ -4,29 +4,34 @@
   import { href } from '../lib/route';
   import { session, signOut } from '../lib/session.svelte';
   import { applyTheme, loadTheme, type Theme } from '../lib/theme';
+  import { byOrganisation, byRecent, loadOrder, saveOrder, type Order } from '../lib/projects';
   import { ago } from '../lib/time';
   import type { Count } from '../lib/types';
 
   let { current, open = $bindable(false) }: { current: string | null; open?: boolean } = $props();
 
-  const counts = resource(() => api.counts());
+  const counts = resource(
+    () => api.counts(),
+    () => live.version + live.counts,
+  );
+  let order = $state<Order>(loadOrder());
   let filter = $state('');
   let theme = $state<Theme>(loadTheme());
 
   const bySlug = $derived(new Map((counts.data ?? []).map((c: Count) => [c.slug, c])));
 
-  /** Projects under their owner, the part of the slug before its slash. */
-  const groups = $derived.by(() => {
+  /** The filtered projects as groups: one unlabelled group by recency, or one per organisation. */
+  const groups = $derived.by((): [string, string[]][] => {
     const words = filter.trim().toLowerCase();
-    const out = new Map<string, string[]>();
-    for (const p of session.projects) {
-      if (words && !p.slug.toLowerCase().includes(words)) continue;
-      const at = p.slug.indexOf('/');
-      const owner = at > 0 ? p.slug.slice(0, at) : '';
-      out.set(owner, [...(out.get(owner) ?? []), p.slug]);
-    }
-    return [...out].sort(([a], [b]) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b)));
+    const slugs = session.projects.map((p) => p.slug).filter((s) => !words || s.toLowerCase().includes(words));
+    const all = counts.data ?? [];
+    return order === 'recent' ? (slugs.length ? [['', byRecent(slugs, all)]] : []) : byOrganisation(slugs, all);
   });
+
+  function choose(next: Order) {
+    order = next;
+    saveOrder(next);
+  }
 
   function cycleTheme() {
     theme = theme === 'system' ? 'dark' : theme === 'dark' ? 'light' : 'system';
@@ -42,6 +47,10 @@
     docket
   </a>
   <input class="field filter" placeholder="Filter projects" bind:value={filter} aria-label="Filter projects" />
+  <div class="order" role="group" aria-label="Order projects">
+    <button class="link" class:on={order === 'recent'} onclick={() => choose('recent')}>Recent</button>
+    <button class="link" class:on={order === 'organisation'} onclick={() => choose('organisation')}>By organisation</button>
+  </div>
   <div class="list">
     {#each groups as [owner, slugs] (owner)}
       <div class="group">
@@ -117,6 +126,18 @@
     width: auto;
     padding: 5px 9px;
     font-size: 13px;
+  }
+
+  .order {
+    display: flex;
+    gap: 12px;
+    padding: 0 20px 6px;
+    font-size: 12.5px;
+  }
+
+  .order .on {
+    color: var(--accent);
+    font-weight: 600;
   }
 
   .list {

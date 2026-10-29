@@ -9,7 +9,8 @@ use sea_orm::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use docket_core::search::{any_of, fts_query, similar_terms};
+use docket_core::rules::COMPLEXITIES;
+use docket_core::search::{any_of, fts_query, id_of, similar_terms};
 
 use crate::entities::{item, link, project};
 use crate::reads::public::{
@@ -17,7 +18,7 @@ use crate::reads::public::{
 };
 use crate::reads::queue::under_cond;
 use crate::verbs::labels::{carried_cond, exactly};
-use docket_core::word::kind_of_type;
+use docket_core::word::{PRIORITIES, kind_of_type};
 
 const STATES: [&str; 4] = ["open", "done", "dropped", "any"];
 
@@ -35,7 +36,16 @@ pub(crate) struct Narrow {
     pub without_label: Option<String>,
     /// Only items under this plan, story or concept, by the rule `next` applies.
     pub under: Option<String>,
+    /// The query is a `to_tsquery` text, not a `websearch_to_tsquery` one.
+    pub prefix: bool,
+    /// The id the query names alone: that item ranks first.
+    pub exact: Option<String>,
+    pub release: Option<i64>,
+    pub area: Option<i64>,
+    pub priority: Option<String>,
+    pub complexity: Option<String>,
     pub n: i64,
+    pub offset: i64,
 }
 
 /// The weights of the body, files, id and title, as `ts_rank` takes them (D, C, B, A).
@@ -54,12 +64,22 @@ pub(crate) fn ranked(
     narrow: &Narrow,
     under: (String, Vec<sea_orm::Value>),
 ) -> (String, Vec<sea_orm::Value>) {
+    let parse = if narrow.prefix {
+        "to_tsquery('simple', ?)"
+    } else {
+        "websearch_to_tsquery('simple', translate(?, '/:<>@?=&#%~+', '            '))"
+    };
     let mut text = format!(
-        "SELECT i.*, s.body AS matched, q, (-ts_rank({WEIGHTS}, s.doc, q))::float8 AS score \
-         FROM search s JOIN items i ON i.rid = s.rid, websearch_to_tsquery('simple', translate(?, '/:<>@?=&#%~+', '            ')) q \
+        "SELECT i.*, s.body AS matched, q, (-ts_rank({WEIGHTS}, s.doc, q))::float8 AS score, \
+         (i.key || i.num::text = ?) AS exact \
+         FROM search s JOIN items i ON i.rid = s.rid, {parse} q \
          WHERE s.doc @@ q AND i.project=?"
     );
-    let mut values: Vec<sea_orm::Value> = vec![query.into(), slug.into()];
+    let mut values: Vec<sea_orm::Value> = vec![
+        narrow.exact.clone().unwrap_or_default().into(),
+        query.into(),
+        slug.into(),
+    ];
     if let Some(key) = &narrow.key {
         text.push_str(" AND i.key=?");
         values.push(key.to_uppercase().into());
@@ -74,6 +94,25 @@ pub(crate) fn ranked(
         text.push_str(" AND i.state=?");
         values.push(state.into());
     }
+    for (column, value) in [
+        ("release_id", narrow.release.map(sea_orm::Value::from)),
+        ("area_id", narrow.area.map(sea_orm::Value::from)),
+        (
+            "priority",
+            narrow.priority.clone().map(sea_orm::Value::from),
+        ),
+        (
+            "complexity",
+            narrow.complexity.clone().map(sea_orm::Value::from),
+        ),
+    ] {
+        if let Some(value) = value {
+            text.push_str(" AND i.");
+            text.push_str(column);
+            text.push_str("=?");
+            values.push(value);
+        }
+    }
     if let Some(rid) = narrow.exclude {
         text.push_str(" AND i.rid<>?");
         values.push(rid.into());
@@ -87,8 +126,9 @@ pub(crate) fn ranked(
     }
     text.push_str(&under.0);
     values.extend(under.1);
-    text.push_str(" ORDER BY score, i.rid LIMIT ?");
+    text.push_str(" ORDER BY exact DESC, score, i.rid LIMIT ? OFFSET ?");
     values.push(narrow.n.into());
+    values.push(narrow.offset.into());
     (text, values)
 }
 
@@ -103,7 +143,7 @@ pub(crate) async fn search_rows(
     let (inner, values) = ranked(slug, query, narrow, under);
     let text = format!(
         "SELECT m.*, ts_headline('simple', m.matched, m.q, {SNIPPET}) AS snip FROM ({inner}) m \
-         ORDER BY m.score, m.rid"
+         ORDER BY m.exact DESC, m.score, m.rid"
     );
     let rows = db
         .query_all_raw(sql(&text, values))
@@ -125,6 +165,7 @@ async fn shaped(
     project: &project::Model,
     rows: Vec<(item::Model, f64, String)>,
     snippet: bool,
+    page: Option<(&str, i64, i64)>,
 ) -> Result<Json<Value>, Failure> {
     let counts = member_counts(db, &project.slug)
         .await
@@ -141,6 +182,14 @@ async fn shaped(
             d.insert("snippet".into(), json!(snip));
         }
         out.push(Value::Object(d));
+    }
+    if let Some((word, offset, n)) = page {
+        out.retain(|d| d["word"] == word);
+        out = out
+            .into_iter()
+            .skip(usize::try_from(offset).unwrap_or_default())
+            .take(usize::try_from(n).unwrap_or_default())
+            .collect();
     }
     Ok(Json(Value::Array(out)))
 }
@@ -162,6 +211,14 @@ pub struct SearchQuery {
     #[serde(alias = "without_theme")]
     without_label: Option<String>,
     under: Option<String>,
+    /// The status word: `ready`, `in progress` and the rest.
+    word: Option<String>,
+    release: Option<String>,
+    area: Option<String>,
+    priority: Option<String>,
+    complexity: Option<String>,
+    #[serde(default)]
+    offset: i64,
 }
 
 fn twenty() -> i64 {
@@ -179,23 +236,63 @@ pub async fn search(
 ) -> Result<Json<Value>, Failure> {
     crate::reads::public::one_of("state", q.state.as_deref(), &STATES)?;
     let project = project_of(&db, &q.project).await?;
+    crate::reads::public::one_of("priority", q.priority.as_deref(), &PRIORITIES)?;
+    crate::reads::public::one_of("complexity", q.complexity.as_deref(), &COMPLEXITIES)?;
     let query = if q.raw {
         q.q.clone()
     } else {
         fts_query(&q.q).ok_or_else(|| failure(StatusCode::BAD_REQUEST, "search needs words."))?
     };
+    let release = match &q.release {
+        Some(r) => Some(release_id(&db, &q.project, r).await?),
+        None => None,
+    };
+    let area = match &q.area {
+        Some(a) => Some(area_id(&db, &q.project, a).await?),
+        None => None,
+    };
+    let (n, offset) = (q.n.max(0), q.offset.max(0));
+    let by_word = q.word.as_deref().filter(|w| !w.is_empty());
     let narrow = Narrow {
         key: q.key,
-        decided: Vec::new(),
         state: q.state,
-        exclude: None,
         label: q.label,
         without_label: q.without_label,
         under: q.under,
-        n: q.n,
+        prefix: !q.raw,
+        exact: if q.raw { None } else { id_of(&q.q) },
+        release,
+        area,
+        priority: q.priority,
+        complexity: q.complexity,
+        // A status word is derived per row, so its page is cut after it.
+        n: if by_word.is_some() { i64::MAX } else { n },
+        offset: if by_word.is_some() { 0 } else { offset },
+        ..Narrow::default()
     };
     let rows = search_rows(&db, &q.project, &query, &narrow).await?;
-    shaped(&db, &project, rows, true).await
+    shaped(&db, &project, rows, true, by_word.map(|w| (w, offset, n))).await
+}
+
+async fn release_id(db: &DatabaseConnection, slug: &str, name: &str) -> Result<i64, Failure> {
+    let (_, values) = crate::reads::lists::in_release(db, slug, name, "release_id").await?;
+    match values.into_iter().next() {
+        Some(sea_orm::Value::BigInt(Some(id))) => Ok(id),
+        _ => Err(failure(StatusCode::BAD_REQUEST, "release: unknown.")),
+    }
+}
+
+async fn area_id(db: &DatabaseConnection, slug: &str, name: &str) -> Result<i64, Failure> {
+    let areas = crate::verbs::areas::listed(db, slug)
+        .await
+        .map_err(|e| internal(&e))?;
+    areas.id(name).ok_or_else(|| {
+        let names: Vec<&str> = areas.rows.iter().map(|(_, a)| a.name.as_str()).collect();
+        failure(
+            StatusCode::BAD_REQUEST,
+            &format!("area: choose from {}", names.join(", ")),
+        )
+    })
 }
 
 #[derive(Deserialize)]
@@ -229,7 +326,7 @@ pub async fn similar(
         ..Narrow::default()
     };
     let rows = similar_rows(&db, &q.project, &row, &narrow).await?;
-    shaped(&db, &project, rows, false).await
+    shaped(&db, &project, rows, false, None).await
 }
 
 /// The items close to `row` by its title's words, the files it cites and its symbols.

@@ -117,6 +117,41 @@ pub fn ranked<'a>(
     out.into_iter().map(|(m, _)| m).collect()
 }
 
+/// The machines a project's `machines` fact allows: `local` is the machine named `here`, else the
+/// comma-separated names; unset allows the whole fleet.
+///
+/// # Errors
+/// The fact names no machine of the fleet, which says which name or that `here` is not in it.
+pub fn allowed(
+    fleet: Vec<Machine>,
+    fact: Option<&str>,
+    here: &str,
+) -> Result<Vec<Machine>, String> {
+    let Some(fact) = fact.map(str::trim).filter(|f| !f.is_empty()) else {
+        return Ok(fleet);
+    };
+    let names: Vec<&str> = if fact == "local" {
+        if !fleet.iter().any(|m| m.name == here) {
+            return Err(format!(
+                "the machines fact is local, and {here} is not a machine: docket machines"
+            ));
+        }
+        vec![here]
+    } else {
+        let names: Vec<&str> = fact.split(',').map(str::trim).collect();
+        if let Some(bad) = names.iter().find(|n| !fleet.iter().any(|m| m.name == **n)) {
+            return Err(format!(
+                "the machines fact names {bad}, which is not a machine: docket machines"
+            ));
+        }
+        names
+    };
+    Ok(fleet
+        .into_iter()
+        .filter(|m| names.contains(&m.name.as_str()))
+        .collect())
+}
+
 /// The runners under a usage limit at `now` on every machine that has them, each with the earliest
 /// reset among those machines: the runners no dispatch can use until then.
 #[must_use]
@@ -489,6 +524,43 @@ pub fn index_git(dir: &Path, index: Option<&Path>, args: &[&str]) -> Result<Stri
         cmd.env("GIT_INDEX_FILE", i);
     }
     output(&mut cmd, "git")
+}
+
+/// The message a change is committed under: the lead's own when it gave one, else the job's.
+#[must_use]
+pub fn commit_message<'a>(own: Option<&'a str>, proposed: Option<&'a str>) -> Option<&'a str> {
+    own.filter(|m| !m.is_empty()).or(proposed)
+}
+
+/// `onto` merged into `branch` in a scratch worktree of `repo`, which is removed afterwards, so
+/// nothing is checked out or left half-merged. A clean merge moves `branch`; a conflict leaves it
+/// where it was and returns the conflicting files. A branch already holding `onto` is left alone.
+///
+/// # Errors
+/// The worktree cannot be made, or the merge fails for a reason other than a conflict.
+pub fn catch_up(repo: &Path, branch: &str, onto: &str) -> Result<Vec<String>, String> {
+    if git(repo, &["merge-base", "--is-ancestor", onto, branch]).is_ok() {
+        return Ok(Vec::new());
+    }
+    let tmp = scratch("worktree");
+    let tmp_s = tmp.display().to_string();
+    git(repo, &["worktree", "add", "--detach", &tmp_s, branch])?;
+    let done = (|| {
+        let message = format!("Merge {onto} into {branch}");
+        if git(&tmp, &["merge", "--no-ff", "-m", &message, onto]).is_ok() {
+            let head = git(&tmp, &["rev-parse", "HEAD"])?;
+            git(repo, &["branch", "-f", branch, &head])?;
+            return Ok(Vec::new());
+        }
+        let files = git(&tmp, &["diff", "--name-only", "--diff-filter=U"])?;
+        let _ = git(&tmp, &["merge", "--abort"]);
+        if files.is_empty() {
+            return Err(format!("merging {onto} into {branch} failed"));
+        }
+        Ok(files.lines().map(str::to_string).collect())
+    })();
+    let _ = git(repo, &["worktree", "remove", "--force", &tmp_s]);
+    done
 }
 
 /// A path for a scratch file or worktree of this process, a different one on every call.

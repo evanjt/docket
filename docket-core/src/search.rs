@@ -8,14 +8,36 @@ fn quoted(term: &str) -> String {
     format!("\"{}\"", term.replace('"', "\"\""))
 }
 
-/// Every word of the text as an FTS5 phrase, all required; `None` when there are no words.
+/// The index tokens of one typed word: separators split it, and what a `to_tsquery` text could
+/// not hold is left out. Parts of a path or a host stay joined by dots.
+fn parts(word: &str) -> Vec<String> {
+    word.split(|c: char| !(c.is_alphanumeric() || matches!(c, '.' | '_' | '-')))
+        .map(|p| p.trim_matches(|c| matches!(c, '.' | '-')))
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// A `to_tsquery` text for what is typed: every word required, each as the phrase of its parts,
+/// and the last as a prefix so a half-typed word finds its items. `None` when there are no words.
 #[must_use]
 pub fn fts_query(text: &str) -> Option<String> {
-    let words: Vec<String> = text.split_whitespace().map(quoted).collect();
-    if words.is_empty() {
-        return None;
-    }
-    Some(words.join(" "))
+    let mut words: Vec<Vec<String>> = text
+        .split_whitespace()
+        .map(parts)
+        .filter(|w| !w.is_empty())
+        .collect();
+    let last = words.pop()?;
+    let mut out: Vec<String> = words.iter().map(|w| w.join(" <-> ")).collect();
+    out.push(format!("{}:*", last.join(" <-> ")));
+    Some(out.join(" & "))
+}
+
+/// The id a query names when it is one id and nothing else, in any case.
+#[must_use]
+pub fn id_of(text: &str) -> Option<String> {
+    let id = text.trim().to_uppercase();
+    is_id(&id).then_some(id)
 }
 
 /// An FTS5 query matching any of the terms.

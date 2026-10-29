@@ -1,12 +1,30 @@
 use super::*;
 
 #[test]
-fn test_fts_query_quotes_each_word() {
+fn test_fts_query_requires_each_word_and_the_last_as_a_prefix() {
     assert_eq!(
-        fts_query("  sync  \"ok\" "),
-        Some(r#""sync" """ok""""#.to_string())
+        fts_query("  garden  lant "),
+        Some("garden & lant:*".to_string())
     );
+    assert_eq!(fts_query("lant"), Some("lant:*".to_string()));
     assert_eq!(fts_query("   "), None);
+}
+
+#[test]
+fn test_fts_query_reads_separators_as_the_index_does() {
+    assert_eq!(
+        fts_query("src/a.rs:4 (x|y)"),
+        Some("src <-> a.rs <-> 4 & x <-> y:*".to_string())
+    );
+    assert_eq!(fts_query("& ! ( ) -"), None);
+}
+
+#[test]
+fn test_id_of_reads_one_id_in_any_case() {
+    assert_eq!(id_of(" t14 "), Some("T14".to_string()));
+    assert_eq!(id_of("STY2"), Some("STY2".to_string()));
+    assert_eq!(id_of("t14 lamp"), None);
+    assert_eq!(id_of("lamp"), None);
 }
 
 #[test]

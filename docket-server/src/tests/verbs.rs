@@ -1897,6 +1897,11 @@ async fn test_a_second_failed_unclaim_assigns_the_item_to_the_owner() {
         .await;
         assert_eq!(s.item("B1").await["turn"], "agent", "attempt {attempt}");
         s.ok(
+            "job-report",
+            json!({ "id": "B1", "start": "2026-10-05T10:00:00Z", "exit": 1 }),
+        )
+        .await;
+        s.ok(
             "release",
             json!({ "id": "B1", "outcome": "failed", "note": "the job died" }),
         )
@@ -1910,6 +1915,47 @@ async fn test_a_second_failed_unclaim_assigns_the_item_to_the_owner() {
         (&rows[2]["assignee"], &rows[2]["kind"], &rows[2]["ended_at"]),
         (&json!("owner"), &json!("ask"), &Value::Null)
     );
+}
+
+#[tokio::test]
+async fn test_failed_unclaims_that_never_reported_a_job_leave_the_item_the_agents() {
+    let s = Scratch::new().await;
+    s.open("B", "Kettle trips the fuse").await;
+    for _ in 0..3 {
+        s.ok(
+            "start",
+            json!({ "id": "B1", "runner": "claude", "job": "b1-j" }),
+        )
+        .await;
+        s.ok(
+            "release",
+            json!({ "id": "B1", "outcome": "failed", "note": "the checkout could not be made" }),
+        )
+        .await;
+    }
+    assert_eq!(s.item("B1").await["turn"], "agent");
+}
+
+#[tokio::test]
+async fn test_a_failed_unclaim_with_a_job_after_unreported_failures_counts_only_the_job() {
+    let s = Scratch::new().await;
+    s.open("B", "Kettle trips the fuse").await;
+    s.ok(
+        "start",
+        json!({ "id": "B1", "runner": "claude", "job": "b1-j" }),
+    )
+    .await;
+    s.ok("release", json!({ "id": "B1", "outcome": "failed" }))
+        .await;
+    s.ok(
+        "start",
+        json!({ "id": "B1", "runner": "claude", "job": "b1-j" }),
+    )
+    .await;
+    s.ok("job-report", json!({ "id": "B1", "exit": 1 })).await;
+    s.ok("release", json!({ "id": "B1", "outcome": "failed" }))
+        .await;
+    assert_eq!(s.item("B1").await["turn"], "agent");
 }
 
 #[tokio::test]

@@ -286,6 +286,11 @@ async fn rename(
         .iter()
         .find(|(i, _)| *i == id)
         .map_or(0, |(_, r)| r.position);
+    if at != was && !call.ctx.force {
+        Order::load(&call.tx.conn, &call.slug)
+            .await?
+            .refuse_rename(old, new, at)?;
+    }
     call.tx
         .execute("SET CONSTRAINTS ALL DEFERRED", vec![])
         .await?;

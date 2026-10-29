@@ -37,6 +37,19 @@ pub struct Cli {
     pub cmd: Option<Cmd>,
 }
 
+/// How `docket list` orders the rows within a group.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ListSort {
+    /// the order the server lists them in
+    #[default]
+    Queue,
+    Id,
+    /// most urgent first
+    Priority,
+    /// most recently updated first
+    Updated,
+}
+
 #[derive(Args, Debug, Default, Clone)]
 pub struct Queue {
     pub n: Option<i64>,
@@ -125,7 +138,7 @@ pub struct SearchArgs {
     /// only items in this area
     #[arg(long)]
     pub area: Option<String>,
-    /// only items of this priority
+    /// only items of this stored priority or a more urgent one
     #[arg(long)]
     pub priority: Option<String>,
     /// only items of this complexity
@@ -148,6 +161,15 @@ pub enum Cmd {
         /// only items carrying this label
         #[arg(long, alias = "theme")]
         label: Option<String>,
+    },
+    /// open items grouped by status word in flow order, plans in a group of their own
+    List {
+        /// only items with this status word, such as `to land`
+        #[arg(long, value_parser = clap::builder::PossibleValuesParser::new(crate::cmd::list::WORDS.iter().copied().chain([crate::cmd::list::PLANS])))]
+        word: Option<String>,
+        /// the order of the rows within a group
+        #[arg(long, value_enum, default_value = "queue")]
+        sort: ListSort,
     },
     /// the owner's queue: derived answers to confirm, questions, then asks by what the owner must hold or do
     Todo(OwnerQueue),
@@ -915,8 +937,8 @@ const GROUPS: [(&str, &[&str]); 3] = [
     (
         "Agent",
         &[
-            "next", "complex", "show", "log", "new", "add", "start", "unclaim", "close", "drop",
-            "reopen", "wait", "dep", "resume", "ask", "decide", "rate", "priority", "edit",
+            "next", "list", "complex", "show", "log", "new", "add", "start", "unclaim", "close",
+            "drop", "reopen", "wait", "dep", "resume", "ask", "decide", "rate", "priority", "edit",
             "label", "link", "parent", "search", "similar", "deps", "files", "check", "stale",
             "squash",
         ],

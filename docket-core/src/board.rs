@@ -115,9 +115,13 @@ impl Board {
         let closed = members.len() as u64 - open;
         Standing::of(
             &item.state,
-            item.claim_branch
-                .is_some()
-                .then(|| JobEnd::of(item.claim_report.as_deref())),
+            item.claim_branch.is_some().then(|| {
+                JobEnd::of_claim(
+                    item.claim_job.as_deref(),
+                    item.claim_report.as_deref(),
+                    item.claim_land.is_some(),
+                )
+            }),
             item.wait_on.is_some(),
             item.turn.as_deref(),
         )

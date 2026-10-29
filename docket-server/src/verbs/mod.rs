@@ -5,6 +5,7 @@ pub mod claim;
 pub mod fields;
 pub mod graph;
 pub mod labels;
+pub mod land;
 pub mod open;
 pub mod project;
 pub mod releases;
@@ -154,6 +155,7 @@ pub fn router() -> Router<DatabaseConnection> {
         .route("/start", post(claim::start))
         .route("/release", post(claim::release))
         .route("/job-report", post(claim::job_report))
+        .route("/land", post(land::land))
         .route("/close", post(claim::close))
         .route("/drop", post(claim::drop))
         .route("/reopen", post(claim::reopen))

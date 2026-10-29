@@ -11,7 +11,20 @@ fn test_flow_line_reads_the_flow_then_what_is_aside() {
     ];
     assert_eq!(
         flow_line(&total),
-        "ready 2 > in progress 0 > done 4    parked 1"
+        "ready 2 > in progress 0 > to land 0 > done 4    parked 1"
+    );
+}
+
+#[test]
+fn test_flow_line_counts_to_land_and_names_job_failed_aside() {
+    let total = vec![
+        ("to land".to_string(), 3),
+        ("job failed".to_string(), 1),
+        ("blocked".to_string(), 2),
+    ];
+    assert_eq!(
+        flow_line(&total),
+        "ready 0 > in progress 0 > to land 3 > done 0    job failed 1  blocked 2"
     );
 }
 

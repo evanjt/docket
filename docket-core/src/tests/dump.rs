@@ -37,6 +37,7 @@ fn attempt(kind: Kind, started_at: &str) -> Assignment {
         job_exit: None,
         job_report: None,
         need: None,
+        land: None,
     }
 }
 

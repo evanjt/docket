@@ -87,7 +87,7 @@ pub fn json(value: Json) -> Value {
 /// The open assignment rows: who holds each item now. Every read of a claim or of the owner's turn
 /// goes through it.
 const HELD: &str = "SELECT rid, kind, branch, host, started_at, runner, job, machine, note, \
-                    job_report FROM assignments WHERE ended_at IS NULL";
+                    job_report, job_ended_at, land FROM assignments WHERE ended_at IS NULL";
 
 /// A condition on `items.rid`: an open claim holds the item.
 pub const CLAIMED: &str =
@@ -141,12 +141,14 @@ struct HeldRow {
     machine: Option<String>,
     note: Option<String>,
     job_report: Option<String>,
+    job_ended_at: Option<String>,
+    land: Option<Json>,
 }
 
 impl HeldRow {
     fn held(self) -> Option<(i64, Held)> {
         let held = match assignment::Kind::parse(&self.kind)? {
-            assignment::Kind::Claim => Held::Claim(Claim {
+            assignment::Kind::Claim => Held::Claim(Box::new(Claim {
                 branch: self.branch.unwrap_or_default(),
                 host: self.host,
                 since: self.started_at,
@@ -154,7 +156,9 @@ impl HeldRow {
                 job: self.job,
                 on: self.machine,
                 report: self.job_report,
-            }),
+                ended_at: self.job_ended_at,
+                land: self.land.and_then(|l| serde_json::from_value(l).ok()),
+            })),
             assignment::Kind::Ask => Held::Ask(Ask {
                 since: self.started_at,
                 note: self.note,
@@ -599,6 +603,12 @@ impl Tx {
         let step = assignment::step(e, open.map(|(_, kind)| kind));
         if let (Some(end), Some((id, _))) = (&step.end, open) {
             assignments::end(&self.conn, id, &e.at, end, self.actor.as_deref()).await?;
+        }
+        if let Some((id, assignment::Kind::Claim)) = open {
+            let held = assignments::land_of(&self.conn, id).await?;
+            if let Some(l) = assignment::land(e, Some(assignment::Kind::Claim), held.as_ref()) {
+                assignments::set_land(&self.conn, id, &l).await?;
+            }
         }
         if let (Some(u), Some((id, _))) = (&step.usage, open) {
             assignments::report(&self.conn, id, u).await?;

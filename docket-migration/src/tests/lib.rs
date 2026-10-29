@@ -2,7 +2,7 @@ use super::*;
 
 use crate::scratch::Scratch;
 
-const MIGRATIONS: [&str; 30] = [
+const MIGRATIONS: [&str; 31] = [
     "m20261001_000001_schema",
     "m20261002_000001_machines_and_leads",
     "m20261005_000001_owner_facts",
@@ -33,6 +33,7 @@ const MIGRATIONS: [&str; 30] = [
     "m20261007_073521_events_close_index",
     "m20261009_073000_project_rename",
     "m20261029_090535_job_report",
+    "m20261029_092904_assignment_land",
 ];
 
 /// A project with one row in every table that references its slug, as the tree stands just before

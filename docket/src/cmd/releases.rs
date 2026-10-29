@@ -49,6 +49,8 @@ pub fn counts(r: &ReleaseRow) -> String {
     let words: Vec<String> = [
         ("ready", r.ready),
         ("in progress", r.in_progress),
+        ("to land", r.to_land),
+        ("job failed", r.job_failed),
         ("plans under way", r.under_way),
         ("owner", r.waiting_owner),
         ("blocked", r.blocked),

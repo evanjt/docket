@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Row } from '../lib/types';
-  import { highlight, note } from '../lib/note';
+  import { ended, highlight, note } from '../lib/note';
   import Word from './Word.svelte';
 
   let {
@@ -23,6 +23,7 @@
   } = $props();
 
   const why = $derived(row.snip ? '' : note(row as Row));
+  const endedAgo = $derived(ended(row));
   const parts = $derived(row.snip ? highlight(row.snip) : []);
 </script>
 
@@ -37,6 +38,7 @@
     {#if row.priority && row.priority !== 'normal'}<span class="pri pri-{row.priority}">{row.priority}</span>{/if}
     {#if release}<span class="release" title="Release {release}">{release}</span>{/if}
     {#if aside}<span class="aside faint">{aside}</span>{/if}
+    {#if endedAgo}<span class="aside faint">{endedAgo}</span>{/if}
     {#if why}<span class="why">{why}</span>{/if}
     {#if parts.length}<span class="why">{#each parts as p}{#if p.hit}<mark>{p.text}</mark>{:else}{p.text}{/if}{/each}</span>{/if}
   </a>

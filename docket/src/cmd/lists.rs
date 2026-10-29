@@ -11,6 +11,7 @@ use docket_core::rows::Row;
 use docket_core::word::ItemType;
 
 use crate::args::{OwnerQueue, Queue, Recent, SearchArgs};
+use crate::cmd::list;
 use crate::ctx::{Ctx, id};
 use crate::fail::Result;
 use crate::jsonout::{Json, cut, or_none};
@@ -138,15 +139,27 @@ pub fn wip(ctx: &mut Ctx, host: Option<&String>) -> Result<i32> {
         return Ok(0);
     }
     let shares = ctx.read("/shares", &pairs)?;
-    for r in rows {
-        let about = shares
-            .as_array()
-            .and_then(|a| a.iter().find(|s| s["id"] == r.id.as_str()))
-            .cloned()
-            .unwrap_or_default();
-        println!("{}", fmt_row(&r, about["flag"].as_str()));
-        for s in about["shares"].as_array().into_iter().flatten() {
-            println!("       {}", shares_text(s));
+    for (i, (word, held)) in list::wip_groups(&rows, crate::cmd::status::now())
+        .into_iter()
+        .enumerate()
+    {
+        if i > 0 {
+            println!();
+        }
+        println!("{word} ({})", held.len());
+        for (r, minutes) in held {
+            let about = shares
+                .as_array()
+                .and_then(|a| a.iter().find(|s| s["id"] == r.id.as_str()))
+                .cloned()
+                .unwrap_or_default();
+            println!(
+                "{}",
+                list::wip_row(&word, &r, minutes, about["flag"].as_str())
+            );
+            for s in about["shares"].as_array().into_iter().flatten() {
+                println!("       {}", shares_text(s));
+            }
         }
     }
     Ok(0)

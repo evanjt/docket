@@ -437,6 +437,33 @@ async fn test_a_release_ships_only_once_its_open_items_are_closed_or_moved_on() 
 }
 
 #[tokio::test]
+async fn test_a_rename_that_moves_a_plan_before_its_tickets_is_refused_unless_forced() {
+    let s = two_releases().await;
+    filed(&s, "A", "1.1.0").await;
+    filed(&s, "T", "1.0.0").await;
+    s.ok("parent", json!({ "a": ["T1"], "plan": "A1" })).await;
+    assert_eq!(
+        s.refused(
+            "releases",
+            json!({ "action": "rename", "name": "1.1.0", "rename": "0.9.0" })
+        )
+        .await,
+        "A1 (0.9.0) would be held by T1 (1.0.0), which ships later. 1.1.0 renamed to 0.9.0 changes the order the releases ship in. Pass --force."
+    );
+    s.ok(
+        "releases",
+        json!({ "action": "rename", "name": "1.1.0", "rename": "1.2.0" }),
+    )
+    .await;
+    s.ok(
+        "releases",
+        json!({ "action": "rename", "name": "1.2.0", "rename": "0.9.0", "force": true }),
+    )
+    .await;
+    assert_eq!(s.item("A1").await["release"], "0.9.0");
+}
+
+#[tokio::test]
 async fn test_a_release_is_renamed_merged_and_removed_by_the_owner() {
     let s = two_releases().await;
     filed(&s, "T", "1.1.0").await;
@@ -2160,6 +2187,7 @@ async fn test_a_claim_reads_to_land_once_its_job_reports_done_and_job_failed_oth
     .await;
     assert_eq!(s.word("B1").await, "to land");
     assert_eq!(s.item("B1").await["claim_report"], "DONE");
+    assert_eq!(s.item("B1").await["claim_ended_at"], "2026-10-05T10:20:00Z");
     assert_eq!(s.word("B2").await, "job failed");
     let (_, graph) = s
         .send(
@@ -3708,4 +3736,127 @@ async fn test_a_drop_superseded_by_an_item_of_a_later_release_is_refused_unless_
         json!({ "id": "T1", "superseded_by": "T3", "force": true }),
     )
     .await;
+}
+
+#[tokio::test]
+async fn test_a_hand_claim_queued_with_land_reads_to_land_and_its_stage_is_on_the_row() {
+    let s = Scratch::new().await;
+    s.open("B", "Kettle trips the fuse").await;
+    s.ok("start", json!({ "id": "B1", "branch": "work/b1-1" }))
+        .await;
+    assert_eq!(s.word("B1").await, "in progress");
+    s.ok(
+        "land",
+        json!({ "action": "queue", "ids": ["B1"], "branch": "work/b1-1" }),
+    )
+    .await;
+    assert_eq!(s.word("B1").await, "to land");
+    assert_eq!(s.item("B1").await["claim_land"]["stage"], "queued");
+
+    s.ok(
+        "land",
+        json!({ "action": "gating", "ids": ["B1"], "branch": "work/b1-1",
+                "batch": "batch-kiln", "base": "abc1234", "members": ["B1"] }),
+    )
+    .await;
+    s.ok(
+        "land",
+        json!({ "action": "failed", "ids": ["B1"], "branch": "work/b1-1",
+                "log": "clippy: unused import" }),
+    )
+    .await;
+    let land = s.item("B1").await["claim_land"].clone();
+    assert_eq!(land["stage"], "gate_failed");
+    assert_eq!(land["batch"], "batch-kiln");
+    assert_eq!(land["note"], "clippy: unused import");
+
+    s.ok(
+        "land",
+        json!({ "action": "conflict", "ids": ["B1"], "branch": "work/b1-1",
+                "files": ["src/kiln.rs"] }),
+    )
+    .await;
+    assert_eq!(s.item("B1").await["claim_land"]["note"], "src/kiln.rs");
+}
+
+#[tokio::test]
+async fn test_a_landing_step_is_refused_for_a_branch_that_holds_no_claim_and_is_not_the_lead() {
+    let s = Scratch::new().await;
+    s.open("B", "Kettle trips the fuse").await;
+    s.open("B", "Toaster sparks").await;
+    s.ok("start", json!({ "id": "B1", "branch": "work/b1-1" }))
+        .await;
+    let said = s
+        .refused(
+            "land",
+            json!({ "action": "gating", "ids": ["B1"], "branch": "work/b2-1",
+                    "batch": "batch-kiln", "base": "abc1234" }),
+        )
+        .await;
+    assert!(said.contains("work/b1-1"), "{said}");
+    let said = s
+        .refused(
+            "land",
+            json!({ "action": "queue", "ids": ["B2"], "branch": "work/b2-1" }),
+        )
+        .await;
+    assert!(said.contains("holds no claim"), "{said}");
+    assert_eq!(s.item("B1").await["claim_land"], Value::Null);
+}
+
+#[tokio::test]
+async fn test_the_lead_records_a_landing_step_on_a_claim_it_does_not_hold() {
+    let s = Scratch::new().await;
+    s.open("B", "Kettle trips the fuse").await;
+    s.ok("start", json!({ "id": "B1", "branch": "work/b1-1" }))
+        .await;
+    s.ok(
+        "lead",
+        json!({ "act": "take", "session": "sess", "branch": "main" }),
+    )
+    .await;
+    s.ok(
+        "land",
+        json!({ "action": "queue", "ids": ["B1"], "branch": "main" }),
+    )
+    .await;
+    assert_eq!(s.word("B1").await, "to land");
+}
+
+#[tokio::test]
+async fn test_land_back_ends_the_claim_with_the_outcome_gate_and_the_reason() {
+    let s = Scratch::new().await;
+    s.open("B", "Kettle trips the fuse").await;
+    s.ok("start", json!({ "id": "B1", "branch": "work/b1-1" }))
+        .await;
+    s.ok(
+        "land",
+        json!({ "action": "queue", "ids": ["B1"], "branch": "work/b1-1" }),
+    )
+    .await;
+    s.ok(
+        "land",
+        json!({ "action": "back", "ids": ["B1"], "branch": "work/b1-1",
+                "reason": "the gate failed on clippy" }),
+    )
+    .await;
+    let rows = s.assignments("B1").await;
+    assert_eq!(rows[0]["outcome"], "gate");
+    assert_eq!(rows[0]["note"], "the gate failed on clippy");
+    assert_eq!(s.word("B1").await, "ready");
+}
+
+#[tokio::test]
+async fn test_a_landing_step_names_a_known_action_and_at_least_one_item() {
+    let s = Scratch::new().await;
+    s.open("B", "Kettle trips the fuse").await;
+    assert_eq!(
+        s.status("land", json!({ "action": "launch", "ids": ["B1"] }))
+            .await,
+        StatusCode::BAD_REQUEST
+    );
+    let said = s
+        .refused("land", json!({ "action": "queue", "ids": [] }))
+        .await;
+    assert!(said.contains("names"), "{said}");
 }

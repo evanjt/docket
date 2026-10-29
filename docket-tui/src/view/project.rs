@@ -20,8 +20,8 @@ const WIDE: usize = 120;
 const SIDE: usize = 44;
 const GAP: usize = 2;
 /// The flow counts the sidebar always shows; the rest only when something carries them.
-const FLOW: [&str; 2] = ["ready", "in progress"];
-const ASIDE: [&str; 3] = ["blocked", "waiting on owner", "parked"];
+const FLOW: [&str; 3] = ["ready", "in progress", "to land"];
+const ASIDE: [&str; 4] = ["job failed", "blocked", "waiting on owner", "parked"];
 /// Rows each sidebar block shows before it says how many more.
 const ROWS: usize = 5;
 /// Rows of NEXT, and of MOVES until `m` shows them all.
@@ -185,6 +185,8 @@ fn releases(d: &mut Doc, data: &ProjectData, width: usize) {
         let counts = [
             ("ready", r.ready),
             ("in progress", r.in_progress),
+            ("to land", r.to_land),
+            ("job failed", r.job_failed),
             ("plans under way", r.under_way),
             ("owner", r.waiting_owner),
             ("blocked", r.blocked),

@@ -5,7 +5,14 @@ use crate::page::HomeRow;
 use crate::style;
 
 /// The flow's words in the order the columns read.
-pub const WORDS: [&str; 4] = ["ready", "in progress", "blocked", "done"];
+pub const WORDS: [&str; 6] = [
+    "ready",
+    "in progress",
+    "to land",
+    "job failed",
+    "blocked",
+    "done",
+];
 
 #[must_use]
 pub fn doc(rows: &[HomeRow], width: usize) -> Doc {

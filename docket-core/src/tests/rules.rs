@@ -27,12 +27,12 @@ fn open(id: &str) -> Item {
 
 fn claimed_on(id: &str, branch: &str, host: &str) -> Item {
     let mut row = open(id);
-    row.held = Some(Held::Claim(Claim {
+    row.held = Some(Held::Claim(Box::new(Claim {
         branch: branch.into(),
         host: host.into(),
         since: "2026-09-30T00:00:00Z".into(),
         ..Claim::default()
-    }));
+    })));
     row
 }
 

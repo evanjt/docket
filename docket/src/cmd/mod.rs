@@ -8,6 +8,7 @@ pub mod instructions;
 pub mod job;
 pub mod labels;
 pub mod lead;
+pub mod list;
 pub mod lists;
 pub mod machines;
 pub mod private;
@@ -50,6 +51,7 @@ pub fn run(ctx: &mut Ctx, cmd: Option<&Cmd>) -> Result<i32> {
             };
             lists::next(ctx, &q)
         }
+        Cmd::List { word, sort } => list::list(ctx, word.as_ref(), *sort),
         Cmd::Todo(q) => lists::todo(ctx, q),
         Cmd::Wip { host } => lists::wip(ctx, host.as_ref()),
         Cmd::Waiting { on } => lists::waiting(ctx, on.as_ref()),

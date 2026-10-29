@@ -45,6 +45,7 @@ pub struct Model {
     pub job_ended_at: Option<String>,
     pub job_exit: Option<i32>,
     pub job_report: Option<String>,
+    pub land: Option<serde_json::Value>,
     #[crudcrate(filterable)]
     pub need: Option<String>,
 }

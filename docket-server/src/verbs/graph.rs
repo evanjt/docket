@@ -730,6 +730,11 @@ pub fn refuse_later(
     )))
 }
 
+/// What a refused move says to do, with `{h}` the held item, `{o}` its holder and `{hr}` and `{or}`
+/// their releases.
+const MOVE_ADVICE: &str =
+    "Move {o} to {hr}, or move {h} to {or}, or pass --carry to move them together, or --force.";
+
 /// The open items' places in the releases and what holds each: a dependency holds its dependant, a
 /// child holds its plan. The one owner of the rule that a held item ships no later than its holder.
 pub struct Order {
@@ -792,10 +797,8 @@ impl Order {
         self.listed.open.get(place).and_then(|n| self.listed.id(n))
     }
 
-    fn name_at(&self, place: usize) -> String {
-        self.listed
-            .open
-            .get(place)
+    fn name_at(open: &[String], place: usize) -> String {
+        open.get(place)
             .cloned()
             .unwrap_or_else(|| "the backlog".to_string())
     }
@@ -815,7 +818,54 @@ impl Order {
     /// Refuse a move that leaves items out of order that were in order, naming each.
     pub fn refuse(&self, change: &BTreeMap<i64, usize>) -> Result<(), Failure> {
         let out = docket_core::stall::order::introduced(&self.needs, &self.rank, change);
-        self.refuse_pairs(&out, change)
+        self.refuse_pairs(&out, change, &self.listed.open, MOVE_ADVICE)
+    }
+
+    /// Refuse a rename of `old` to `new`, which the releases not shipped then order with `old`
+    /// placed at `at`, when it leaves items out of order that were in order, naming each.
+    pub fn refuse_rename(&self, old: &str, new: &str, at: i64) -> Result<(), Failure> {
+        let was = self
+            .listed
+            .rows
+            .iter()
+            .find(|(_, r)| r.name == old)
+            .map_or(0, |(_, r)| r.position);
+        let mut after: Vec<(i64, String)> = self
+            .listed
+            .rows
+            .iter()
+            .filter(|(_, r)| r.shipped_at.is_none())
+            .map(|(_, r)| {
+                let mut p = r.position;
+                if p > was {
+                    p -= 1;
+                }
+                if p >= at {
+                    p += 1;
+                }
+                if r.name == old {
+                    (at, new.to_string())
+                } else {
+                    (p, r.name.clone())
+                }
+            })
+            .collect();
+        after.sort();
+        let open: Vec<String> = after.into_iter().map(|(_, n)| n).collect();
+        let change: BTreeMap<i64, usize> = self
+            .rank
+            .iter()
+            .filter_map(|(rid, place)| {
+                let name = self.listed.open.get(*place)?;
+                let name = if name == old { new } else { name };
+                let now = open.iter().position(|n| n == name)?;
+                (now != *place).then_some((*rid, now))
+            })
+            .collect();
+        let out = docket_core::stall::order::introduced(&self.needs, &self.rank, &change);
+        let advice =
+            format!("{old} renamed to {new} changes the order the releases ship in. Pass --force.");
+        self.refuse_pairs(&out, &change, &open, &advice)
     }
 
     /// Refuse the items out of order with `rid`, an item that has just become open and so had no
@@ -827,13 +877,15 @@ impl Order {
                 .into_iter()
                 .filter(|(held, holder)| *held == rid || *holder == rid)
                 .collect();
-        self.refuse_pairs(&out, &none)
+        self.refuse_pairs(&out, &none, &self.listed.open, MOVE_ADVICE)
     }
 
     fn refuse_pairs(
         &self,
         out: &[(i64, i64)],
         change: &BTreeMap<i64, usize>,
+        open: &[String],
+        advice: &str,
     ) -> Result<(), Failure> {
         if out.is_empty() {
             return Ok(());
@@ -842,13 +894,13 @@ impl Order {
             .iter()
             .map(|(held, holder)| {
                 let (hr, or) = (
-                    self.name_at(self.at(*held, change)),
-                    self.name_at(self.at(*holder, change)),
+                    Self::name_at(open, self.at(*held, change)),
+                    Self::name_at(open, self.at(*holder, change)),
                 );
                 let (h, o) = (self.id(*held), self.id(*holder));
-                format!(
-                    "{h} ({hr}) would be held by {o} ({or}), which ships later. Move {o} to {hr}, or move {h} to {or}, or pass --carry to move them together, or --force."
-                )
+                let advice = advice.replace("{h}", &h).replace("{o}", &o);
+                let advice = advice.replace("{hr}", &hr).replace("{or}", &or);
+                format!("{h} ({hr}) would be held by {o} ({or}), which ships later. {advice}")
             })
             .collect();
         Err(Failure::Refused(lines.join("\n")))

@@ -17,11 +17,11 @@ fn open(id: &str) -> Item {
 
 fn held(id: &str, branch: &str) -> Item {
     let mut row = open(id);
-    row.held = Some(Held::Claim(Claim {
+    row.held = Some(Held::Claim(Box::new(Claim {
         branch: branch.into(),
         host: "box".into(),
         ..Claim::default()
-    }));
+    })));
     row
 }
 

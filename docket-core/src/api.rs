@@ -52,6 +52,12 @@ pub struct ItemView {
     /// The word the claim's job left when it ended, none while it runs.
     #[serde(default)]
     pub claim_report: Option<String>,
+    /// When the claim's job ended, none while it runs.
+    #[serde(default)]
+    pub claim_ended_at: Option<String>,
+    /// Where the claim's build stands on its way to landing, none until it is queued.
+    #[serde(default)]
+    pub claim_land: Option<crate::assignment::Land>,
     pub wait_on: Option<String>,
     pub wait_ref: Option<String>,
     pub wait_since: Option<String>,
@@ -581,6 +587,33 @@ pub struct Opened {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Moved {
     pub item: ItemView,
+}
+
+/// One step of a landing, recorded on each item it names: `land`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct LandRequest {
+    #[serde(flatten)]
+    pub common: Common,
+    /// One of `assignment::LAND_ACTIONS`.
+    pub action: String,
+    pub ids: Vec<String>,
+    /// The gate run's batch name, with `base` its base sha: both named by `gating`.
+    #[serde(default)]
+    pub batch: Option<String>,
+    #[serde(default)]
+    pub base: Option<String>,
+    /// The batch's members, the ids when none are named.
+    #[serde(default)]
+    pub members: Vec<String>,
+    /// The tail of the failed gate's log.
+    #[serde(default)]
+    pub log: Option<String>,
+    /// The files that conflict.
+    #[serde(default)]
+    pub files: Vec<String>,
+    /// Why `back` gives the claim back.
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 /// Several items moved: `priority`.

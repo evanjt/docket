@@ -6,7 +6,8 @@ use std::collections::BTreeMap;
 use sea_orm::{ConnectionTrait, DbErr};
 
 use docket_core::assignment::{
-    Ask, Assignment, Claim, End, Event, Held, Kind, Now, Outcome, Usage, agree, rebuild, settle,
+    Ask, Assignment, Claim, End, Event, Held, Kind, Land, Now, Outcome, Usage, agree, rebuild,
+    settle,
 };
 use docket_core::migrate::OldItem;
 
@@ -82,6 +83,43 @@ pub async fn report<C: ConnectionTrait>(c: &C, id: i64, u: &Usage) -> Result<(),
     Ok(())
 }
 
+/// The open row given the landing stage its claim has reached.
+///
+/// # Errors
+/// The database refuses.
+pub async fn set_land<C: ConnectionTrait>(c: &C, id: i64, land: &Land) -> Result<(), DbErr> {
+    c.execute_raw(statement(
+        "UPDATE assignments SET land=? WHERE id=?",
+        vec![land_value(land)?, id.into()],
+    ))
+    .await?;
+    Ok(())
+}
+
+/// The landing stage a row holds, none before its claim is queued.
+///
+/// # Errors
+/// The database refuses, or the stored stage does not read.
+pub async fn land_of<C: ConnectionTrait>(c: &C, id: i64) -> Result<Option<Land>, DbErr> {
+    let row = c
+        .query_one_raw(statement(
+            "SELECT land FROM assignments WHERE id=?",
+            vec![id.into()],
+        ))
+        .await?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let land: Option<serde_json::Value> = row.try_get_by_index(0)?;
+    land.map(|l| serde_json::from_value(l).map_err(|e| DbErr::Json(e.to_string())))
+        .transpose()
+}
+
+fn land_value(land: &Land) -> Result<sea_orm::Value, DbErr> {
+    let json = serde_json::to_value(land).map_err(|e| DbErr::Json(e.to_string()))?;
+    Ok(sea_orm::Value::Json(Some(Box::new(json))))
+}
+
 /// Every row of the items `rids` selects, `{rid: rows oldest first}`; `rids` is a `SELECT rid` bound
 /// with `values`.
 ///
@@ -140,12 +178,14 @@ pub async fn insert<C: ConnectionTrait>(c: &C, rid: i64, a: &Assignment) -> Resu
         a.tokens_out.into(),
         a.cost_reported.into(),
     ];
-    let extra: [(&str, Option<sea_orm::Value>); 5] = [
+    let land = a.land.as_ref().map(land_value).transpose()?;
+    let extra: [(&str, Option<sea_orm::Value>); 6] = [
         ("need", a.need.clone().map(Into::into)),
         ("job_started_at", a.job_started_at.clone().map(Into::into)),
         ("job_ended_at", a.job_ended_at.clone().map(Into::into)),
         ("job_exit", a.job_exit.map(Into::into)),
         ("job_report", a.job_report.clone().map(Into::into)),
+        ("land", land),
     ];
     for (name, value) in extra {
         if let Some(v) = value {
@@ -314,10 +354,10 @@ pub async fn agree_all<C: ConnectionTrait>(c: &C) -> Result<usize, DbErr> {
         let branch: Option<String> = r.try_get_by_index(15)?;
         let note: Option<String> = r.try_get_by_index(16)?;
         let open = kind.as_deref().and_then(Kind::parse).map(|k| match k {
-            Kind::Claim => Held::Claim(Claim {
+            Kind::Claim => Held::Claim(Box::new(Claim {
                 branch: branch.unwrap_or_default(),
                 ..Claim::default()
-            }),
+            })),
             Kind::Ask => Held::Ask(Ask {
                 note,
                 ..Ask::default()

@@ -175,6 +175,16 @@ impl JobEnd {
             Some(_) => JobEnd::Failed,
         }
     }
+
+    /// The end of a claim: its report word when it has a job, and a claim with no job that has a
+    /// landing stage is a finished build, as a job's DONE makes it.
+    #[must_use]
+    pub fn of_claim(job: Option<&str>, report: Option<&str>, landing: bool) -> Self {
+        if job.is_none() && landing {
+            return JobEnd::Done;
+        }
+        Self::of(report)
+    }
 }
 
 /// What an item's status is derived from, gathered once from the item and its graph.

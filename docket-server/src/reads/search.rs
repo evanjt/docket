@@ -98,10 +98,6 @@ pub(crate) fn ranked(
         ("release_id", narrow.release.map(sea_orm::Value::from)),
         ("area_id", narrow.area.map(sea_orm::Value::from)),
         (
-            "priority",
-            narrow.priority.clone().map(sea_orm::Value::from),
-        ),
-        (
             "complexity",
             narrow.complexity.clone().map(sea_orm::Value::from),
         ),
@@ -112,6 +108,16 @@ pub(crate) fn ranked(
             text.push_str("=?");
             values.push(value);
         }
+    }
+    if let Some(tier) = narrow
+        .priority
+        .as_deref()
+        .and_then(|p| PRIORITIES.iter().position(|x| *x == p))
+    {
+        text.push_str(" AND i.priority IN (");
+        text.push_str(&crate::reads::public::marks(tier + 1));
+        text.push(')');
+        values.extend(PRIORITIES[..=tier].iter().map(|p| (*p).into()));
     }
     if let Some(rid) = narrow.exclude {
         text.push_str(" AND i.rid<>?");

@@ -38,6 +38,10 @@ export interface Row {
   claim_on?: string | null;
   /** The word the claim's job left when it ended, empty for an end with no report; none while it runs. */
   claim_report?: string | null;
+  /** When the claim's job ended; none while it runs. */
+  claim_ended_at?: string | null;
+  /** Where the claim's build stands on its way to landing, none until it is queued. */
+  claim_land?: { stage: 'queued' | 'gating' | 'gate_failed' | 'conflict'; at: string; note: string | null; batch: string | null } | null;
   wait_on?: string | null;
   wait_ref?: string | null;
   wait_since?: string | null;

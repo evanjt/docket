@@ -41,6 +41,8 @@ State words, each in its colour
 
   ready            waiting for someone to take it
   in progress      someone is working on it now
+  to land          its job reported DONE; the change waits to be merged
+  job failed       its job ended with any other report, or none
   under way        a plan whose tickets are open
   audit due        a plan whose tickets are all closed
   blocked          held by a dependency that is not yet satisfied

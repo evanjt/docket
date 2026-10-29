@@ -70,6 +70,12 @@ pub struct ItemRow {
     /// The word the claim's job left when it ended, none while it runs.
     #[serde(default)]
     pub claim_report: Option<String>,
+    /// When the claim's job ended, none while it runs.
+    #[serde(default)]
+    pub claim_ended_at: Option<String>,
+    /// Where the claim's build stands on its way to landing, none until it is queued.
+    #[serde(default)]
+    pub claim_land: Option<crate::assignment::Land>,
     /// What its dependencies hold it on, `item` or `condition`: `/items` sends none, so a reader fills
     /// it from `/waiting`.
     #[serde(default)]
@@ -115,6 +121,8 @@ impl ItemRow {
         self.claim_job = f.claim_job;
         self.claim_on = f.claim_on;
         self.claim_report = f.claim_report;
+        self.claim_ended_at = f.claim_ended_at;
+        self.claim_land = f.claim_land;
     }
 }
 
@@ -157,6 +165,12 @@ pub struct Row {
     /// The word the claim's job left when it ended, none while it runs.
     #[serde(default)]
     pub claim_report: Option<String>,
+    /// When the claim's job ended, none while it runs.
+    #[serde(default)]
+    pub claim_ended_at: Option<String>,
+    /// Where the claim's build stands on its way to landing, none until it is queued.
+    #[serde(default)]
+    pub claim_land: Option<crate::assignment::Land>,
     #[serde(default)]
     pub wait_on: Option<String>,
     #[serde(default)]

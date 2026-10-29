@@ -12,8 +12,8 @@ use crate::ctx::Ctx;
 use crate::fail::{Fail, Result};
 use crate::jsonout::{Json, cut, or_none};
 
-const FLOW: [&str; 3] = ["ready", "in progress", "done"];
-const ASIDE: [&str; 4] = ["checking", "blocked", "waiting on owner", "parked"];
+const FLOW: [&str; 4] = ["ready", "in progress", "to land", "done"];
+const ASIDE: [&str; 4] = ["job failed", "blocked", "waiting on owner", "parked"];
 const WIDTH: usize = 160;
 /// Rows each block shows before it says how many more.
 const SHOWN: usize = 21;
@@ -104,7 +104,7 @@ pub fn json_status(r: &Read) -> Value {
     })
 }
 
-fn now() -> i64 {
+pub fn now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0))
@@ -153,7 +153,7 @@ pub fn render(slug: &str, r: &Read) -> Vec<String> {
     out
 }
 
-/// `ready 212 > in progress 17 > done 141    blocked 3  parked 9`.
+/// `ready 212 > in progress 17 > to land 2 > done 141    job failed 1  blocked 3  parked 9`.
 #[must_use]
 pub fn flow_line(total: &[(String, u64)]) -> String {
     let head: Vec<String> = FLOW

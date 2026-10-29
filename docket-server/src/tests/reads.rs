@@ -278,6 +278,8 @@ async fn test_state_lists_waiting_wip_done_dropped_groups() {
     assert_eq!(ids("/waiting?on=item").await, ["T6"]);
     assert_eq!(get("/waiting?on=x").await.0, StatusCode::BAD_REQUEST);
     assert_eq!(ids("/wip").await, ["T7"]);
+    let open = ids("/open").await;
+    assert!(open.contains(&"T7".to_string()) && !open.contains(&"T4".to_string()));
     assert_eq!(ids("/wip?host=other").await.len(), 0);
     assert_eq!(ids("/done").await, ["T11", "T4"]);
     assert_eq!(ids("/done?n=1&key=t").await, ["T11"]);
@@ -420,6 +422,7 @@ INSERT INTO items (rid, project, key, num, title, state, body, opened_at, update
   (604, 'o/q', 'T', 30, 'Thirty', 'open', '', 'o64', 'u64');
 UPDATE items SET release_id=11, area_id=11, priority='low', complexity='low' WHERE rid=601;
 UPDATE items SET release_id=12, area_id=12, priority='high', complexity='high' WHERE rid IN (602, 603);
+UPDATE items SET priority='critical' WHERE rid=603;
 UPDATE items SET state='done', resolution='ok' WHERE rid=603;
 INSERT INTO assignments (rid, assignee, kind, started_at, branch, host) VALUES (602, 'agent', 'claim', 'c', 'b', 'h');
 INSERT INTO search (rid, id, title, body, files) VALUES
@@ -477,7 +480,18 @@ async fn test_search_filters_by_release_area_priority_complexity_and_word_before
     let base = "/search?project=o/q&q=lant&state=any";
     assert_eq!(search_ids(&format!("{base}&release=1.0")).await, ["T4"]);
     assert_eq!(search_ids(&format!("{base}&area=lanterns")).await, ["T4"]);
-    assert_eq!(search_ids(&format!("{base}&priority=low")).await, ["T4"]);
+    let tier_or_higher = |tier: &str| {
+        let url = format!("{base}&priority={tier}");
+        async move {
+            let mut ids = search_ids(&url).await;
+            ids.sort_unstable();
+            ids
+        }
+    };
+    assert_eq!(tier_or_higher("critical").await, ["T6"]);
+    assert_eq!(tier_or_higher("high").await, ["T5", "T6"]);
+    assert_eq!(tier_or_higher("normal").await, ["T5", "T6"]);
+    assert_eq!(tier_or_higher("low").await, ["T4", "T5", "T6"]);
     assert_eq!(search_ids(&format!("{base}&complexity=low")).await, ["T4"]);
     let mut high = search_ids(&format!("{base}&release=1.1")).await;
     high.sort_unstable();

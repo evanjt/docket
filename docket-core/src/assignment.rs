@@ -31,6 +31,42 @@ pub const ROLES: [&str; 5] = ["build", "rebase", "review", "plan", "audit"];
 /// filed or a usage limit; it is not a failure.
 pub const OUTCOMES: [&str; 6] = ["landed", "conflict", "gate", "blocked", "failed", "ended"];
 
+/// The actions of `land`: the steps of a landing a caller records on its items. `back` gives the claim
+/// back with the outcome gate; the others write an event that `land` folds into a stage.
+pub const LAND_ACTIONS: [&str; 5] = ["queue", "gating", "failed", "conflict", "back"];
+
+/// Where a finished build stands on its way to the work branch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Stage {
+    Queued,
+    Gating,
+    GateFailed,
+    Conflict,
+}
+
+impl Stage {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Stage::Queued => "queued",
+            Stage::Gating => "gating",
+            Stage::GateFailed => "gate failed",
+            Stage::Conflict => "conflict",
+        }
+    }
+}
+
+/// The landing stage of an open claim, since when, with what its step noted (the base and members of
+/// a gate run, the log tail of a failed one, the files of a conflict) and the batch it was gated in.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Land {
+    pub stage: Stage,
+    pub at: String,
+    pub note: Option<String>,
+    pub batch: Option<String>,
+}
+
 /// What an attempt is: an agent's claim, or the item handed to the owner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -129,6 +165,9 @@ pub struct Assignment {
     pub job_report: Option<String>,
     /// What an ask needs of the owner: one of `queue::NEEDS`.
     pub need: Option<String>,
+    /// Where the claim's build stands on its way to landing, none until it is queued.
+    #[serde(default)]
+    pub land: Option<Land>,
 }
 
 /// Whether an item with `failed` failed attempts is the owner's now, at the project's `limit`.
@@ -305,6 +344,38 @@ pub fn step(e: &Event, open: Option<Kind>) -> Step {
     }
 }
 
+/// The landing stage an event leaves on the open claim, given the stage it held: a `land_queued`,
+/// `land_gating`, `land_failed` or `land_conflict` event replaces it, and a failed gate run keeps the
+/// batch it was gating. A claim opened afterwards starts with none. Events on an item with no open
+/// claim leave none.
+#[must_use]
+pub fn land(e: &Event, open: Option<Kind>, held: Option<&Land>) -> Option<Land> {
+    if open != Some(Kind::Claim) {
+        return None;
+    }
+    let stage = match e.kind.as_str() {
+        "land_queued" => Stage::Queued,
+        "land_gating" => Stage::Gating,
+        "land_failed" => Stage::GateFailed,
+        "land_conflict" => Stage::Conflict,
+        _ => return None,
+    };
+    let batch = match stage {
+        Stage::Gating => field(e, "batch"),
+        Stage::GateFailed => held
+            .filter(|l| l.stage == Stage::Gating)
+            .and_then(|l| l.batch.clone())
+            .or_else(|| field(e, "batch")),
+        _ => None,
+    };
+    Some(Land {
+        stage,
+        at: e.at.clone(),
+        note: e.note.clone().filter(|n| !n.is_empty()),
+        batch,
+    })
+}
+
 fn usage_of(e: &Event) -> Usage {
     let get = |name: &str| e.data.as_ref().and_then(|d| d.get(name));
     Usage {
@@ -360,6 +431,7 @@ fn row(e: &Event) -> Assignment {
         job_exit: None,
         job_report: None,
         need: None,
+        land: None,
     }
 }
 
@@ -420,6 +492,10 @@ pub fn rebuild(events: &[Event]) -> Vec<Assignment> {
     for e in events {
         let open = rows.last().filter(|a| a.ended_at.is_none()).map(|a| a.kind);
         let s = step(e, open);
+        let held = rows.last().and_then(|a| a.land.clone());
+        if let (Some(l), Some(a)) = (land(e, open, held.as_ref()), rows.last_mut()) {
+            a.land = Some(l);
+        }
         if let Some(end) = s.end
             && let Some(a) = rows.last_mut()
         {
@@ -444,7 +520,7 @@ pub fn rebuild(events: &[Event]) -> Vec<Assignment> {
 }
 
 /// An item's open claim: the branch and host that hold it, since when, the job that runs it and the
-/// word its job's end left, none while it runs.
+/// word and time its job's end left, none while it runs.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Claim {
     pub branch: String,
@@ -455,13 +531,21 @@ pub struct Claim {
     pub on: Option<String>,
     #[serde(default)]
     pub report: Option<String>,
+    #[serde(default)]
+    pub ended_at: Option<String>,
+    pub land: Option<Land>,
 }
 
 impl Claim {
-    /// Where the claim's job stands.
+    /// Where the claim's job stands. A claim with no job that has been queued to land is a finished
+    /// build.
     #[must_use]
     pub fn job_end(&self) -> crate::word::JobEnd {
-        crate::word::JobEnd::of(self.report.as_deref())
+        crate::word::JobEnd::of_claim(
+            self.job.as_deref(),
+            self.report.as_deref(),
+            self.land.is_some(),
+        )
     }
 }
 
@@ -475,7 +559,7 @@ pub struct Ask {
 /// Who holds an item now, as its open assignment row says: an agent's claim or the owner's ask.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Held {
-    Claim(Claim),
+    Claim(Box<Claim>),
     Ask(Ask),
 }
 
@@ -484,7 +568,7 @@ impl Held {
     #[must_use]
     pub fn of(kind: Kind, a: &Assignment) -> Self {
         match kind {
-            Kind::Claim => Held::Claim(Claim {
+            Kind::Claim => Held::Claim(Box::new(Claim {
                 branch: a.branch.clone().unwrap_or_default(),
                 host: a.host.clone(),
                 since: a.started_at.clone(),
@@ -492,7 +576,9 @@ impl Held {
                 job: a.job.clone(),
                 on: a.machine.clone(),
                 report: a.job_report.clone(),
-            }),
+                ended_at: a.job_ended_at.clone(),
+                land: a.land.clone(),
+            })),
             Kind::Ask => Held::Ask(Ask {
                 since: a.started_at.clone(),
                 note: a.note.clone(),
@@ -523,6 +609,8 @@ pub struct HeldFields {
     pub claim_job: Option<String>,
     pub claim_on: Option<String>,
     pub claim_report: Option<String>,
+    pub claim_ended_at: Option<String>,
+    pub claim_land: Option<Land>,
 }
 
 impl HeldFields {
@@ -543,6 +631,8 @@ impl HeldFields {
                 out.claim_job.clone_from(&c.job);
                 out.claim_on.clone_from(&c.on);
                 out.claim_report.clone_from(&c.report);
+                out.claim_ended_at.clone_from(&c.ended_at);
+                out.claim_land.clone_from(&c.land);
             }
             Some(Held::Ask(a)) => {
                 out.turn_note.clone_from(&a.note);
@@ -579,6 +669,8 @@ impl Now {
                 job: i.claim_job.clone(),
                 on: i.claim_on.clone(),
                 report: None,
+                ended_at: None,
+                land: None,
             }),
             _ => None,
         };
@@ -597,7 +689,7 @@ impl Now {
     #[must_use]
     pub fn held(&self) -> Option<Held> {
         match (&self.claim, &self.asked) {
-            (Some(c), _) => Some(Held::Claim(c.clone())),
+            (Some(c), _) => Some(Held::Claim(Box::new(c.clone()))),
             (None, Some(a)) => Some(Held::Ask(a.clone())),
             (None, None) => None,
         }
@@ -619,6 +711,7 @@ fn opened(held: &Held) -> Assignment {
             machine: c.on.clone(),
             runner: c.runner.clone(),
             job: c.job.clone(),
+            land: c.land.clone(),
             ..base(&c.since, &c.host)
         },
         Held::Ask(a) => Assignment {

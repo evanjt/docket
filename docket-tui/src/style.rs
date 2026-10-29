@@ -10,10 +10,11 @@ pub fn word(w: &str) -> Style {
     match w {
         "ready" => s.fg(Color::Green),
         "in progress" | "under way" => s.fg(Color::Yellow),
+        "to land" => s.fg(Color::LightGreen),
         "audit due" => s.fg(Color::Cyan),
         "waiting on owner" => s.fg(Color::Magenta),
         "blocked" => s.fg(Color::Blue),
-        "dropped" | "FAILED" => s.fg(Color::Red),
+        "dropped" | "FAILED" | "job failed" => s.fg(Color::Red),
         "done" => s.add_modifier(Modifier::DIM),
         _ => s,
     }

@@ -210,6 +210,8 @@ fn test_settle_ends_what_the_item_no_longer_holds_and_opens_what_it_does() {
                 job: Some("j".into()),
                 on: Some("workbench".into()),
                 report: None,
+                ended_at: None,
+                land: None,
             }),
             asked: None,
             updated_at: "z".into(),
@@ -353,7 +355,7 @@ fn test_an_open_row_that_agrees_with_the_item_is_kept() {
         claim: Some(claim_on("build/t1-1")),
         ..Now::default()
     };
-    let open = Held::Claim(claim_on("build/t1-1"));
+    let open = Held::Claim(Box::new(claim_on("build/t1-1")));
     assert_eq!(agree(Some(&open), &now), Agreement::default());
     assert_eq!(agree(None, &Now::default()), Agreement::default());
 }
@@ -367,7 +369,7 @@ fn test_an_open_row_the_item_no_longer_holds_ends_and_what_it_holds_opens() {
         }),
         ..Now::default()
     };
-    let got = agree(Some(&Held::Claim(claim_on("build/t1-1"))), &asked);
+    let got = agree(Some(&Held::Claim(Box::new(claim_on("build/t1-1")))), &asked);
     assert!(got.end);
     let opened = got.open.unwrap();
     assert_eq!(
@@ -379,7 +381,7 @@ fn test_an_open_row_the_item_no_longer_holds_ends_and_what_it_holds_opens() {
         (Kind::Ask, "q", Some("pick one"))
     );
     let got = agree(
-        Some(&Held::Claim(claim_on("build/t1-1"))),
+        Some(&Held::Claim(Box::new(claim_on("build/t1-1")))),
         &Now {
             claim: Some(claim_on("build/t1-2")),
             ..Now::default()
@@ -433,4 +435,79 @@ fn test_an_open_claim_holds_its_jobs_report() {
     assert_eq!(c.report.as_deref(), Some("FAILED"));
     let f = HeldFields::of("open", Some(&Held::Claim(c)));
     assert_eq!(f.claim_report.as_deref(), Some("FAILED"));
+    assert_eq!(f.claim_ended_at.as_deref(), Some("c"));
+}
+
+fn landing(kind: &str, at: &str, note: Option<&str>, data: Option<serde_json::Value>) -> Event {
+    let mut e = event(kind, at, "work/t1-1", note);
+    e.data = data;
+    e
+}
+
+#[test]
+fn test_a_failed_gate_run_leaves_the_stage_gate_failed_with_the_batch_it_gated_in() {
+    let mut events = vec![
+        event("claimed", "a", "work/t1-1", None),
+        landing("land_queued", "b", None, None),
+        landing(
+            "land_gating",
+            "c",
+            Some("base abc1234"),
+            Some(json!({"batch": "batch-kiln", "base": "abc1234"})),
+        ),
+        landing("land_failed", "d", Some("clippy: unused"), None),
+    ];
+    let land = rebuild(&events)[0].land.clone().unwrap();
+    assert_eq!(land.stage, Stage::GateFailed);
+    assert_eq!(land.batch.as_deref(), Some("batch-kiln"));
+    assert_eq!(land.at, "d");
+    assert_eq!(land.note.as_deref(), Some("clippy: unused"));
+
+    events.push(event("claimed", "e", "work/t1-2", None));
+    let rows = rebuild(&events);
+    assert_eq!(rows[1].land, None);
+}
+
+#[test]
+fn test_each_landing_step_replaces_the_one_before_it() {
+    let rows = rebuild(&[
+        event("claimed", "a", "work/t1-1", None),
+        landing("land_queued", "b", None, None),
+        landing(
+            "land_conflict",
+            "c",
+            Some("src/a.rs"),
+            Some(json!({"files": ["src/a.rs"]})),
+        ),
+        landing("land_queued", "d", None, None),
+    ]);
+    let land = rows[0].land.clone().unwrap();
+    assert_eq!(
+        (land.stage, land.at.as_str(), land.batch),
+        (Stage::Queued, "d", None)
+    );
+}
+
+#[test]
+fn test_a_landing_event_on_an_item_with_no_open_claim_changes_nothing() {
+    let rows = rebuild(&[
+        event("claimed", "a", "work/t1-1", None),
+        event("released", "b", "work/t1-1", None),
+        landing("land_queued", "c", None, None),
+    ]);
+    assert_eq!(rows[0].land, None);
+}
+
+#[test]
+fn test_an_open_claim_with_a_landing_and_no_job_reads_as_a_finished_build() {
+    let rows = rebuild(&[
+        event("claimed", "a", "work/t1-1", None),
+        landing("land_queued", "b", None, None),
+    ]);
+    let Held::Claim(c) = Held::of(Kind::Claim, &rows[0]) else {
+        panic!("a claim row holds a claim");
+    };
+    assert_eq!(c.job_end(), crate::word::JobEnd::Done);
+    let f = HeldFields::of("open", Some(&Held::Claim(c)));
+    assert_eq!(f.claim_land.unwrap().stage, Stage::Queued);
 }

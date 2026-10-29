@@ -254,6 +254,24 @@ pub async fn wip(
     listed(&db, &q.project, q.under.as_deref(), &tail, values).await
 }
 
+/// `docket list`: every open item of the project with its word, in the order they were filed.
+///
+/// # Errors
+/// 404 for an unknown project.
+pub async fn open(
+    State(db): State<DatabaseConnection>,
+    Query(q): Query<InProject>,
+) -> Result<Json<Value>, Failure> {
+    listed(
+        &db,
+        &q.project,
+        q.under.as_deref(),
+        "AND state='open' ORDER BY rid",
+        vec![],
+    )
+    .await
+}
+
 #[derive(Deserialize)]
 pub struct ByWait {
     under: Option<String>,

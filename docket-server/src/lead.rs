@@ -43,7 +43,7 @@ struct Row {
     renewed_at: String,
 }
 
-async fn held<C: ConnectionTrait>(c: &C, slug: &str) -> Result<Option<Lead>, Failure> {
+pub async fn held<C: ConnectionTrait>(c: &C, slug: &str) -> Result<Option<Lead>, Failure> {
     let row = c.query_one_raw(sql(READ, vec![slug.into()])).await?;
     Ok(match row {
         Some(r) => {

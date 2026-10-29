@@ -62,6 +62,7 @@ fn narrow() -> Router<DatabaseConnection> {
         .route("/todo", get(lists::todo))
         .route("/todo/waiting", get(lists::todo_waiting))
         .route("/wip", get(lists::wip))
+        .route("/open", get(lists::open))
         .route("/waiting", get(lists::waiting))
         .route("/questions", get(lists::questions))
         .route("/research", get(lists::research))

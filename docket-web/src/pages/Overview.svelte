@@ -2,13 +2,13 @@
   import { api } from '../lib/api';
   import { project } from '../lib/context';
   import { MOVE_KINDS, moves, planCount, plans } from '../lib/flow';
-  import { jobLine, leadLine, machineUse } from '../lib/fleet';
+  import { claimDetail, claimGroups, claimMeta, leadLine, machineUse } from '../lib/fleet';
   import { checkByRelease, checkCounts, forecastLine, releaseTally, staleClaims } from '../lib/releases';
   import { clock, resource } from '../lib/live.svelte';
   import { ITEM_KEYS } from '../lib/newitem';
   import { session } from '../lib/session.svelte';
   import { href } from '../lib/route';
-  import { ago, duration, epoch, stamp } from '../lib/time';
+  import { ago, stamp } from '../lib/time';
   import Bar from '../components/Bar.svelte';
   import DailyChart from '../components/DailyChart.svelte';
   import FlowStrip from '../components/FlowStrip.svelte';
@@ -52,7 +52,6 @@
   const problems = $derived(checkByRelease(summary.data?.problems ?? [], ctx.releases));
   const counts = $derived(checkCounts(summary.data?.problems ?? [], ctx.slug));
   const OPEN_WORDS = ['ready', 'in progress', 'plans under way', 'waiting on owner', 'blocked', 'held later'];
-  const host = (h: string | null | undefined) => (h ?? '').split('.')[0];
   const use = $derived(machines.data && wip.data ? machineUse(machines.data, wip.data, session.me?.host ?? '', now) : []);
   const COUNTED = ['claimed', 'released'];
 </script>
@@ -81,18 +80,21 @@
           <p class="lead" class:lapsed={lead.data.lapsed} class:none={!lead.data.lead}>{leadLine(lead.data, now)}</p>
         {/if}
         {#if wip.data?.length}
-          <ul class="list">
-            {#each wip.data as r (r.id)}
-              {@const since = epoch(r.claim_since)}
-              <li class="run">
-                <a class="id" href={ctx.item(r.id)}>{r.id}</a>
-                <a class="title" href={ctx.item(r.id)}>{r.title}</a>
-                <span class="where"><span class="id branch">{r.claim_branch}</span> on {host(r.claim_on ?? r.claim_host)}{#if jobLine(r)}<span class="job">{jobLine(r)}</span>{/if}</span>
-                {#if stale.get(r.id)}<span class="stale" title="No forward event for longer than the stale limit">{stale.get(r.id)}</span>{/if}
-                <span class="since" title={r.claim_since ?? ''}>{since ? duration(now - since) : ''}</span>
-              </li>
-            {/each}
-          </ul>
+          {#each claimGroups(wip.data) as g (g.word)}
+            <div class="claims" style="--c: var(--w-{g.word.replace(/ /g, '-')}, var(--faint))">
+              <h3><Word word={g.word} plain /> <span class="faint">{g.rows.length}</span></h3>
+              <ul class="list">
+                {#each g.rows as r (r.id)}
+                  <li class="run" title={claimDetail(r)}>
+                    <a class="id" href={ctx.item(r.id)}>{r.id}</a>
+                    <a class="title" href={ctx.item(r.id)}>{r.title}</a>
+                    {#if stale.get(r.id)}<span class="stale" title="No forward event for longer than the stale limit">{stale.get(r.id)}</span>{/if}
+                    <span class="where">{claimMeta(r, now)}</span>
+                  </li>
+                {/each}
+              </ul>
+            </div>
+          {/each}
         {:else if wip.data}
           <p class="empty">No item is claimed. Agents claim from Next up.</p>
         {/if}
@@ -353,9 +355,22 @@
     padding: 0;
   }
 
+  .claims {
+    border-left: 3px solid var(--c);
+    padding-left: 10px;
+    margin-bottom: 12px;
+  }
+
+  .claims h3 {
+    margin: 4px 0 2px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--c);
+  }
+
   .run {
     display: grid;
-    grid-template-columns: 58px 1fr auto auto auto;
+    grid-template-columns: 58px minmax(0, 1fr) auto auto;
     align-items: baseline;
     gap: 12px;
     padding: 8px 0;
@@ -372,11 +387,6 @@
     font-size: 12.5px;
     color: var(--muted);
     white-space: nowrap;
-  }
-
-  .branch {
-    font-weight: 500;
-    color: var(--w-under-way);
   }
 
   .release {
@@ -420,11 +430,6 @@
 
   .lead.lapsed {
     color: var(--w-blocked);
-  }
-
-  .job {
-    margin-left: 8px;
-    color: var(--ink);
   }
 
   .machines {
@@ -492,12 +497,6 @@
   .stale {
     font-size: 12.5px;
     color: var(--w-blocked);
-  }
-
-  .since {
-    font-weight: 600;
-    min-width: 6ch;
-    text-align: right;
   }
 
   .compact li {

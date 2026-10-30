@@ -142,3 +142,17 @@ fn test_list_word_keeps_one_group() {
     assert_eq!(found.len(), 1);
     assert_eq!(ids(&found[0].1), ["T2"]);
 }
+
+#[test]
+fn test_a_wip_head_colours_its_word_only_for_a_terminal() {
+    assert_eq!(wip_head("to land", 3, false), "to land (3)");
+    assert_eq!(wip_head("to land", 3, true), "\x1b[1;92mto land\x1b[0m (3)");
+    assert_eq!(
+        wip_head("in progress", 1, true),
+        "\x1b[1;33min progress\x1b[0m (1)"
+    );
+    assert_eq!(
+        wip_head("job failed", 2, true),
+        "\x1b[1;31mjob failed\x1b[0m (2)"
+    );
+}

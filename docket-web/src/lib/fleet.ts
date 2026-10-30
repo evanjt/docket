@@ -1,5 +1,6 @@
 import type { LeadState, Machine, Row } from './types';
-import { ago } from './time';
+import { ago, duration, epoch } from './time';
+import { landing } from './note';
 
 export interface MachineUse {
   name: string;
@@ -54,4 +55,32 @@ export function leadLine(state: LeadState | null | undefined, now: number): stri
 /** The job behind a claim, as `runner job`, or nothing for a claim made by hand. */
 export function jobLine(row: Row): string {
   return [row.claim_runner, row.claim_job].filter(Boolean).join(' ');
+}
+
+/** The words a claim shows under, in the order the Running now list groups them, as `docket wip` does. */
+export const CLAIM_WORDS = ['in progress', 'to land', 'job failed'] as const;
+
+/** Claims under their word, in the order of `CLAIM_WORDS` and any other word after; a word with no claim is left out. */
+export function claimGroups(claims: Row[]): { word: string; rows: Row[] }[] {
+  const words: string[] = [...CLAIM_WORDS];
+  for (const c of claims) if (!words.includes(c.word)) words.push(c.word);
+  return words.map((word) => ({ word, rows: claims.filter((c) => c.word === word) })).filter((g) => g.rows.length);
+}
+
+/**
+ * The short line beside a claim: its machine, then for a running job how long it has run, for an ended one where its
+ * build stands on its way to landing or how long since it ended. `now` is in epoch seconds.
+ */
+export function claimMeta(claim: Row, now: number): string {
+  const host = (claim.claim_on ?? claim.claim_host ?? '').split('.')[0];
+  const from = epoch(claim.word === 'in progress' ? claim.claim_since : (claim.claim_ended_at ?? claim.claim_since));
+  const when = landing(claim, now) || (from ? duration(now - from) : '');
+  return [host, when].filter(Boolean).join(' · ');
+}
+
+/** The whole claim for a tooltip: its branch, the machine and the job behind it. */
+export function claimDetail(claim: Row): string {
+  const host = (claim.claim_on ?? claim.claim_host ?? '').split('.')[0];
+  const where = [claim.claim_branch, host && `on ${host}`].filter(Boolean).join(' ');
+  return [where, jobLine(claim)].filter(Boolean).join(', ');
 }

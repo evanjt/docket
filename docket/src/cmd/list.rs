@@ -192,6 +192,20 @@ fn land_note(r: &Row, now: i64) -> String {
 }
 
 /// The text of one row of `list`: the row, then the landing stage of a build that waits to land.
+/// The heading of one `docket wip` group, `to land (3)`, bold in the TUI's colour for its word
+/// when `colour`.
+#[must_use]
+pub fn wip_head(word: &str, count: usize, colour: bool) -> String {
+    let code = match word {
+        _ if !colour => return format!("{word} ({count})"),
+        "in progress" => "1;33",
+        "to land" => "1;92",
+        "job failed" => "1;31",
+        _ => "1",
+    };
+    format!("\x1b[{code}m{word}\x1b[0m ({count})")
+}
+
 #[must_use]
 pub fn list_row(r: &Row, now: i64) -> String {
     with_note(fmt_row(r, None), &land_note(r, now))

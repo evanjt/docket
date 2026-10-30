@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { jobLine, leadLine, machineUse } from './fleet';
+import { claimDetail, claimGroups, claimMeta, jobLine, leadLine, machineUse } from './fleet';
 import type { LeadState, Machine, Row } from './types';
 
 const machine = (name: string, slots: number): Machine => ({
@@ -79,5 +79,48 @@ describe('jobLine', () => {
   it('names the runner and job of a dispatched claim and nothing for one by hand', () => {
     expect(jobLine({ claim_runner: 'codex', claim_job: 'lead-t1-3' } as unknown as Row)).toBe('codex lead-t1-3');
     expect(jobLine({} as Row)).toBe('');
+  });
+});
+
+describe('claimGroups', () => {
+  const row = (id: string, word: string): Row => claim(id, 'beta', 'alpha', word);
+
+  it('splits claims under in progress, to land and job failed, in that order, leaving out an empty word', () => {
+    const groups = claimGroups([row('T1', 'to land'), row('T2', 'in progress'), row('T3', 'to land'), row('T4', 'in progress')]);
+    expect(groups.map((g) => [g.word, g.rows.map((r) => r.id)])).toEqual([
+      ['in progress', ['T2', 'T4']],
+      ['to land', ['T1', 'T3']],
+    ]);
+  });
+
+  it('keeps a word it does not know after the claim words', () => {
+    const groups = claimGroups([row('T1', 'parked'), row('T2', 'job failed')]);
+    expect(groups.map((g) => g.word)).toEqual(['job failed', 'parked']);
+  });
+});
+
+describe('claimMeta', () => {
+  const at = (minutes: number) => new Date((NOW - minutes * 60) * 1000).toISOString();
+  const row = (word: string, extra: Partial<Row>): Row =>
+    ({ ...claim('T1', 'beta.example.org', 'alpha', word), claim_since: at(45), ...extra }) as Row;
+
+  it('gives a running job its short machine name and how long it has run', () => {
+    expect(claimMeta(row('in progress', {}), NOW)).toBe('beta · 45m');
+  });
+
+  it('gives an ended job the time since it ended', () => {
+    expect(claimMeta(row('to land', { claim_ended_at: at(5) }), NOW)).toBe('beta · 5m');
+  });
+
+  it('gives a queued build where it stands on its way to landing', () => {
+    const land = { stage: 'gating' as const, at: at(3), note: null, batch: 'b7' };
+    expect(claimMeta(row('to land', { claim_ended_at: at(5), claim_land: land }), NOW)).toBe('beta · gating 3m ago (batch b7)');
+  });
+});
+
+describe('claimDetail', () => {
+  it('names the branch, the machine and the job', () => {
+    const r = { ...claim('T1', 'beta.example.org', 'alpha'), claim_runner: 'quill', claim_job: 'job-t1' } as Row;
+    expect(claimDetail(r)).toBe('lead/T1 on beta, quill job-t1');
   });
 });

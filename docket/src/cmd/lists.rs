@@ -151,11 +151,12 @@ pub fn wip(ctx: &mut Ctx, host: Option<&String>) -> Result<i32> {
     }
     let shares = ctx.read("/shares", &pairs)?;
     let now = crate::cmd::status::now();
+    let colour = std::io::stdout().is_terminal();
     for (i, (word, held)) in list::wip_groups(&rows, now).into_iter().enumerate() {
         if i > 0 {
             println!();
         }
-        println!("{word} ({})", held.len());
+        println!("{}", list::wip_head(&word, held.len(), colour));
         for (r, minutes) in held {
             let about = shares
                 .as_array()

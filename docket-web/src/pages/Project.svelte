@@ -3,7 +3,7 @@
   import { api } from '../lib/api';
   import { provide } from '../lib/context';
   import { board } from '../lib/flow';
-  import { fieldText } from '../lib/searchbox';
+  import { escapeTo, fieldText, searchOrigin } from '../lib/searchbox';
   import { releaseList } from '../lib/releases';
   import { parseFilter, searchHref } from '../lib/filter';
   import { live, resource } from '../lib/live.svelte';
@@ -26,6 +26,8 @@
   let searchBox: HTMLInputElement | undefined = $state();
   let typed = $state(at.params.get('q') ?? '');
   let timer: ReturnType<typeof setTimeout> | undefined;
+  /** The page a search was typed on, which Escape on its results returns to. */
+  let origin: string | null = null;
   const urlQuery = $derived(at.params.get('q') ?? '');
 
   $effect(() => {
@@ -38,15 +40,35 @@
     clearTimeout(timer);
     timer = setTimeout(() => {
       const t = text.trim();
+      origin = searchOrigin(origin, tab, location.pathname + location.search);
       if (tab === 'work') go(withParams({ q: t || undefined, i: undefined }), true);
-      else go(searchHref(slug, t, parseFilter(at.params, { priorities, levels })), true);
+      else go(searchHref(slug, t, parseFilter(at.params, { priorities, levels })));
     }, 220);
+  }
+
+  /** Leaves the search results for the page the search was typed on. */
+  function leaveSearch() {
+    clearTimeout(timer);
+    typed = '';
+    searchBox?.blur();
+    go(escapeTo(origin, href(slug, 'overview')));
+    origin = null;
   }
 
   function onkey(e: KeyboardEvent) {
     const t = e.target as HTMLElement;
+    const searching = tab === 'work' && (typed.trim() !== '' || urlQuery !== '');
     if (t.closest('input, textarea, select, [contenteditable]')) {
-      if (e.key === 'Escape' && t === searchBox) searchBox?.blur();
+      if (e.key === 'Escape' && t === searchBox) {
+        e.preventDefault();
+        if (searching) leaveSearch();
+        else searchBox?.blur();
+      }
+      return;
+    }
+    if (e.key === 'Escape' && searching && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      e.preventDefault();
+      leaveSearch();
       return;
     }
     if (e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey) {

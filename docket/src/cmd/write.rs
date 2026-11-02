@@ -64,6 +64,45 @@ pub fn read_body(spec: Option<&String>) -> Result<Option<String>> {
         .map_err(|e| Fail::refused(format!("{spec}: {e}")))
 }
 
+/// Note text from an argument: `-` reads it from stdin, as `--body -` does, and an empty argument is
+/// no note.
+///
+/// # Errors
+/// Stdin cannot be read, or the note is empty, only whitespace or only `-` once trimmed, which is
+/// what a note meant for stdin but written literally leaves.
+pub fn note_text(arg: Option<&String>) -> Result<Option<String>> {
+    match arg.map(String::as_str) {
+        None | Some("") => Ok(None),
+        Some("-") => {
+            let mut text = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)
+                .map_err(|e| Fail::refused(format!("docket: stdin: {e}")))?;
+            checked_note(text, "the note read from stdin").map(Some)
+        }
+        Some(text) => checked_note(text.to_owned(), "the note").map(Some),
+    }
+}
+
+/// Note text an argument must carry, `-` reading it from stdin.
+///
+/// # Errors
+/// As [`note_text`], and the argument is empty.
+pub fn required_note(arg: &String) -> Result<String> {
+    note_text(Some(arg))?.ok_or_else(|| Fail::refused("docket: the note is empty; nothing written"))
+}
+
+fn checked_note(text: String, what: &str) -> Result<String> {
+    match text.trim() {
+        "" => Err(Fail::refused(format!(
+            "docket: {what} is empty; nothing written"
+        ))),
+        "-" => Err(Fail::refused(format!(
+            "docket: {what} is a bare \"-\"; write the text, or pass - with the text on stdin. Nothing written"
+        ))),
+        _ => Ok(text),
+    }
+}
+
 /// A job under a lead files what it finds and builds its ticket, and leaves the lead's verbs (claim,
 /// release, close, drop, reopen) to the lead.
 ///
@@ -336,7 +375,7 @@ pub fn close(ctx: &mut Ctx, c: &Close) -> Result<i32> {
             &busy[2..]
         )));
     }
-    let mut resolution = c.resolution.filter(|r| !r.is_empty()).cloned();
+    let mut resolution = note_text(c.resolution)?;
     if resolution.is_none() && !is_question {
         let branch = v["claim_branch"].as_str();
         resolution = claim_sha(ctx, &slug, &project, branch);
@@ -447,7 +486,7 @@ pub struct Edit<'a> {
 /// The body cannot be read, or the server refuses.
 pub fn edit(ctx: &mut Ctx, e: &Edit) -> Result<i32> {
     let common = ctx.common(false)?;
-    let append = e.append.filter(|a| !a.is_empty()).cloned();
+    let append = note_text(e.append)?;
     let body = e.body.filter(|b| !b.is_empty());
     if e.set.is_empty()
         && append.is_none()

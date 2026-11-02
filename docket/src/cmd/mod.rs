@@ -186,18 +186,21 @@ fn run_lead(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             back,
             log,
             run,
-        } => land::land(
-            ctx,
-            &land::Ask {
-                ids,
-                back: match back.as_slice() {
-                    [id, why] => Some((id.as_str(), why.as_str())),
-                    _ => None,
+        } => {
+            let back = match back.as_slice() {
+                [id, why] => Some((id.as_str(), write::required_note(why)?)),
+                _ => None,
+            };
+            land::land(
+                ctx,
+                &land::Ask {
+                    ids,
+                    back: back.as_ref().map(|(id, why)| (*id, why.as_str())),
+                    log: *log,
+                    run: run.as_deref(),
                 },
-                log: *log,
-                run: run.as_deref(),
-            },
-        ),
+            )
+        }
         _ => unreachable!("run_lead is given only the machine, lead, dispatch and land commands"),
     }
 }
@@ -293,7 +296,7 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             let req = ReleaseRequest {
                 common: ctx.common(*force)?,
                 id: id.clone(),
-                note: opt(note.as_ref()),
+                note: write::note_text(note.as_ref())?,
                 bounce: *bounce,
                 rebase: opt(rebase.as_ref()),
                 runner: opt(runner.as_ref()),
@@ -329,7 +332,7 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             let req = DropRequest {
                 common: ctx.common(*force)?,
                 id: id.clone(),
-                why: opt(why.as_ref()),
+                why: write::note_text(why.as_ref())?,
                 superseded_by: opt(superseded_by.as_ref()),
             };
             write::drop(ctx, &req)
@@ -345,7 +348,7 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             let req = ReopenRequest {
                 common: ctx.common(*force)?,
                 id: id.clone(),
-                why: why.clone(),
+                why: write::required_note(why)?,
                 area: area.clone(),
                 release: release.clone(),
                 carry: *carry,
@@ -362,7 +365,7 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
                 common: ctx.common(*force)?,
                 id: id.clone(),
                 on: opt(on.as_ref()),
-                until: opt(until.as_ref()),
+                until: write::note_text(until.as_ref())?,
             };
             write::moved(ctx, "wait", &req)
         }
@@ -370,7 +373,7 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             let req = ResumeRequest {
                 common: ctx.common(false)?,
                 id: id.clone(),
-                note: opt(note.as_ref()),
+                note: write::note_text(note.as_ref())?,
             };
             write::moved(ctx, "resume", &req)
         }
@@ -396,7 +399,7 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             let req = AskRequest {
                 common: ctx.common(*force)?,
                 id: id.clone(),
-                note: note.clone(),
+                note: write::required_note(note)?,
                 need: need.clone(),
             };
             write::ask(ctx, &req)
@@ -405,7 +408,7 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             let req = ReplyRequest {
                 common: ctx.common(false)?,
                 id: id.clone(),
-                note: note.clone(),
+                note: write::required_note(note)?,
             };
             write::moved(ctx, "reply", &req)
         }
@@ -418,8 +421,8 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             let req = AnswerRequest {
                 common: ctx.common(false)?,
                 id: id.clone(),
-                decision: decision.clone(),
-                derived: derived.clone(),
+                decision: write::required_note(decision)?,
+                derived: write::note_text(derived.as_ref())?,
                 carried_by: carried_by.clone(),
             };
             write::answer(ctx, &req)
@@ -434,8 +437,8 @@ fn run_write(ctx: &mut Ctx, cmd: &Cmd) -> Result<i32> {
             let req = DecideRequest {
                 common: ctx.common(false)?,
                 id: id.clone(),
-                choice: choice.clone().unwrap_or_default(),
-                basis: basis.clone(),
+                choice: write::note_text(choice.as_ref())?.unwrap_or_default(),
+                basis: write::required_note(basis)?,
                 area: area.clone(),
                 about: about.clone(),
             };

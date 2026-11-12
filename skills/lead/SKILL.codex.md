@@ -151,20 +151,27 @@ worktree for a batch, no fast-forward, no background command of its own.
 `docket jobs` lists the gate run beside the jobs, with the builds of its
 batch, and `docket jobs --wait` returns when it exits.
 
-- **A conflict `land` names** is the lead's to resolve, there and then. Merge
-  the work branch into the job's branch in a worktree, read both sides and the
-  items behind them, keep what each change meant, commit, and queue it again
-  with `docket land T14`:
+- **A conflict.** When the `land_resolve` fact is set, `land` hands each
+  conflicting merge to that command in the batch's worktree and the gate judges
+  the result, so a conflict never reaches you or a new job. A conflict `land`
+  still names is one the command could not settle. Merge the work branch into
+  the job's branch in a worktree, read both sides and the items behind them,
+  keep what each change meant, commit, and queue it again with
+  `docket land T14`:
 
       git worktree add ../merge-T14 <the job's branch>
       git -C ../merge-T14 merge --no-ff -m "Merge <the job's commit subject>" <your branch>
       git worktree remove ../merge-T14
 
-  Never leave a finished build waiting for a job to
-  rebase it.
+  Never leave a finished build waiting for a job to rebase it, and never hold
+  builds back to land them one at a time: every finished build goes to `land`
+  at once, and the batch is what keeps them from going stale.
 - **A failed gate.** Read it with `docket land --log`. Where the failure is
-  the batch's merge or something mechanical (formatting, a generated file), fix
-  it on the job's branch and queue it again. Where the batch split finds a
+  the batch's merge or something mechanical (formatting, a count or baseline a
+  guard records with a write form, a generated file the gate did not
+  regenerate), fix it on the job's branch and queue it again: a send-back costs
+  a whole new job for a one-line fix. The gate may commit over the batch, so a
+  generated file it regenerates lands with the batch and never fails it. Where the batch split finds a
   build's own behaviour failing, send that build back with the failing lines
   and dispatch it again at once; the rest of its batch is queued again by
   `land`:
@@ -174,8 +181,6 @@ batch, and `docket jobs --wait` returns when it exits.
 
 `docket stale` lists the job branches whose item is closed or that no claim or job names, and
 whether each holds commits the work ref lacks; `docket stale --prune` removes those with none.
-
-Check content, not reachability: `git show HEAD:<a file it touched>`.
 
 **DONE, for an audit.** Close the plan with the job's note:
 

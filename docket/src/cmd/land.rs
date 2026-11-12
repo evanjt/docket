@@ -1,8 +1,12 @@
 //! `docket land`: finished builds queued to land, and one gate run per checkout that takes them in
 //! batches until the queue is empty: each batch merged onto the work branch's head in a worktree,
 //! gated with the `gate` fact's command, fast-forwarded and its items closed. It never pushes.
+//!
+//! The worktree is kept from batch to batch, reset to the work branch's head with its ignored files
+//! left, so a gate that builds starts warm. Merges there run no hooks: the `gate` fact is the gate.
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -20,6 +24,10 @@ use crate::row::rows_of;
 
 /// The lines of a failed gate's log its items carry.
 const TAIL: usize = 20;
+
+/// Merges and commits in the batch's worktree run no hooks. A kept worktree has whatever hooks its
+/// gate installed, and a hook on every merge would run the gate once per build.
+const NO_HOOKS: [&str; 2] = ["-c", "core.hooksPath=/dev/null"];
 
 /// What `docket land` was asked for.
 pub struct Ask<'a> {
@@ -330,13 +338,16 @@ fn lander(ctx: &mut Ctx, slug: &str, here: &Here, work: &str) -> Result<i32> {
             held = again;
             continue;
         }
-        let bisect = fact::land_bisect(&ctx.api.facts(slug)?.skills);
+        let skills = ctx.api.facts(slug)?.skills;
+        let bisect = fact::land_bisect(&skills);
+        let resolve = fact::effective(&skills, "land_resolve");
         let run = Run {
             slug,
             here,
             work,
             gate: &gate,
             bisect,
+            resolve: resolve.as_deref(),
         };
         if let Err(e) = run.batch(ctx, &picked) {
             run.requeue(ctx, &picked);
@@ -352,6 +363,8 @@ struct Run<'a> {
     work: &'a str,
     gate: &'a str,
     bisect: bool,
+    /// The `land_resolve` fact's command, run on a conflicting merge.
+    resolve: Option<&'a str>,
 }
 
 /// How a set of builds fared at the gate.
@@ -359,9 +372,11 @@ enum Gated {
     /// Every build conflicted, so nothing was gated.
     Empty,
     /// The gate passed on `base`, the work branch's head; `clean` when nothing conflicted or moved.
+    /// `tip` is the worktree's head: the last merge, or a commit the gate made over it.
     Passed {
         merged: Vec<Merged>,
         base: String,
+        tip: String,
         clean: bool,
     },
     Failed {
@@ -408,7 +423,9 @@ impl Run<'_> {
         let name = format!("{}-{}", job::name_of(self.work), job::now());
         match self.gate_set(ctx, picked, &name)? {
             Gated::Empty => {}
-            Gated::Passed { merged, base, .. } => self.land(ctx, &merged, &base)?,
+            Gated::Passed {
+                merged, base, tip, ..
+            } => self.land(ctx, &merged, &base, &tip)?,
             Gated::Stopped { merged, why } => self.fail(ctx, &merged, &why)?,
             Gated::Failed { merged, log } => {
                 if self.bisect {
@@ -436,8 +453,10 @@ impl Run<'_> {
                 splits += 1;
                 match self.gate_set(ctx, &rows, &format!("{name}.{splits}"))? {
                     Gated::Empty => break,
-                    Gated::Passed { merged, base, .. } => {
-                        self.land(ctx, &merged, &base)?;
+                    Gated::Passed {
+                        merged, base, tip, ..
+                    } => {
+                        self.land(ctx, &merged, &base, &tip)?;
                         break;
                     }
                     Gated::Stopped { merged, why } => {
@@ -468,9 +487,10 @@ impl Run<'_> {
                 Gated::Passed {
                     merged,
                     base,
+                    tip,
                     clean,
                 } => {
-                    self.land(ctx, &merged, &base)?;
+                    self.land(ctx, &merged, &base, &tip)?;
                     failing = clean && merged.len() == first.len();
                 }
                 Gated::Stopped { merged, why } => {
@@ -491,20 +511,9 @@ impl Run<'_> {
     /// name. A work branch that moved during the gate run is merged onto again, once.
     fn gate_set(&self, ctx: &mut Ctx, picked: &[Row], name: &str) -> Result<Gated> {
         let tree = self.tree();
-        self.clear();
         let mut base = self.head()?;
-        git(
-            &self.here.repo,
-            &[
-                "worktree",
-                "add",
-                "--detach",
-                &tree.display().to_string(),
-                &base,
-            ],
-        )
-        .map_err(Fail::refused)?;
-        let mut merged = self.merge_all(ctx, picked)?;
+        self.ready(&base)?;
+        let mut merged = self.merge_all(ctx, picked, &base)?;
         let mut moved = false;
         while !merged.is_empty() {
             let short =
@@ -519,16 +528,26 @@ impl Run<'_> {
                     r.members.clone_from(&members);
                 })?;
             }
-            if let Err(log) = self.gate() {
+            if let Err(log) = self.gate(&base) {
                 eprintln!("the gate failed for {}", members.join(", "));
                 return Ok(Gated::Failed { merged, log });
             }
             let now = self.head()?;
             if now == base {
                 let clean = !moved && merged.len() == picked.len();
+                let tip = git(&tree, &["rev-parse", "HEAD"]).map_err(Fail::refused)?;
+                let last = merged.last().map(|m| m.sha.clone()).unwrap_or_default();
+                if !descends(&tree, &last, &tip) {
+                    let why = "the gate moved the batch's worktree off its merges".to_string();
+                    return Ok(Gated::Stopped { merged, why });
+                }
+                if tip != last {
+                    eprintln!("the gate committed over the batch: landing its commits too");
+                }
                 return Ok(Gated::Passed {
                     merged,
                     base,
+                    tip,
                     clean,
                 });
             }
@@ -542,25 +561,26 @@ impl Run<'_> {
                 "{} moved during the gate run: merging onto it again",
                 self.work
             );
-            git(&tree, &["checkout", "--quiet", "--detach", &base]).map_err(Fail::refused)?;
+            self.ready(&base)?;
             let rows: Vec<Row> = merged.into_iter().map(|m| m.row).collect();
-            merged = self.merge_all(ctx, &rows)?;
+            merged = self.merge_all(ctx, &rows, &base)?;
         }
         Ok(Gated::Empty)
     }
 
-    /// A gated set fast-forwarded onto the work branch and closed.
-    fn land(&self, ctx: &mut Ctx, merged: &[Merged], base: &str) -> Result<()> {
-        let tip = merged.last().map(|m| m.sha.clone()).unwrap_or_default();
-        if let Err(why) = self.fast_forward(base, &tip) {
+    /// A gated set fast-forwarded onto the work branch at `tip`, which holds every merge, and
+    /// closed.
+    fn land(&self, ctx: &mut Ctx, merged: &[Merged], base: &str, tip: &str) -> Result<()> {
+        if let Err(why) = self.fast_forward(base, tip) {
             return self.fail(ctx, merged, &why);
         }
         self.close(ctx, merged)
     }
 
-    /// Each build merged `--no-ff` under its commit's subject; one that conflicts is left out with
-    /// its files named on its item.
-    fn merge_all(&self, ctx: &mut Ctx, rows: &[Row]) -> Result<Vec<Merged>> {
+    /// Each build merged `--no-ff` under its commit's subject onto `base`. One that conflicts is
+    /// handed to the `land_resolve` command when there is one, and left out with its files named on
+    /// its item when there is none or it does not settle the merge.
+    fn merge_all(&self, ctx: &mut Ctx, rows: &[Row], base: &str) -> Result<Vec<Merged>> {
         let tree = self.tree();
         let mut out = Vec::new();
         for row in rows {
@@ -569,36 +589,92 @@ impl Run<'_> {
             let subject =
                 git(&tree, &["log", "-1", "--format=%s", &reference]).map_err(Fail::refused)?;
             let message = merge_message(&subject);
-            match git(
-                &tree,
-                &["merge", "--no-ff", "--quiet", "-m", &message, &reference],
-            ) {
-                Ok(_) => {
-                    let sha = git(&tree, &["rev-parse", "HEAD"]).map_err(Fail::refused)?;
-                    out.push(Merged {
-                        row: row.clone(),
-                        sha,
-                    });
+            let before = git(&tree, &["rev-parse", "HEAD"]).map_err(Fail::refused)?;
+            let mut args = NO_HOOKS.to_vec();
+            args.extend(["merge", "--no-ff", "--quiet", "-m", &message, &reference]);
+            let merge = git(&tree, &args);
+            if let Err(why) = &merge {
+                let mut files = unmerged(&tree);
+                if files.is_empty() {
+                    files.push(why.lines().next().unwrap_or_default().to_string());
                 }
-                Err(why) => {
-                    let listed =
-                        git(&tree, &["diff", "--name-only", "--diff-filter=U"]).unwrap_or_default();
-                    let mut files: Vec<String> = listed.lines().map(str::to_string).collect();
-                    if files.is_empty() {
-                        files.push(why.lines().next().unwrap_or_default().to_string());
-                    }
+                if self.resolved(row, &branch, &message, &files, base) {
+                    eprintln!(
+                        "{} conflicted in {}; land_resolve settled it",
+                        row.id,
+                        files.join(", ")
+                    );
+                } else {
                     let _ = git(&tree, &["merge", "--abort"]);
+                    let _ = git(&tree, &["reset", "--hard", "--quiet", &before]);
                     eprintln!("{} conflicts in {}", row.id, files.join(", "));
                     self.step(ctx, row, "conflict", |r| r.files = files)?;
+                    continue;
                 }
             }
+            let sha = git(&tree, &["rev-parse", "HEAD"]).map_err(Fail::refused)?;
+            out.push(Merged {
+                row: row.clone(),
+                sha,
+            });
         }
         Ok(out)
     }
 
-    /// The `gate` command run in the batch's worktree, its output the log; the log's tail when it
-    /// does not exit 0.
-    fn gate(&self) -> std::result::Result<(), String> {
+    /// Whether the `land_resolve` command settled a conflicting merge of `branch`: it exited 0, left
+    /// no path unmerged, and the worktree's head is a merge of the branch, committed here under
+    /// `message` when the command left it staged. Its output goes to the run's `resolve.log`.
+    fn resolved(
+        &self,
+        row: &Row,
+        branch: &str,
+        message: &str,
+        files: &[String],
+        base: &str,
+    ) -> bool {
+        let Some(command) = self.resolve else {
+            return false;
+        };
+        let tree = self.tree();
+        let path = self.here.dir.join("resolve.log");
+        let Ok(mut log) = fs::OpenOptions::new().create(true).append(true).open(&path) else {
+            return false;
+        };
+        let _ = writeln!(log, "== {} on {base}: {}", row.id, files.join(" "));
+        let Ok(err) = log.try_clone() else {
+            return false;
+        };
+        let status = Command::new("sh")
+            .arg("-c")
+            .arg(command)
+            .current_dir(&tree)
+            .env("DOCKET_LAND_BASE", base)
+            .env("DOCKET_LAND_ITEM", &row.id)
+            .env("DOCKET_LAND_BRANCH", branch)
+            .env("DOCKET_LAND_FILES", files.join("\n"))
+            .stdin(Stdio::null())
+            .stdout(log)
+            .stderr(err)
+            .status();
+        if !status.is_ok_and(|s| s.success()) || !unmerged(&tree).is_empty() {
+            return false;
+        }
+        if git(&tree, &["rev-parse", "--quiet", "--verify", "MERGE_HEAD"]).is_ok() {
+            let mut args = NO_HOOKS.to_vec();
+            args.extend(["commit", "--quiet", "--no-edit", "-m", message]);
+            if git(&tree, &args).is_err() {
+                return false;
+            }
+        }
+        let tip = git(&tree, &["rev-parse", &format!("refs/heads/{branch}")]).unwrap_or_default();
+        let parents = git(&tree, &["log", "-1", "--format=%P", "HEAD"]).unwrap_or_default();
+        let parents: Vec<&str> = parents.split_whitespace().collect();
+        parents.len() == 2 && parents[1] == tip
+    }
+
+    /// The `gate` command run in the batch's worktree with `DOCKET_LAND_BASE` set to the head the
+    /// batch merged onto, its output the log; the log's tail when it does not exit 0.
+    fn gate(&self, base: &str) -> std::result::Result<(), String> {
         let path = self.here.dir.join("gate.log");
         let log = fs::File::create(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         let err = log.try_clone().map_err(|e| e.to_string())?;
@@ -606,6 +682,7 @@ impl Run<'_> {
             .arg("-c")
             .arg(self.gate)
             .current_dir(self.tree())
+            .env("DOCKET_LAND_BASE", base)
             .stdin(Stdio::null())
             .stdout(log)
             .stderr(err)
@@ -699,10 +776,28 @@ impl Run<'_> {
         }
     }
 
-    /// The batch's worktree removed, whatever it holds.
+    /// The batch's worktree emptied of what a batch left: a merge in progress, staged and untracked
+    /// files. Ignored files stay, so the next gate's caches are warm.
     fn clear(&self) {
         let tree = self.tree();
-        if tree.exists() {
+        if !tree.join(".git").exists() {
+            return;
+        }
+        let _ = git(&tree, &["merge", "--abort"]);
+        let _ = git(&tree, &["reset", "--hard", "--quiet"]);
+        let _ = git(&tree, &["clean", "-ffdq"]);
+    }
+
+    /// The kept worktree at `base`, clean, or a new one when there is none or it cannot be reset.
+    fn ready(&self, base: &str) -> Result<()> {
+        let tree = self.tree();
+        if tree.join(".git").exists() {
+            self.clear();
+            if git(&tree, &["checkout", "--quiet", "--force", "--detach", base]).is_ok()
+                && git(&tree, &["clean", "-ffdq"]).is_ok()
+            {
+                return Ok(());
+            }
             let _ = git(
                 &self.here.repo,
                 &["worktree", "remove", "--force", &tree.display().to_string()],
@@ -710,7 +805,33 @@ impl Run<'_> {
             let _ = fs::remove_dir_all(&tree);
         }
         let _ = git(&self.here.repo, &["worktree", "prune"]);
+        git(
+            &self.here.repo,
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                &tree.display().to_string(),
+                base,
+            ],
+        )
+        .map(|_| ())
+        .map_err(Fail::refused)
     }
+}
+
+/// The paths a merge in progress in `tree` leaves unmerged.
+fn unmerged(tree: &Path) -> Vec<String> {
+    git(tree, &["diff", "--name-only", "--diff-filter=U"])
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+/// Whether `tip` is `sha` or has it as an ancestor.
+fn descends(tree: &Path, sha: &str, tip: &str) -> bool {
+    !sha.is_empty() && git(tree, &["merge-base", "--is-ancestor", sha, tip]).is_ok()
 }
 
 fn has_branch(repo: &Path, branch: &str) -> bool {

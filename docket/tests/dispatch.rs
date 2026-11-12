@@ -1185,10 +1185,16 @@ fn test_two_jobs_and_a_hand_branch_land_as_one_batch_and_close_with_their_merge_
     let subjects = sh(&alpha, "git log --merges --format=%s main");
     assert!(subjects.contains("Merge Hand four"), "{subjects}");
     assert!(subjects.contains("Merge Write its own file"), "{subjects}");
+    let trees = sh(&alpha, "git worktree list --porcelain");
+    let kept = trees
+        .lines()
+        .filter_map(|l| l.strip_prefix("worktree "))
+        .find(|t| t.ends_with("/tree"))
+        .unwrap_or_else(|| panic!("the gate tree is kept for the next batch: {trees}"));
     assert_eq!(
-        sh(&alpha, "git worktree list").lines().count(),
-        1,
-        "the batch's worktree is gone"
+        sh(Path::new(kept), "git status --porcelain"),
+        "",
+        "the kept gate tree holds nothing the batch left"
     );
     let log = w.lead(&["land", "--log"]);
     assert!(text(&log).contains("gated here"), "{}", text(&log));
@@ -1332,4 +1338,129 @@ fn test_a_gate_run_whose_close_is_refused_leaves_no_build_gating() {
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
     assert_eq!(stage(&w.show("T5")), "queued");
+}
+
+#[test]
+fn test_a_commit_the_gate_makes_lands_with_its_batch_and_the_gate_reads_its_base() {
+    let w = World::new();
+    let alpha = w.home("alpha").join("src/p");
+    let start = sh(&alpha, "git rev-parse main");
+    let seen = w.machines.join("base");
+    hand_branch(&w, "T4", "hand/t4", "four.txt", "four");
+    set_fact(
+        &w,
+        "gate",
+        &format!(
+            "printf %s \"$DOCKET_LAND_BASE\" > {} && echo fixed > generated.txt && git add generated.txt \
+             && git -c user.name=g -c user.email=g@example.org commit -q -m 'Regenerate over the batch'",
+            seen.display()
+        ),
+    );
+    let out = w.lead(&["land", "T4"]);
+    assert!(out.status.success(), "{}", text(&out));
+    until(&w, "T4", "closed", |s| s["state"] == "done");
+    assert_eq!(fs::read_to_string(&seen).unwrap(), start);
+    assert_eq!(
+        sh(&alpha, "git log -1 --format=%s main"),
+        "Regenerate over the batch"
+    );
+    assert_eq!(sh(&alpha, "git show main:generated.txt"), "fixed");
+    let merge = sh(&alpha, "git rev-parse --short main^");
+    assert_eq!(w.show("T4")["resolution"], merge.as_str());
+}
+
+#[test]
+fn test_the_gate_tree_keeps_its_ignored_files_from_one_batch_to_the_next_and_nothing_else() {
+    let w = World::new();
+    let alpha = w.home("alpha").join("src/p");
+    sh(
+        &alpha,
+        "printf '.warm\\n' > .gitignore && git add .gitignore \
+         && git -c user.name=o -c user.email=o@example.org commit -q -m 'Ignore the cache'",
+    );
+    let runs = w.machines.join("gate-runs");
+    hand_branch(&w, "T4", "hand/t4", "four.txt", "four");
+    hand_branch(&w, "T5", "hand/t5", "five.txt", "five");
+    set_fact(
+        &w,
+        "gate",
+        &format!(
+            "test ! -e stray.txt && {{ if [ -e .warm ]; then echo warm; else echo cold; fi >> {}; }} \
+             && touch .warm stray.txt",
+            runs.display()
+        ),
+    );
+    let out = w.lead(&["land", "T4"]);
+    assert!(out.status.success(), "{}", text(&out));
+    until(&w, "T4", "closed", |s| s["state"] == "done");
+    let out = w.lead(&["land", "T5"]);
+    assert!(out.status.success(), "{}", text(&out));
+    until(&w, "T5", "closed", |s| s["state"] == "done");
+    assert_eq!(fs::read_to_string(&runs).unwrap(), "cold\nwarm\n");
+}
+
+#[test]
+fn test_a_conflict_the_resolve_command_settles_lands_in_the_batch() {
+    let w = World::new();
+    let files = w.machines.join("files");
+    hand_branch(&w, "T4", "hand/t4", "notes.txt", "four");
+    hand_branch(&w, "T5", "hand/t5", "notes.txt", "five");
+    set_fact(&w, "gate", "true");
+    set_fact(
+        &w,
+        "land_resolve",
+        &format!(
+            "printf %s \"$DOCKET_LAND_FILES\" > {} && printf 'both\\n' > notes.txt && git add notes.txt",
+            files.display()
+        ),
+    );
+    let out = w.lead(&["land", "T4", "T5"]);
+    assert!(out.status.success(), "{}", text(&out));
+    for id in ["T4", "T5"] {
+        until(&w, id, "closed", |s| s["state"] == "done");
+    }
+    let alpha = w.home("alpha").join("src/p");
+    assert_eq!(sh(&alpha, "git show main:notes.txt"), "both");
+    assert_eq!(fs::read_to_string(&files).unwrap(), "notes.txt");
+    let subjects = sh(&alpha, "git log --merges --format=%s main");
+    assert!(subjects.contains("Merge Hand four"), "{subjects}");
+    assert!(subjects.contains("Merge Hand five"), "{subjects}");
+}
+
+#[test]
+fn test_a_conflict_the_resolve_command_leaves_unmerged_is_left_out_and_the_tree_reset() {
+    let w = World::new();
+    let tried = w.machines.join("tried");
+    hand_branch(&w, "T4", "hand/t4", "notes.txt", "four");
+    hand_branch(&w, "T5", "hand/t5", "notes.txt", "five");
+    set_fact(&w, "gate", "true");
+    set_fact(
+        &w,
+        "land_resolve",
+        &format!("echo tried >> {}", tried.display()),
+    );
+    let out = w.lead(&["land", "T4", "T5"]);
+    assert!(out.status.success(), "{}", text(&out));
+    until(&w, "T4", "closed", |s| s["state"] == "done");
+    until(&w, "T5", "conflicted", |s| stage(s) == "conflict");
+    assert_eq!(fs::read_to_string(&tried).unwrap(), "tried\n");
+    let alpha = w.home("alpha").join("src/p");
+    assert_eq!(sh(&alpha, "git show main:notes.txt"), "four");
+    assert_eq!(w.show("T5")["claim_land"]["note"], "notes.txt");
+}
+
+#[test]
+fn test_a_merge_hook_in_the_repository_does_not_run_on_the_gate_trees_merges() {
+    let w = World::new();
+    let alpha = w.home("alpha").join("src/p");
+    sh(
+        &alpha,
+        "mkdir -p .git/hooks && printf '#!/bin/sh\\nexit 1\\n' > .git/hooks/pre-merge-commit \
+         && chmod +x .git/hooks/pre-merge-commit",
+    );
+    hand_branch(&w, "T4", "hand/t4", "four.txt", "four");
+    set_fact(&w, "gate", "true");
+    let out = w.lead(&["land", "T4"]);
+    assert!(out.status.success(), "{}", text(&out));
+    until(&w, "T4", "closed", |s| s["state"] == "done");
 }

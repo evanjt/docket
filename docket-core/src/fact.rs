@@ -6,7 +6,7 @@ use crate::item::Refused;
 use crate::text::quoted;
 
 /// Every fact a project carries, in the order `docket skills` prints them, with its one-line meaning.
-pub const FACTS: [(&str, &str); 27] = [
+pub const FACTS: [(&str, &str); 28] = [
     ("owner", "the owner's name, as the skills address them"),
     (
         "worktree",
@@ -47,7 +47,11 @@ pub const FACTS: [(&str, &str); 27] = [
     ),
     (
         "gate",
-        "the shell command docket land runs in a batch's worktree, whose exit 0 lets the batch land; unset, docket land refuses",
+        "the shell command docket land runs in a batch's worktree, whose exit 0 lets the batch land; unset, docket land refuses. The worktree is kept between batches with its ignored files, so build caches stay warm; DOCKET_LAND_BASE names the head the batch merged onto, and a commit the gate makes lands with the batch",
+    ),
+    (
+        "land_resolve",
+        "a shell command docket land runs in the batch's worktree when a build's merge conflicts, with the merge in progress and DOCKET_LAND_ITEM, DOCKET_LAND_BRANCH, DOCKET_LAND_FILES and DOCKET_LAND_BASE set; exit 0 with nothing left unmerged keeps the build in the batch for the gate to judge; unset, a conflicting build is left out for the lead",
     ),
     (
         "land_batch",

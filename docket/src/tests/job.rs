@@ -1150,3 +1150,39 @@ fn test_a_reused_worktree_fetches_a_pin_only_the_checkout_holds_before_checking_
     assert_eq!(git_as(&slot.join("lib"), &["rev-parse", "HEAD"]), pinned);
     assert_eq!(git_as(&slot.join("lib"), &["status", "--porcelain"]), "");
 }
+
+#[test]
+fn test_a_submodule_a_job_staged_without_checking_it_out_stays_in_its_change() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    git_as(repo, &["init", "-q"]);
+    fs::write(repo.join("a.txt"), "a").unwrap();
+    git_as(repo, &["add", "-A"]);
+    git_as(repo, &["commit", "-q", "-m", "base"]);
+    let base = git_as(repo, &["rev-parse", "HEAD"]);
+
+    let sha = "1234567890123456789012345678901234567890";
+    fs::write(
+        repo.join(".gitmodules"),
+        "[submodule \"x\"]\n\tpath = x\n\turl = ../x\n",
+    )
+    .unwrap();
+    git_as(
+        repo,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{sha},x"),
+        ],
+    );
+
+    let c = change(repo, &base).unwrap();
+    assert!(c.patch.contains("160000"), "{}", c.patch);
+
+    git_as(repo, &["reset", "-q", "--hard", &base]);
+    fs::write(repo.join("p.patch"), &c.patch).unwrap();
+    git_as(repo, &["apply", "--index", "p.patch"]);
+    assert_eq!(git_as(repo, &["ls-tree", "HEAD", "x"]), "");
+    assert!(git_as(repo, &["ls-files", "--stage", "x"]).starts_with("160000"));
+}

@@ -54,12 +54,12 @@ impl Scratch {
         let admin = std::env::var("DATABASE_URL").expect(
             "the tests need DATABASE_URL: a Postgres on which this user can create databases",
         );
-        let name = format!(
-            "docket_test_{}_{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        );
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let name = format!("docket_test_{}_{n}", std::process::id());
         let root = Database::connect(&admin).await.expect("reach DATABASE_URL");
+        if n == 0 {
+            drop_dead(&root).await;
+        }
         root.execute_unprepared(&format!("CREATE DATABASE {name}"))
             .await
             .expect("create the scratch database");
@@ -128,6 +128,46 @@ impl Drop for Scratch {
             });
         });
         gone.join().ok();
+    }
+}
+
+/// The process id in the name of a scratch database, `None` for any other database.
+fn owner_pid(name: &str) -> Option<u32> {
+    name.strip_prefix("docket_test_")?
+        .split('_')
+        .next()?
+        .parse()
+        .ok()
+}
+
+/// Whether a process with this id runs on this host. Where `/proc` is absent every process counts as
+/// alive, so nothing is dropped.
+fn is_alive(pid: u32) -> bool {
+    !std::path::Path::new("/proc/self").exists()
+        || std::path::Path::new(&format!("/proc/{pid}")).exists()
+}
+
+/// Drops the scratch databases whose test process is gone, left by runs that were killed before their
+/// guards dropped. A database of a live process is left alone.
+async fn drop_dead(root: &DatabaseConnection) {
+    let Ok(rows) = root
+        .query_all_raw(crate::statement(
+            "SELECT datname FROM pg_database WHERE datname LIKE 'docket\\_test\\_%'",
+            vec![],
+        ))
+        .await
+    else {
+        return;
+    };
+    for row in rows {
+        let Ok(name) = row.try_get_by_index::<String>(0) else {
+            continue;
+        };
+        if owner_pid(&name).is_some_and(|pid| !is_alive(pid)) {
+            root.execute_unprepared(&format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"))
+                .await
+                .ok();
+        }
     }
 }
 

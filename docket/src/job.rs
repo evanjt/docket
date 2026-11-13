@@ -1486,10 +1486,27 @@ pub fn change(dir: &Path, base: &str) -> Result<Change, String> {
 /// # Errors
 /// As [`change`].
 pub fn change_apart(dir: &Path, base: &str, apart: &[String]) -> Result<Change, String> {
+    // `add -A` records a staged gitlink whose directory is absent as a deletion, so the gitlinks
+    // staged beyond the base are read first and put back after it.
+    let added: Vec<(String, String)> = gitlinks(dir, &["ls-files", "--stage", "-z"], 1)?
+        .into_iter()
+        .filter(|(path, _)| !dir.join(path).exists())
+        .collect();
     let mut add: Vec<String> = ["add", "-A", "--", "."].map(String::from).to_vec();
     add.extend(apart.iter().map(|a| format!(":(exclude,literal){a}")));
     let add: Vec<&str> = add.iter().map(String::as_str).collect();
     git(dir, &add)?;
+    for (path, sha) in &added {
+        git(
+            dir,
+            &[
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                &format!("160000,{sha},{path}"),
+            ],
+        )?;
+    }
     let staged = gitlinks(dir, &["ls-files", "--stage", "-z"], 1)?;
     let mut args: Vec<String> = [
         "diff",

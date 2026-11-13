@@ -1079,6 +1079,7 @@ pub fn run_in_repos(
         let _ = fs::remove_dir_all(&dir);
         return Err(why);
     }
+    let text = format!("{text}{}", parts_note(&parts));
     let meta = Meta {
         worktree: tree.display().to_string(),
         parts,
@@ -1087,6 +1088,25 @@ pub fn run_in_repos(
     let mut env = env.to_vec();
     env.push(("DOCKET_BRANCH", spec.branch.as_str()));
     begin(&dir, &meta, &text, program, &env, &spec.launch)
+}
+
+/// The lines a brief gains when the item names several repositories: each repository with the path
+/// of the job's worktree of it, which of them the job edits, and whose checkouts are not the job's.
+fn parts_note(parts: &[Part]) -> String {
+    let mut out = String::from(
+        "\nThis item names several repositories. Each has a worktree of its own inside this \
+         directory, on your branch from the base dispatch named:\n\n",
+    );
+    for p in parts {
+        let shown = p.worktree.trim_end_matches('/');
+        out.push_str(&["    ", &p.repo, ": ", shown, "\n"].concat());
+    }
+    out.push_str(
+        "\nEvery repository listed is yours: both are yours to edit in place, and the lead commits \
+         each. The lead's own checkouts beside the project root are not yours; \
+         a project fact that protects them does not forbid editing these worktrees.\n",
+    );
+    out
 }
 
 /// The record of a job started from `spec`, with no worktree, base or repository yet.
@@ -1336,6 +1356,15 @@ pub struct Submodule {
     /// The commit it is pinned at, which its change is taken against.
     pub base: String,
     pub change: Change,
+    /// The commit its head is at when that is not `base` and its working tree is clean there:
+    /// the job moved the pin to an existing commit, and `change` is only the difference between
+    /// the two.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moved_to: Option<String>,
+    /// Where this repository of the submodule is, on the machine the change was read on, so a
+    /// commit only it holds can be fetched from there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<String>,
 }
 
 impl Change {
@@ -1413,7 +1442,18 @@ pub fn diff(dir: &Path) -> Result<Diff, String> {
                 if !worktree.is_dir() {
                     return Err(format!("{} has no worktree at {}", r.name, p.worktree));
                 }
-                let change = change(worktree, &p.base).map_err(|e| format!("{}: {e}", p.repo))?;
+                let apart: Vec<String> = parts
+                    .iter()
+                    .filter_map(|o| {
+                        Path::new(&o.worktree)
+                            .strip_prefix(worktree)
+                            .ok()
+                            .filter(|rel| !rel.as_os_str().is_empty())
+                            .map(|rel| rel.display().to_string())
+                    })
+                    .collect();
+                let change = change_apart(worktree, &p.base, &apart)
+                    .map_err(|e| format!("{}: {e}", p.repo))?;
                 Ok(RepoChange {
                     repo: p.repo.clone(),
                     base: p.base.clone(),
@@ -1437,7 +1477,19 @@ pub fn diff(dir: &Path) -> Result<Diff, String> {
 /// # Errors
 /// git fails, or a submodule checked out here lacks the commit it is pinned at.
 pub fn change(dir: &Path, base: &str) -> Result<Change, String> {
-    git(dir, &["add", "-A"])?;
+    change_apart(dir, base, &[])
+}
+
+/// [`change`], leaving out each path in `apart`: the worktree of another repository of the same
+/// job that sits inside this one, which is not part of this repository's change.
+///
+/// # Errors
+/// As [`change`].
+pub fn change_apart(dir: &Path, base: &str, apart: &[String]) -> Result<Change, String> {
+    let mut add: Vec<String> = ["add", "-A", "--", "."].map(String::from).to_vec();
+    add.extend(apart.iter().map(|a| format!(":(exclude,literal){a}")));
+    let add: Vec<&str> = add.iter().map(String::as_str).collect();
+    git(dir, &add)?;
     let staged = gitlinks(dir, &["ls-files", "--stage", "-z"], 1)?;
     let mut args: Vec<String> = [
         "diff",
@@ -1463,8 +1515,12 @@ pub fn change(dir: &Path, base: &str) -> Result<Change, String> {
         }
         let change = change(&inside, &pinned).map_err(|e| format!("{path}: {e}"))?;
         if !change.is_empty() {
+            let head = git(&inside, &["rev-parse", "HEAD"])?;
+            let clean = git(&inside, &["status", "--porcelain"])?.is_empty();
             submodules.push(Submodule {
                 path,
+                moved_to: (clean && head != pinned).then_some(head),
+                at: inside.to_str().map(str::to_string),
                 base: pinned,
                 change,
             });

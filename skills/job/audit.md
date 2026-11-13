@@ -23,6 +23,8 @@ here, not as the tickets describe it.
 - The fix class, not only the instances: grep the whole tree for the fact a principle names.
 
 Never quote a document as evidence. Run every command in the foreground and wait for it.
+The work is done in your own turn: no background subagent, no workflow, no waiting on a
+notification. A job that ends its turn to wait is stopped, and its work is lost.
 
 Only a critical or high gap is filed: one that breaks what the plan promised, or that the order
 below puts in the current release at high priority. File it with the plan as its origin, in the

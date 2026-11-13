@@ -37,9 +37,8 @@ pub fn check_sha(what: &str, sha: &str) -> Result<(), Refused> {
     )))
 }
 
-/// The first-parent landings on the work ref past the last publication after which a squash is
-/// offered.
-pub const LANDINGS_BEFORE_SQUASH: usize = 30;
+/// The age in seconds of the oldest unpublished landing from which a squash is offered.
+pub const SQUASH_AFTER_SECONDS: i64 = 24 * 3600;
 
 /// The publication whose work snapshot is the first to contain a commit: `publications` newest
 /// first, `contains` whether a work snapshot has the commit in its history.
@@ -51,21 +50,63 @@ pub fn first_containing(
     publications.iter().rev().find(|p| contains(&p.work))
 }
 
-/// Why a squash is due, or `None`: a plan finished that no publication covers, or the work ref is
-/// `landings` first-parent landings past the last publication, at least `cap` of them. With no
-/// landing there is nothing to publish.
+/// Why a squash is due, or `None`: a plan finished that no publication covers, or the oldest
+/// unpublished landing is at least `SQUASH_AFTER_SECONDS` old. `oldest` is that landing's commit
+/// time and `now` the present, both in Unix seconds. With no landing there is nothing to publish.
 #[must_use]
-pub fn squash_due(unpublished: &[String], landings: usize, cap: usize) -> Option<String> {
-    if landings == 0 {
-        return None;
-    }
+pub fn squash_due(unpublished: &[String], oldest: Option<i64>, now: i64) -> Option<String> {
+    let age = now - oldest?;
     if !unpublished.is_empty() {
         return Some(format!(
             "{} closed after the last publication",
             unpublished.join(", ")
         ));
     }
-    (landings >= cap).then(|| format!("{landings} landings past the last publication"))
+    (age >= SQUASH_AFTER_SECONDS).then(|| {
+        format!(
+            "the oldest landing past the last publication is {} hours old",
+            age / 3600
+        )
+    })
+}
+
+/// Where the next squash builds from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StartOn {
+    /// The local published ref, which the last publication names; the work commit it covers.
+    Local { work: String },
+    /// The remote published ref.
+    Remote,
+}
+
+/// Where a squash starts. A local published ref the last publication names starts on it. One that
+/// no publication names starts on the remote ref when the remote holds it (`remote_holds_local`),
+/// since nothing on it is unpublished; one with commits the remote lacks is refused. With no local
+/// ref the squash starts on the remote ref.
+///
+/// # Errors
+/// The local ref holds commits no publication names and the remote lacks, or neither ref exists.
+pub fn start_on(
+    local: Option<&str>,
+    remote: Option<&str>,
+    remote_holds_local: bool,
+    last: Option<&Publication>,
+    names: (&str, &str),
+) -> Result<StartOn, Refused> {
+    let (local_name, remote_name) = names;
+    match (local, remote) {
+        (Some(l), _) if last.is_some_and(|p| p.published == l) => Ok(StartOn::Local {
+            work: last.map(|p| p.work.clone()).unwrap_or_default(),
+        }),
+        (Some(_), Some(r)) if remote_holds_local || local == Some(r) => Ok(StartOn::Remote),
+        (Some(l), _) => Err(Refused(format!(
+            "{local_name} is at {l}, which no recorded publication names and {remote_name} does not hold: nothing written"
+        ))),
+        (None, Some(_)) => Ok(StartOn::Remote),
+        (None, None) => Err(Refused(format!(
+            "neither {local_name} nor {remote_name} exists here to build on: fetch the remote first"
+        ))),
+    }
 }
 
 /// The title of the owner ask to push a published ref.

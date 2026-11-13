@@ -151,6 +151,7 @@ fn run(flags: &Flags, root: &std::path::Path, asked: &Asked) -> Result<i32> {
             named.push(r);
         }
     }
+    let named = repos_to_place(named, &checkout_fact(&mut ctx, &slug)?);
     let repo = (named.len() == 1).then(|| named[0].clone());
     let mut checkouts = Vec::new();
     for r in &named {
@@ -318,10 +319,29 @@ fn unchecked(ctx: &mut Ctx, slug: &str, repo: Option<&str>) -> Result<PathBuf> {
     if let Some(rel) = repo {
         return Ok(local::expand(root, rel));
     }
+    Ok(local::expand(root, &checkout_fact(ctx, slug)?))
+}
+
+/// The `checkout` fact: the repository under the root that jobs build in, `.` when unset.
+fn checkout_fact(ctx: &mut Ctx, slug: &str) -> Result<String> {
     let facts = ctx.api.get("/facts", &[("project", slug.to_string())])?;
-    let rel = facts["skills"]["checkout"]
+    Ok(facts["skills"]["checkout"]
         .as_str()
         .filter(|c| !c.is_empty())
-        .unwrap_or(".");
-    Ok(local::expand(root, rel))
+        .unwrap_or(".")
+        .to_string())
 }
+
+/// The repositories a job is placed in. An item naming only another project's repository also
+/// gets the checkout's, since `provision` is written for the checkout and runs in the job
+/// directory; an item naming nothing is left to the checkout alone.
+fn repos_to_place(mut named: Vec<String>, checkout_fact: &str) -> Vec<String> {
+    if named.len() == 1 && docket_core::label::foreign(&named[0]).is_some() {
+        named.insert(0, checkout_fact.to_string());
+    }
+    named
+}
+
+#[cfg(test)]
+#[path = "../tests/cmd_job.rs"]
+mod tests;

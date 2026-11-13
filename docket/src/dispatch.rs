@@ -468,6 +468,8 @@ pub struct Made {
     pub sha: String,
     /// Each submodule's commit, with the repository it was made in.
     pub inside: Vec<(PathBuf, String)>,
+    /// Each submodule, by path, pinned at a commit no remote ref of its repository holds.
+    pub unpublished: Vec<String>,
 }
 
 impl Made {
@@ -489,15 +491,17 @@ impl Made {
 ///
 /// # Errors
 /// A submodule is not checked out here or lacks its pinned commit, a patch does not apply, or a
-/// commit is refused.
+/// commit is refused, or a moved pin cannot be fetched from the job's machine `from`.
 pub fn commit_change(
     repo: &Path,
     base: &str,
     change: &Change,
     message: &str,
+    from: &Via,
 ) -> Result<Made, String> {
     let mut inside = Vec::new();
-    let pins = commit_submodules(repo, change, message, &mut inside)?;
+    let mut unpublished = Vec::new();
+    let pins = commit_submodules(repo, change, message, from, &mut inside, &mut unpublished)?;
     let tmp = scratch("worktree");
     let tmp_s = tmp.display().to_string();
     git(repo, &["worktree", "add", "--detach", &tmp_s, base])?;
@@ -510,7 +514,11 @@ pub fn commit_change(
         git(&tmp, &["rev-parse", "HEAD"])
     })();
     let _ = git(repo, &["worktree", "remove", "--force", &tmp_s]);
-    Ok(Made { sha: done?, inside })
+    Ok(Made {
+        sha: done?,
+        inside,
+        unpublished,
+    })
 }
 
 /// Each submodule's change committed in its repository under `dir`, as the path and commit to pin.
@@ -518,24 +526,82 @@ fn commit_submodules(
     dir: &Path,
     change: &Change,
     message: &str,
+    from: &Via,
     inside: &mut Vec<(PathBuf, String)>,
+    unpublished: &mut Vec<String>,
 ) -> Result<Vec<(String, String)>, String> {
     let mut pins = Vec::new();
     for s in &change.submodules {
-        let sha = commit_inside(&dir.join(&s.path), &s.base, &s.change, message, inside)
-            .map_err(|e| format!("submodule {}: {e}", s.path))?;
+        let sub = dir.join(&s.path);
+        let sha =
+            match moved_pin(&sub, s, from).map_err(|e| format!("submodule {}: {e}", s.path))? {
+                Some(sha) => {
+                    if !on_a_remote_ref(&sub, &sha) {
+                        unpublished.push(s.path.clone());
+                    }
+                    sha
+                }
+                None => commit_inside(&sub, &s.base, &s.change, message, from, inside, unpublished)
+                    .map_err(|e| format!("submodule {}: {e}", s.path))?,
+            };
         pins.push((s.path.clone(), sha));
     }
     Ok(pins)
 }
 
-/// A submodule's change as one commit on `base` in XX
+/// The commit a job moved a submodule's pin to: a moved pin is pinned as it is, and nothing is
+/// committed inside. A commit this checkout of the submodule lacks is fetched from the job's
+/// repository of it on `from`. `None` when the job moved no pin, or this checkout is not a
+/// repository, and the change is committed inside like any other.
+///
+/// # Errors
+/// The commit is missing here and could not be fetched from the job's machine.
+fn moved_pin(dir: &Path, s: &crate::job::Submodule, from: &Via) -> Result<Option<String>, String> {
+    let Some(to) = s.moved_to.as_deref() else {
+        return Ok(None);
+    };
+    if !crate::job::is_repository(dir) {
+        return Ok(None);
+    }
+    let commit = format!("{to}^{{commit}}");
+    let held = || git(dir, &["rev-parse", "--verify", "--quiet", &commit]).ok();
+    if let Some(sha) = held() {
+        return Ok(Some(sha));
+    }
+    let Some(at) = s.at.as_deref() else {
+        return Ok(None);
+    };
+    let url = from.git_url(at);
+    git(dir, &["fetch", "--no-tags", "--quiet", &url, to]).map_err(|why| {
+        format!("{to} is in no clone here and could not be fetched from {url}: {why}")
+    })?;
+    Ok(held())
+}
+
+/// Whether a remote-tracking ref of the repository at `dir` holds `sha`.
+fn on_a_remote_ref(dir: &Path, sha: &str) -> bool {
+    git(
+        dir,
+        &[
+            "for-each-ref",
+            "--count=1",
+            "--contains",
+            sha,
+            "refs/remotes",
+        ],
+    )
+    .is_ok_and(|out| !out.is_empty())
+}
+
+/// A submodule's change as one commit on `base` in the repository at `dir`.
 fn commit_inside(
     dir: &Path,
     base: &str,
     change: &Change,
     message: &str,
+    from: &Via,
     inside: &mut Vec<(PathBuf, String)>,
+    unpublished: &mut Vec<String>,
 ) -> Result<String, String> {
     if !crate::job::is_repository(dir) {
         return Err(format!(
@@ -549,7 +615,7 @@ fn commit_inside(
             dir.display()
         )
     })?;
-    let pins = commit_submodules(dir, change, message, inside)?;
+    let pins = commit_submodules(dir, change, message, from, inside, unpublished)?;
     let index = scratch("index");
     let made = (|| {
         let at = Some(index.as_path());
@@ -648,8 +714,7 @@ pub fn catch_up(repo: &Path, branch: &str, onto: &str) -> Result<Vec<String>, St
     let tmp_s = tmp.display().to_string();
     git(repo, &["worktree", "add", "--detach", &tmp_s, branch])?;
     let done = (|| {
-        let message = format!("Merge {onto} into {branch}");
-        if git(&tmp, &["merge", "--no-ff", "-m", &message, onto]).is_ok() {
+        if git(&tmp, &["merge", "--no-ff", "-m", "Catch up", onto]).is_ok() {
             let head = git(&tmp, &["rev-parse", "HEAD"])?;
             git(repo, &["branch", "-f", branch, &head])?;
             return Ok(Vec::new());

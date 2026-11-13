@@ -98,11 +98,6 @@ fn test_a_build_sent_back_leaves_the_rest_of_its_failed_batch_to_requeue() {
 }
 
 #[test]
-fn test_a_merge_is_made_under_its_commit_subject() {
-    assert_eq!(merge_message("Write the parser"), "Merge Write the parser");
-}
-
-#[test]
 fn test_each_checkout_has_its_own_gate_run_directory() {
     let a = run_dir(Path::new("/s"), "o/p", Path::new("/home/x/src/p"));
     let b = run_dir(Path::new("/s"), "o/p", Path::new("/home/x/src/q"));

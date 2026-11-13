@@ -324,6 +324,33 @@ fn test_a_work_branch_rewritten_since_the_last_publication_is_refused() {
     assert_eq!(r.published(), Some(published));
 }
 
+#[test]
+fn test_a_published_ref_checked_out_in_a_worktree_is_refused_and_left_unmoved() {
+    let r = Repo::new();
+    sh(&r.dir, "git branch shelf origin/main");
+    let tree = r.dir.join("../shelf-tree");
+    sh(
+        &r.dir,
+        &format!("git worktree add -q {} shelf", tree.display()),
+    );
+    let file = r.messages("Fire the first bowls\nGlaze the platters\n");
+    let out = r.squash(&["--messages", &file]);
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains("shelf-tree"), "{}", text(&out));
+    assert_eq!(r.published(), Some(r.base.clone()));
+}
+
+#[test]
+fn test_a_published_ref_equal_to_its_remote_with_no_publication_is_built_on() {
+    let r = Repo::new();
+    sh(&r.dir, "git branch shelf origin/main");
+    let file = r.messages("Fire the first bowls\nGlaze the platters\n");
+    let out = r.squash(&["--messages", &file]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_ne!(r.published(), Some(r.base.clone()));
+    assert_eq!(sh(&r.dir, "git rev-list --count origin/main..shelf"), "2");
+}
+
 /// A work branch whose two landings each move a submodule, named in the project's repos, to a
 /// commit of its own work history.
 struct Nested {

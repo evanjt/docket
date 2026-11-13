@@ -28,6 +28,9 @@ parallel jobs never pick the same name.
 Run every command in the foreground and wait for it. A command left running in the background ends
 this job when you end your turn, and nothing wakes you.
 
+The work is done in your own turn: no background subagent, no workflow, no waiting on a
+notification. A job that ends its turn to wait is stopped, and its work is lost.
+
 A routine choice of implementation is a line in your note, never a question. A question, derived
 or not, is for a choice the owner will see in the product. One a decided question or ordinary
 practice settles is recorded, carried by this ticket, and the work goes on:
@@ -56,11 +59,14 @@ its message for private names when it collects, and keeps the job when one is fo
 
 An `OBSERVE` line about a repository other than the job's starts `OBSERVE [REPO] text`, REPO a path under the root or `@OWNER/NAME`; it keeps that repository when the lead adds it.
 
+The MESSAGE line is one short imperative line: first word capitalised, a bare noun phrase with no articles, no trailing punctuation, no `feat:`-style prefix, actions joined with commas, about 30 characters and at most 72. It names no item, plan, branch, tool or assistant.
+For example: `Retry failed uploads, log each attempt`.
+
 End with your report as the last lines of your final message:
 
     OBSERVE something seen on the way, below the bar for an item (a line each, as many as there are)
     NOTE what was done, in one line: the test that proves it, anything filed
-    MESSAGE the commit message for your change, one line, naming no docket item
+    MESSAGE the commit message for your change, in the style above
     DONE
 
 or `WAITING Q<n>` when the ticket waits on a question, or `FAILED <the reason, in one line>` when it

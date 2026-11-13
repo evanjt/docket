@@ -46,7 +46,7 @@ pub struct Ask<'a> {
 pub fn land(ctx: &mut Ctx, ask: &Ask) -> Result<i32> {
     refuse_in_job("land")?;
     let slug = ctx.project()?;
-    let here = checkout(ctx, &slug, ask.run)?;
+    let here = checkout(ctx, &slug)?;
     if ask.log {
         return print_log(&here);
     }
@@ -73,7 +73,11 @@ pub fn land(ctx: &mut Ctx, ask: &Ask) -> Result<i32> {
     let rows = rows_of(&ctx.read("/wip", &[])?);
     let waiting = batch(&rows, usize::MAX, |b| has_branch(&here.repo, b));
     let started = if run_wanted(&queued, &waiting) {
-        Some(keep_running(&slug, &here)?)
+        Some(keep_running(
+            &slug,
+            &here,
+            &work_branch(ctx, &slug, &here)?,
+        )?)
     } else {
         None
     };
@@ -119,9 +123,43 @@ struct Here {
     dir: PathBuf,
 }
 
-/// The repository this runs in, on a branch; a gate run is given its work branch instead.
-fn checkout(ctx: &Ctx, slug: &str, work: Option<&str>) -> Result<Here> {
-    let repo = git(&ctx.cwd, &["rev-parse", "--show-toplevel"])
+/// The main worktree of the repository `dir` is in, which a linked worktree shares: the checkout
+/// the work branch lives in, whichever worktree `docket land` is run from.
+fn main_worktree(dir: &Path, top: PathBuf) -> PathBuf {
+    let common = git(
+        dir,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )
+    .map(PathBuf::from);
+    match common {
+        Ok(c) if c.file_name().is_some_and(|n| n == ".git") => {
+            c.parent().map_or(top, Path::to_path_buf)
+        }
+        _ => top,
+    }
+}
+
+/// The branch the gate run lands on: the `work` fact when set, else the branch the checkout is on.
+fn work_branch(ctx: &Ctx, slug: &str, here: &Here) -> Result<String> {
+    let fact = ctx.api.facts(slug)?.skills.get("work").cloned();
+    match fact.filter(|w| !w.is_empty()) {
+        Some(work) => Ok(work),
+        None => git(&here.repo, &["branch", "--show-current"])
+            .ok()
+            .filter(|b| !b.is_empty())
+            .ok_or_else(|| {
+                Fail::refused(format!(
+                    "{} is on no branch and the work fact is unset: set it with docket skills set work BRANCH, or run docket land in the project checkout",
+                    here.repo.display()
+                ))
+            }),
+    }
+}
+
+/// The project checkout this runs in, even from a linked worktree; a gate run is given its work
+/// branch instead.
+fn checkout(ctx: &Ctx, slug: &str) -> Result<Here> {
+    let top = git(&ctx.cwd, &["rev-parse", "--show-toplevel"])
         .map(PathBuf::from)
         .map_err(|_| {
             Fail::refused(format!(
@@ -129,12 +167,7 @@ fn checkout(ctx: &Ctx, slug: &str, work: Option<&str>) -> Result<Here> {
                 ctx.cwd.display()
             ))
         })?;
-    if work.is_none() && git(&repo, &["branch", "--show-current"]).is_ok_and(|b| b.is_empty()) {
-        return Err(Fail::refused(format!(
-            "{} is on no branch: docket land runs on the branch the work lands on",
-            repo.display()
-        )));
-    }
+    let repo = main_worktree(&ctx.cwd, top);
     let dir = run_dir(&job::state_root(), slug, &repo);
     Ok(Here { repo, dir })
 }
@@ -202,6 +235,12 @@ fn queue_one(ctx: &mut Ctx, slug: &str, here: &Here, id: &str) -> Result<()> {
             here.repo.display()
         )));
     }
+    if work_branch(ctx, slug, here).is_ok_and(|work| work == branch) {
+        return Err(Fail::refused(format!(
+            "{id}'s branch {branch} is the branch the work lands on: run docket land from {} on the work branch",
+            here.repo.display()
+        )));
+    }
     step(ctx, slug, &branch, "queue", id, |_| {})
 }
 
@@ -263,17 +302,16 @@ fn step(
 
 /// A gate run started in the background unless one already holds this checkout's lock; whether one
 /// was started.
-fn keep_running(slug: &str, here: &Here) -> Result<bool> {
+fn keep_running(slug: &str, here: &Here, work: &str) -> Result<bool> {
     if lock(&here.dir)?.is_none() {
         return Ok(false);
     }
     let exe = std::env::current_exe()
         .map_err(|e| Fail::refused(format!("docket land: the running docket: {e}")))?;
-    let work = git(&here.repo, &["branch", "--show-current"]).map_err(Fail::refused)?;
     for file in ["exit", "pid", "pgid", "stderr", "events.jsonl"] {
         let _ = fs::remove_file(here.dir.join(file));
     }
-    let argv: Vec<String> = ["-p", slug, "land", "--run", &work]
+    let argv: Vec<String> = ["-p", slug, "land", "--run", work]
         .iter()
         .map(|w| (*w).to_string())
         .collect();
@@ -588,7 +626,7 @@ impl Run<'_> {
             let reference = format!("refs/heads/{branch}");
             let subject =
                 git(&tree, &["log", "-1", "--format=%s", &reference]).map_err(Fail::refused)?;
-            let message = merge_message(&subject);
+            let message = subject;
             let before = git(&tree, &["rev-parse", "HEAD"]).map_err(Fail::refused)?;
             let mut args = NO_HOOKS.to_vec();
             args.extend(["merge", "--no-ff", "--quiet", "-m", &message, &reference]);
@@ -932,12 +970,6 @@ pub fn rest_of_batch<'a>(rows: &'a [Row], id: &str, name: &str) -> Vec<&'a str> 
         })
         .map(|r| r.id.as_str())
         .collect()
-}
-
-/// A build's merge message: its commit's subject after `Merge`.
-#[must_use]
-pub fn merge_message(subject: &str) -> String {
-    format!("Merge {subject}")
 }
 
 /// A checkout's gate run directory under the job state root, beside the project's jobs: `.land-`

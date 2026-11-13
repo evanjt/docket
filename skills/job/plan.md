@@ -52,6 +52,9 @@ report, which the lead adds to {id}.
 Run every command in the foreground and wait for it. A measurement's script or fixture is left in
 this worktree, never committed: the lead commits it on its own machine.
 
+The work is done in your own turn: no background subagent, no workflow, no waiting on a
+notification. A job that ends its turn to wait is stopped, and its work is lost.
+
 The repository may be public while the docket is private: code, tests, comments and commit
 messages never name a docket item, project, person or machine. A comment states the rule itself and
 tests use invented names. `docket private` is refused on a job's key: the lead checks the change and
@@ -59,11 +62,14 @@ its message for private names when it collects, and keeps the job when one is fo
 
 An `OBSERVE` line about a repository other than the job's starts `OBSERVE [REPO] text`, REPO a path under the root or `@OWNER/NAME`; it keeps that repository when the lead adds it.
 
+The MESSAGE line is one short imperative line: first word capitalised, a bare noun phrase with no articles, no trailing punctuation, no `feat:`-style prefix, actions joined with commas, about 30 characters and at most 72. It names no item, plan, branch, tool or assistant.
+For example: `Retry failed uploads, log each attempt`.
+
 End with your report as the last lines of your final message:
 
     OBSERVE something seen on the way, below the bar for an item (a line each, as many as there are)
     NOTE opened T<n>, T<m>; measured <the number> (for an investigation)
-    MESSAGE the commit message for a script or fixture you left, one line (only when you left one)
+    MESSAGE the commit message for a script or fixture you left, in the style above (only when you left one)
     DONE
 
 or `WAITING Q<n>` when the planning waits on a question, or `FAILED <the reason, in one line>`.

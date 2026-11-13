@@ -38,12 +38,19 @@ fn test_an_item_is_named_under_the_first_publication_whose_snapshot_contains_it(
 }
 
 #[test]
-fn test_a_squash_is_due_for_an_uncovered_finished_plan_or_many_landings() {
+fn test_a_squash_is_due_for_an_uncovered_finished_plan_or_an_old_landing() {
+    const HOUR: i64 = 3600;
+    let now = 1_000_000;
     let plans = vec!["A3".to_string()];
-    assert!(squash_due(&plans, 1, 30).unwrap().starts_with("A3 closed"));
-    assert!(squash_due(&[], 29, 30).is_none());
-    assert!(squash_due(&[], 30, 30).unwrap().starts_with("30 landings"));
-    assert!(squash_due(&plans, 0, 30).is_none());
+    let old = squash_due(&[], Some(now - 25 * HOUR), now).unwrap();
+    assert!(old.contains("25 hours"), "{old}");
+    assert!(squash_due(&[], Some(now - HOUR / 2), now).is_none());
+    assert!(squash_due(&[], Some(now - 24 * HOUR + 1), now).is_none());
+    assert!(squash_due(&[], Some(now - 24 * HOUR), now).is_some());
+    let closed = squash_due(&plans, Some(now - 60), now).unwrap();
+    assert!(closed.starts_with("A3 closed"));
+    assert!(squash_due(&plans, None, now).is_none());
+    assert!(squash_due(&[], None, now).is_none());
 }
 
 #[test]
@@ -56,4 +63,45 @@ fn test_the_push_ask_names_the_command() {
         push_title("shelf", "upstream/trunk"),
         "Push shelf to upstream/trunk"
     );
+}
+
+const NAMES: (&str, &str) = ("shelf", "upstream/trunk");
+
+#[test]
+fn test_a_local_ref_equal_to_or_inside_the_remote_with_no_publication_starts_on_the_remote() {
+    assert_eq!(
+        start_on(Some("a"), Some("a"), true, None, NAMES).unwrap(),
+        StartOn::Remote
+    );
+    assert_eq!(
+        start_on(Some("a"), Some("b"), true, None, NAMES).unwrap(),
+        StartOn::Remote
+    );
+}
+
+#[test]
+fn test_a_local_ref_with_an_unrecorded_commit_past_the_remote_is_refused() {
+    let why = start_on(Some("c"), Some("b"), false, None, NAMES)
+        .unwrap_err()
+        .0;
+    assert!(why.contains("no recorded publication names"), "{why}");
+    assert!(start_on(Some("c"), None, false, None, NAMES).is_err());
+}
+
+#[test]
+fn test_a_local_ref_named_by_the_last_publication_starts_on_it() {
+    let last = made("c", "w9");
+    assert_eq!(
+        start_on(Some("c"), Some("b"), false, Some(&last), NAMES).unwrap(),
+        StartOn::Local { work: "w9".into() }
+    );
+}
+
+#[test]
+fn test_with_no_local_ref_the_start_is_the_remote_or_a_refusal() {
+    assert_eq!(
+        start_on(None, Some("b"), false, None, NAMES).unwrap(),
+        StartOn::Remote
+    );
+    assert!(start_on(None, None, false, None, NAMES).is_err());
 }

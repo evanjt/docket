@@ -9,9 +9,7 @@ use serde_json::Value;
 use docket_core::api::{AskRequest, CloseRequest, Opened, Publications};
 use docket_core::cut::Group;
 use docket_core::fact::{Publish, publish};
-use docket_core::publication::{
-    LANDINGS_BEFORE_SQUASH, Publication, first_containing, push_title, squash_due,
-};
+use docket_core::publication::{Publication, first_containing, push_title, squash_due};
 
 use crate::cmd::audit::shas;
 use crate::ctx::Ctx;
@@ -95,18 +93,25 @@ pub fn offer(ctx: &mut Ctx) -> Option<String> {
         Some(last) => last.work.clone(),
         None => rev(&p.repo, &format!("{}^{{commit}}", p.target.remote))?,
     };
-    let landings: usize = git(
+    let oldest: Option<i64> = git(
         &p.repo,
         &[
-            "rev-list",
+            "log",
             "--first-parent",
-            "--count",
+            "--reverse",
+            "--format=%ct",
             &format!("{from}..{tip}"),
         ],
     )
     .ok()?
-    .parse()
-    .ok()?;
+    .lines()
+    .next()
+    .and_then(|t| t.trim().parse().ok());
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    let now = i64::try_from(now).ok()?;
     let slug = ctx.project().ok()?;
     let filter = serde_json::json!({ "project": slug, "state": "done" }).to_string();
     let rows = ctx
@@ -125,7 +130,7 @@ pub fn offer(ctx: &mut Ctx) -> Option<String> {
         .filter(|id| !covered.iter().any(|c| c.as_str() == *id))
         .map(str::to_string)
         .collect();
-    let why = squash_due(&unpublished, landings, LANDINGS_BEFORE_SQUASH)?;
+    let why = squash_due(&unpublished, oldest, now)?;
     Some(format!("Squash: {why}: docket squash"))
 }
 

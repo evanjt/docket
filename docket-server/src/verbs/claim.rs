@@ -203,7 +203,7 @@ pub async fn release(
 /// counted apart, and only an attempt that reached a job counts: one released before any job
 /// reported anything ended for a reason outside the item. It goes past the owner's limit on open
 /// asks: the owner is the only one left who can move it.
-async fn assign_past_failure_limit(call: &mut Call, rid: i64) -> Result<(), Failure> {
+pub(crate) async fn assign_past_failure_limit(call: &mut Call, rid: i64) -> Result<(), Failure> {
     const REACHED_A_JOB: &str = "(job_started_at IS NOT NULL OR job_ended_at IS NOT NULL OR job_exit IS NOT NULL \
          OR tokens_in IS NOT NULL OR tokens_out IS NOT NULL OR cost_reported IS NOT NULL)";
     let conn = &call.tx.conn;

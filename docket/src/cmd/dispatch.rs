@@ -56,6 +56,7 @@ pub fn dispatch(ctx: &mut Ctx, ask: &Ask) -> Result<i32> {
     }
     let ready = ready_row(ctx, &id)?;
     let role = role_for(ready.as_ref(), ask.role, &id).map_err(Fail::refused)?;
+    unserved_repos(&item).map_err(Fail::refused)?;
     let named = repos_named(&item);
     let (model, m, pushes) = placed(ctx, ask, &item, &role, ready.as_ref(), &named)?;
     let via = Via::of(&m, &here);
@@ -193,6 +194,35 @@ fn repos_named(item: &Value) -> Vec<Option<String>> {
         out.push(item["repo"].as_str().map(str::to_string));
     }
     out
+}
+
+/// Refuses an item whose own `repo:` labels name a repository its served `repos` lacks, which
+/// would give the job fewer worktrees than the item changes.
+fn unserved_repos(item: &Value) -> std::result::Result<(), String> {
+    let labels: Vec<&str> = item["labels"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    let served: Vec<&str> = item["repos"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    let missing: Vec<&str> = docket_core::label::repos_of(&labels)
+        .into_iter()
+        .filter(|r| !served.contains(r))
+        .collect();
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "the item's labels name {} but its repositories lack them: edit the item with --repo",
+            missing.join(", ")
+        ))
+    }
 }
 
 /// The first of `machines` on which every repository of `named` resolves, with its checkout of
@@ -741,7 +771,7 @@ fn commit_all<'a>(
             )));
         };
         let made = (!c.change.is_empty())
-            .then(|| commit_change(&side.local, &c.base, &c.change, message))
+            .then(|| commit_change(&side.local, &c.base, &c.change, message, ran.via))
             .transpose()
             .map_err(|why| {
                 Fail::refused(format!(
@@ -750,6 +780,7 @@ fn commit_all<'a>(
                     side.repo
                 ))
             })?;
+        name_unpublished(made.as_ref(), &side.repo);
         out.push(Landing {
             side,
             base: c.base.clone(),
@@ -757,6 +788,22 @@ fn commit_all<'a>(
         });
     }
     Ok(out)
+}
+
+/// Names on standard error each submodule of `repo` the change pins at a commit no remote ref of
+/// the submodule holds: pushing the repository publishes a pin others cannot fetch until that
+/// commit is pushed.
+fn name_unpublished(made: Option<&crate::dispatch::Made>, repo: &str) {
+    for path in made.iter().flat_map(|m| &m.unpublished) {
+        let of = if repo.is_empty() {
+            String::new()
+        } else {
+            format!(" of {repo}")
+        };
+        eprintln!(
+            "submodule {path}{of} is pinned at a commit no remote ref of it holds: push it first"
+        );
+    }
 }
 
 /// The job's branch moved in each repository whose worktree is not the job's own; when one cannot
@@ -930,13 +977,14 @@ fn take(
         }
     }
     let made = (!change.is_empty())
-        .then(|| commit_change(repo, base, &change, message))
+        .then(|| commit_change(repo, base, &change, message, ran.via))
         .transpose()
         .map_err(|why| {
             Fail::refused(format!(
                 "{name}'s change was not committed here, and the job is kept on {on}: {why}"
             ))
         })?;
+    name_unpublished(made.as_ref(), "");
     let keep = || match &made {
         Some(m) => m.keep(repo, branch),
         None => git(repo, &["branch", "-f", branch, base]).map(|_| ()),
@@ -1474,7 +1522,15 @@ fn strings(words: &[&str]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::line;
+    use super::{line, unserved_repos};
+
+    #[test]
+    fn test_labels_naming_a_repository_the_served_repos_lack_are_refused() {
+        let item = serde_json::json!({"labels": ["repo:.", "repo:@acme/widgets"], "repos": ["."]});
+        assert!(unserved_repos(&item).is_err());
+        let item = serde_json::json!({"labels": ["repo:.", "repo:@acme/widgets"], "repos": [".", "@acme/widgets"]});
+        assert!(unserved_repos(&item).is_ok());
+    }
 
     #[test]
     fn test_a_gate_run_row_prints_its_members() {

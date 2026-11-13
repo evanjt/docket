@@ -473,7 +473,8 @@ fn test_no_lead_variant_merges_with_a_message_naming_the_branch() {
     let lead = SKILLS.iter().find(|s| s.name == "lead").unwrap();
     for text in [lead.claude, lead.codex] {
         assert!(!text.contains("--no-edit"));
-        assert!(text.contains("merge --no-ff -m \"Merge <the job's commit subject>\""));
+        assert!(!text.contains("-m \"Merge "));
+        assert!(text.contains("merge --no-ff -m \"<the job's commit subject>\""));
     }
 }
 
@@ -503,5 +504,62 @@ fn filing_skills_say_how_to_name_repositories() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn test_message_line_states_the_commit_style_and_its_example_follows_it() {
+    for (name, text) in crate::job::BRIEFS {
+        if !text.contains("    MESSAGE ") {
+            continue;
+        }
+        for rule in ["no articles", "no trailing punctuation", "72"] {
+            assert!(
+                text.contains(rule),
+                "job/{name}.md MESSAGE rules lack {rule:?}"
+            );
+        }
+        let example = text
+            .lines()
+            .find_map(|l| l.strip_prefix("For example: `"))
+            .and_then(|l| l.strip_suffix("`."))
+            .unwrap_or_else(|| panic!("job/{name}.md has no MESSAGE example"));
+        assert!(example.len() <= 72, "job/{name}.md example is too long");
+        assert!(example.chars().next().unwrap().is_uppercase());
+        assert!(!example.ends_with(['.', '!', '?', ';', ':']));
+        assert!(
+            !example.contains(": "),
+            "job/{name}.md example has a prefix"
+        );
+        for word in example.split(|c: char| !c.is_alphabetic()) {
+            let w = word.to_lowercase();
+            assert!(
+                !["a", "an", "the"].contains(&w.as_str()),
+                "job/{name}.md example has an article"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_the_squash_skill_publishes_through_docket_squash_and_never_rewrites_the_work_ref() {
+    let squash = SKILLS.iter().find(|s| s.name == "squash").unwrap();
+    for text in [squash.claude, squash.codex] {
+        for gone in ["admin remap", "update-ref", "work-$(date"] {
+            assert!(!text.contains(gone), "squash skill still carries {gone:?}");
+        }
+        assert!(text.contains("docket squash --messages"));
+        assert!(text.contains("docket private check"));
+    }
+}
+
+#[test]
+fn test_both_lead_variants_publish_through_the_squash_skill_and_never_move_a_ref_by_hand() {
+    let lead = SKILLS.iter().find(|s| s.name == "lead").unwrap();
+    for text in [lead.claude, lead.codex] {
+        assert!(text.contains("docket squash"));
+        assert!(text.contains("docket published"));
+        assert!(!text.contains("squashes it in place"));
+        assert!(text.contains("never move the published ref by hand"));
     }
 }

@@ -3911,6 +3911,37 @@ async fn test_land_back_ends_the_claim_with_the_outcome_gate_and_the_reason() {
 }
 
 #[tokio::test]
+async fn test_a_second_land_back_assigns_the_item_to_the_owner() {
+    let s = Scratch::new().await;
+    s.open("B", "Kettle trips the fuse").await;
+    for round in 0..2 {
+        s.ok(
+            "start",
+            json!({ "id": "B1", "runner": "claude", "job": "b1-j", "branch": "work/b1-1" }),
+        )
+        .await;
+        s.ok(
+            "job-report",
+            json!({ "id": "B1", "start": "2026-10-05T10:00:00Z", "exit": 0 }),
+        )
+        .await;
+        s.ok(
+            "land",
+            json!({ "action": "back", "ids": ["B1"], "branch": "work/b1-1",
+                    "reason": "the gate refused it" }),
+        )
+        .await;
+        let turn = if round == 0 { "agent" } else { "user" };
+        assert_eq!(s.item("B1").await["turn"], turn, "after round {round}");
+    }
+    let rows = s.assignments("B1").await;
+    assert_eq!(
+        (&rows[2]["assignee"], &rows[2]["kind"], &rows[2]["ended_at"]),
+        (&json!("owner"), &json!("ask"), &Value::Null)
+    );
+}
+
+#[tokio::test]
 async fn test_a_landing_step_names_a_known_action_and_at_least_one_item() {
     let s = Scratch::new().await;
     s.open("B", "Kettle trips the fuse").await;

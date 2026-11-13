@@ -13,6 +13,7 @@ use serde_json::Value;
 use docket_core::api::{PublicationRequest, Publications};
 use docket_core::cut::{Group, Landed, Snapshot, cut};
 use docket_core::fact::{Publish, publish};
+use docket_core::publication::{Publication, StartOn, start_on};
 
 use crate::cmd::audit::shas;
 use crate::cmd::private::{Look, read};
@@ -101,6 +102,7 @@ pub fn squash(ctx: &mut Ctx, messages: Option<&str>, cap: Option<usize>) -> Resu
         return Ok(0);
     };
     let lines = message_lines(file, groups.len())?;
+    not_checked_out(&repo, &target)?;
     let look = read(ctx)?;
     let repos: Vec<String> = project["repos"]
         .as_array()
@@ -145,6 +147,25 @@ pub fn squash(ctx: &mut Ctx, messages: Option<&str>, cap: Option<usize>) -> Resu
     println!("published {} commits on {}", made.len(), target.local);
     println!("{}", pushes[pushes.len() - 1]);
     Ok(0)
+}
+
+/// Refuses a published ref that a worktree has checked out: moving it would leave that worktree's
+/// index and files behind its branch.
+fn not_checked_out(repo: &Path, target: &Publish) -> Result<()> {
+    let listed = git(repo, &["worktree", "list", "--porcelain"]).map_err(Fail::refused)?;
+    let branch = format!("branch refs/heads/{}", target.local);
+    let mut path = "";
+    for line in listed.lines() {
+        if let Some(p) = line.strip_prefix("worktree ") {
+            path = p;
+        } else if line == branch {
+            return Err(Fail::refused(format!(
+                "{} is checked out in {path}: switch that worktree away from it, nothing written",
+                target.local
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Prints what each submodule published and the push commands, the parent's last, and returns
@@ -192,43 +213,37 @@ fn tips_match(built: &str, tip: &str) -> Result<()> {
 
 /// Where the next squash starts: on the published ref's tip when a publication names it, else on
 /// the remote ref the first time.
-fn start_of(
-    repo: &Path,
-    target: &Publish,
-    tip: &str,
-    last: Option<&docket_core::publication::Publication>,
-) -> Result<Start> {
+fn start_of(repo: &Path, target: &Publish, tip: &str, last: Option<&Publication>) -> Result<Start> {
     let local = format!("refs/heads/{}", target.local);
-    let start = if let Some(published) = rev(repo, &local) {
-        match last {
-            Some(l) if l.published == published => Start {
-                parent: published,
-                work: l.work.clone(),
-            },
-            _ => {
-                return Err(Fail::refused(format!(
-                    "{} is at {published}, which no recorded publication names: nothing written",
-                    target.local
-                )));
+    let local_sha = rev(repo, &local);
+    let remote_sha = rev(repo, &format!("refs/remotes/{}", target.remote));
+    let holds = match (&local_sha, &remote_sha) {
+        (Some(l), Some(r)) => git(repo, &["merge-base", "--is-ancestor", l, r]).is_ok(),
+        _ => false,
+    };
+    let basis = start_on(
+        local_sha.as_deref(),
+        remote_sha.as_deref(),
+        holds,
+        last,
+        (&target.local, &target.remote),
+    )
+    .map_err(|e| Fail::refused(e.0))?;
+    let start = match (basis, local_sha, remote_sha) {
+        (StartOn::Local { work }, Some(parent), _) => Start { parent, work },
+        (_, _, Some(remote)) => {
+            let work = git(repo, &["merge-base", &remote, tip]).map_err(|_| {
+                Fail::refused(format!(
+                    "{} shares no history with the work ref",
+                    target.remote
+                ))
+            })?;
+            Start {
+                parent: remote,
+                work,
             }
         }
-    } else {
-        let remote = rev(repo, &format!("refs/remotes/{}", target.remote)).ok_or_else(|| {
-            Fail::refused(format!(
-                "neither {} nor {} exists here to build on: fetch the remote first",
-                target.local, target.remote
-            ))
-        })?;
-        let work = git(repo, &["merge-base", &remote, tip]).map_err(|_| {
-            Fail::refused(format!(
-                "{} shares no history with the work ref",
-                target.remote
-            ))
-        })?;
-        Start {
-            parent: remote,
-            work,
-        }
+        _ => unreachable!("a start on the remote has a remote ref"),
     };
     if git(repo, &["merge-base", "--is-ancestor", &start.work, tip]).is_err() {
         return Err(Fail::refused(format!(

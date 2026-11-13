@@ -74,6 +74,9 @@ pub async fn land(
                 Some(&Value::Object(step.data.clone())),
             )
             .await?;
+        if step.kind == "released" {
+            super::claim::assign_past_failure_limit(&mut call, row.rid).await?;
+        }
         let fresh = call.tx.fresh(row.rid).await?;
         items.push(item_view(&call.tx.conn, &fresh).await?);
     }

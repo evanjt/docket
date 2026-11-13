@@ -450,7 +450,7 @@ fn test_an_audit_skips_the_runner_with_the_most_assignments_under_the_plan() {
 #[test]
 fn test_publish_names_the_published_ref_and_the_remote_ref_it_is_pushed_to() {
     let meaning = meaning("publish").unwrap();
-    assert!(meaning.contains("published origin/main"), "{meaning}");
+    assert!(meaning.contains("main origin/main"), "{meaning}");
     assert!(meaning.contains("unset"), "{meaning}");
     assert_eq!(
         publish_of("published origin/main"),

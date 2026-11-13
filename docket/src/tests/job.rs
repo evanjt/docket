@@ -30,6 +30,10 @@ fn test_each_brief_names_its_item_and_branch_and_nothing_local() {
         );
         assert!(text.contains("NOTE "), "{role}");
         assert!(text.contains("foreground"), "{role}");
+        assert!(
+            text.contains("no background subagent") && text.contains("no workflow"),
+            "{role}"
+        );
     }
     assert!(brief("review", "T14", "b").is_none());
 }
@@ -433,6 +437,14 @@ fn test_a_job_in_several_repositories_holds_a_worktree_of_each_on_its_branch_in_
         let branch = git(&tree.join(at), &["branch", "--show-current"]).unwrap();
         assert_eq!(branch, "lead/t14-1", "{at}");
     }
+    let brief = fs::read_to_string(started.dir.join("brief.md")).unwrap();
+    for part in [
+        format!("toys/kites: {}", tree.join("toys/kites").display()),
+        format!("@acme/lanterns: {}", tree.join("lanterns").display()),
+        "both are yours to edit".to_string(),
+    ] {
+        assert!(brief.contains(&part), "{part} missing from {brief}");
+    }
     let r = row(&started.dir, now()).unwrap();
     assert_eq!(
         r.repos,
@@ -453,6 +465,38 @@ fn test_a_job_in_several_repositories_holds_a_worktree_of_each_on_its_branch_in_
         assert_eq!(git(&co, &["worktree", "list"]).unwrap().lines().count(), 1);
         assert_eq!(git(&co, &["branch", "--list", "lead/t14-1"]).unwrap(), "");
     }
+}
+
+#[test]
+fn test_a_repository_placed_inside_another_is_left_out_of_the_outer_change() {
+    let m = Machine::new();
+    let lanterns = m.repo("lanterns");
+    let repos = [
+        (".".to_string(), m.checkout()),
+        ("@acme/lanterns".to_string(), lanterns),
+    ];
+    let program = m.runner("true");
+    let mut started = run_in_repos(
+        &Machine::spec("lead/t14-1"),
+        &repos,
+        &m.state(),
+        &[],
+        &program,
+    )
+    .unwrap();
+    started.child.wait().unwrap();
+    let tree = started.dir.join("tree");
+    fs::write(tree.join("outer.txt"), "a\n").unwrap();
+    fs::write(tree.join("lanterns/inner.txt"), "b\n").unwrap();
+    let Diff::Several(changes) = diff(&started.dir).unwrap() else {
+        panic!("one change for a job in several repositories")
+    };
+    let outer = changes.iter().find(|c| c.repo == ".").unwrap();
+    assert!(outer.change.patch.contains("outer.txt"), "{outer:?}");
+    assert!(!outer.change.patch.contains("lanterns"), "{outer:?}");
+    assert!(!outer.change.patch.contains("160000"), "{outer:?}");
+    let inner = changes.iter().find(|c| c.repo != ".").unwrap();
+    assert!(inner.change.patch.contains("inner.txt"), "{inner:?}");
 }
 
 #[test]

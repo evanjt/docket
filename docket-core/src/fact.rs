@@ -15,7 +15,7 @@ pub const FACTS: [(&str, &str); 28] = [
     ("merge", "the command that merges audit/b14-$n back"),
     (
         "publish",
-        "the local ref a squash writes the published history to and the remote ref the owner pushes it to, as \"published origin/main\"; unset, the project does not squash",
+        "the local ref a squash writes the published history to and the remote ref the owner pushes it to, as \"main origin/main\", with the landing branch as work; a squash starts on the remote ref when the local one equals it; unset, the project does not squash",
     ),
     (
         "work",

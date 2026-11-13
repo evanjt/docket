@@ -165,7 +165,7 @@ batch, and `docket jobs --wait` returns when it exits.
   `docket land T14`:
 
       git worktree add ../merge-T14 <the job's branch>
-      git -C ../merge-T14 merge --no-ff -m "Merge <the job's commit subject>" <your branch>
+      git -C ../merge-T14 merge --no-ff -m "<the job's commit subject>" <your branch>
       git worktree remove ../merge-T14
 
   Never leave a finished build waiting for a job to rebase it, and never hold
@@ -239,7 +239,14 @@ When the last three ended attempts of the project all failed, `next` prints a
 `Halt:` line: something is wrong with a machine or the setup, so dispatch
 nothing more and stop after the running jobs.
 
-### 5. Again
+### 5. Publish
+
+Whenever `docket next` or `docket published` offers a squash, publish it in the same pass
+through the squash skill's steps: `docket squash` shows the groups, you write one line each in
+the project's commit style, check them with `docket private check`, and write them with
+`docket squash --messages FILE`. Name the push command for the owner; never run it.
+
+### 6. Again
 
 Back to step 1. Never end a turn without a watch armed: while a job or a gate
 run is going, `docket jobs --wait --timeout 300` is running, and it returns on
@@ -261,8 +268,9 @@ another session.
   build is collected in the same pass and lands in the next gate run, or is
   given back with its reason; it is never held for another reason.
 - Never push. Never `--force` a claim, and never unclaim one you did not make.
-- Never rewrite the work ref: the squash skill squashes it in place, and only while nothing is
-  claimed.
+- Never rewrite the work ref, never move the published ref by hand, never push. Publishing is
+  the squash skill's steps through `docket squash`, which leaves the work ref alone and may run
+  while items are claimed.
 - Never kill a running job unless it outruns `job_timeout` minutes: `docket
   job kill NAME` on its machine, then as FAILED.
 - A question is never yours to answer: it waits for the owner.

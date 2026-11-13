@@ -1183,8 +1183,15 @@ fn test_two_jobs_and_a_hand_branch_land_as_one_batch_and_close_with_their_merge_
         assert_eq!(sh(&alpha, &format!("git branch --list {branch}")), "");
     }
     let subjects = sh(&alpha, "git log --merges --format=%s main");
-    assert!(subjects.contains("Merge Hand four"), "{subjects}");
-    assert!(subjects.contains("Merge Write its own file"), "{subjects}");
+    assert!(subjects.lines().any(|s| s == "Hand four"), "{subjects}");
+    assert!(
+        subjects.lines().any(|s| s == "Write its own file"),
+        "{subjects}"
+    );
+    assert!(
+        !subjects.lines().any(|s| s.starts_with("Merge ")),
+        "{subjects}"
+    );
     let trees = sh(&alpha, "git worktree list --porcelain");
     let kept = trees
         .lines()
@@ -1198,6 +1205,40 @@ fn test_two_jobs_and_a_hand_branch_land_as_one_batch_and_close_with_their_merge_
     );
     let log = w.lead(&["land", "--log"]);
     assert!(text(&log).contains("gated here"), "{}", text(&log));
+}
+
+#[test]
+fn test_land_run_from_a_builds_own_worktree_lands_on_the_work_branch() {
+    let w = World::new();
+    hand_branch(&w, "T4", "hand/t4", "four.txt", "four");
+    set_fact(&w, "gate", "true");
+    set_fact(&w, "work", "main");
+    let alpha = w.home("alpha").join("src/p");
+    let tree = w.home("alpha").join("built");
+    sh(
+        &alpha,
+        &format!("git worktree add -q {} hand/t4", tree.display()),
+    );
+    let before = sh(&alpha, "git rev-parse main");
+
+    let out = w.docket("alpha", &tree, &["land", "T4"]);
+    let landed = out.status.success();
+    if landed {
+        until(&w, "T4", "closed", |s| s["state"] == "done");
+    }
+    let after = sh(&alpha, "git rev-parse main");
+    let held = sh(&alpha, "git branch --contains hand/t4 --list main");
+    assert!(
+        (landed && after != before && !held.is_empty())
+            || (!landed && w.show("T4")["state"] != "done"),
+        "landed {landed}: main {before} -> {after}\n{}",
+        text(&out)
+    );
+    assert!(
+        landed || text(&out).contains("project checkout"),
+        "{}",
+        text(&out)
+    );
 }
 
 #[test]
@@ -1423,8 +1464,8 @@ fn test_a_conflict_the_resolve_command_settles_lands_in_the_batch() {
     assert_eq!(sh(&alpha, "git show main:notes.txt"), "both");
     assert_eq!(fs::read_to_string(&files).unwrap(), "notes.txt");
     let subjects = sh(&alpha, "git log --merges --format=%s main");
-    assert!(subjects.contains("Merge Hand four"), "{subjects}");
-    assert!(subjects.contains("Merge Hand five"), "{subjects}");
+    assert!(subjects.lines().any(|s| s == "Hand four"), "{subjects}");
+    assert!(subjects.lines().any(|s| s == "Hand five"), "{subjects}");
 }
 
 #[test]

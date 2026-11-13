@@ -456,7 +456,7 @@ fn test_commit_change_commits_inside_a_plain_clone_of_the_submodule() {
     identify(&lead.join("lib"));
     let pin = git_in(&lead.join("lib"), &["rev-parse", "HEAD"]);
 
-    let made = commit_change(&lead, &base, &change, "Change both").unwrap();
+    let made = commit_change(&lead, &base, &change, "Change both", &Via::Here).unwrap();
     let [(dir, inside)] = made.inside.as_slice() else {
         panic!("{made:?}")
     };
@@ -488,6 +488,94 @@ fn test_commit_change_commits_inside_a_plain_clone_of_the_submodule() {
     assert_eq!(git_in(&lib, &["rev-parse", "lead/t1-1"]), *inside);
     assert_eq!(git_in(&lead, &["rev-parse", "lead/t1-1"]), made.sha);
     assert_eq!(git_in(&lib, &["rev-parse", "--git-dir"]), ".git");
+}
+
+#[test]
+fn test_commit_change_pins_the_commit_a_job_moved_a_submodule_to_and_commits_nothing_inside() {
+    let tmp = tempfile::tempdir().unwrap();
+    let top = pinned(tmp.path());
+    let base = git_in(&top, &["rev-parse", "HEAD"]);
+    let origin = tmp.path().join("lib-origin");
+    std::fs::write(origin.join("lib.txt"), "newer\n").unwrap();
+    git_in(&origin, &["commit", "-q", "-am", "Newer"]);
+    let target = git_in(&origin, &["rev-parse", "HEAD"]);
+    let wt = job_worktree(tmp.path(), &top);
+    let from = origin.display().to_string();
+    git_in(&wt.join("lib"), &["fetch", "-q", &from, "main"]);
+    git_in(&wt.join("lib"), &["checkout", "-q", &target]);
+    let change = crate::job::change(&wt, &base).unwrap();
+    assert!(!change.is_empty(), "a moved pin is a change");
+
+    let lead = lead_clone(tmp.path(), &top);
+    std::fs::remove_dir(lead.join("lib")).unwrap();
+    git_in(&lead, &["clone", "-q", &from, "lib"]);
+    identify(&lead.join("lib"));
+    let before = git_in(&lead.join("lib"), &["rev-list", "--all", "--count"]);
+
+    let made = commit_change(&lead, &base, &change, "Bump lib", &Via::Here).unwrap();
+    assert_eq!(
+        git_in(&lead, &["rev-parse", &format!("{}:lib", made.sha)]),
+        target
+    );
+    assert!(made.inside.is_empty(), "{made:?}");
+    assert_eq!(
+        git_in(&lead.join("lib"), &["rev-list", "--all", "--count"]),
+        before,
+        "no commit is made inside the submodule"
+    );
+}
+
+#[test]
+fn test_commit_change_fetches_a_moved_pin_the_lead_lacks_from_the_job_and_names_it_unpublished() {
+    let tmp = tempfile::tempdir().unwrap();
+    let top = pinned(tmp.path());
+    let base = git_in(&top, &["rev-parse", "HEAD"]);
+    let wt = job_worktree(tmp.path(), &top);
+    let job_lib = wt.join("lib");
+    identify(&job_lib);
+    std::fs::write(job_lib.join("lib.txt"), "only in the job\n").unwrap();
+    git_in(&job_lib, &["commit", "-q", "-am", "Made in the job"]);
+    let target = git_in(&job_lib, &["rev-parse", "HEAD"]);
+    let change = crate::job::change(&wt, &base).unwrap();
+
+    let lead = lead_clone(tmp.path(), &top);
+    std::fs::remove_dir(lead.join("lib")).unwrap();
+    let origin = tmp.path().join("lib-origin").display().to_string();
+    git_in(&lead, &["clone", "-q", &origin, "lib"]);
+    identify(&lead.join("lib"));
+
+    let made = commit_change(&lead, &base, &change, "Bump lib", &Via::Here).unwrap();
+    assert_eq!(
+        git_in(&lead, &["rev-parse", &format!("{}:lib", made.sha)]),
+        target,
+        "the pin is the job's own commit"
+    );
+    assert!(made.inside.is_empty(), "{made:?}");
+    assert_eq!(made.unpublished, ["lib"], "no remote ref holds it");
+    git_in(&lead.join("lib"), &["cat-file", "-e", &target]);
+}
+
+#[test]
+fn test_commit_change_names_no_submodule_whose_moved_pin_a_remote_ref_holds() {
+    let tmp = tempfile::tempdir().unwrap();
+    let top = pinned(tmp.path());
+    let base = git_in(&top, &["rev-parse", "HEAD"]);
+    let origin = tmp.path().join("lib-origin");
+    std::fs::write(origin.join("lib.txt"), "newer\n").unwrap();
+    git_in(&origin, &["commit", "-q", "-am", "Newer"]);
+    let target = git_in(&origin, &["rev-parse", "HEAD"]);
+    let wt = job_worktree(tmp.path(), &top);
+    let from = origin.display().to_string();
+    git_in(&wt.join("lib"), &["fetch", "-q", &from, "main"]);
+    git_in(&wt.join("lib"), &["checkout", "-q", &target]);
+    let change = crate::job::change(&wt, &base).unwrap();
+    let lead = lead_clone(tmp.path(), &top);
+    std::fs::remove_dir(lead.join("lib")).unwrap();
+    git_in(&lead, &["clone", "-q", &from, "lib"]);
+    identify(&lead.join("lib"));
+
+    let made = commit_change(&lead, &base, &change, "Bump lib", &Via::Here).unwrap();
+    assert!(made.unpublished.is_empty(), "{made:?}");
 }
 
 #[test]
@@ -526,7 +614,7 @@ fn test_commit_change_signs_a_submodule_commit_only_when_its_repository_asks() {
 
         let top_gpgsign = git_in(&lead, &["config", "commit.gpgsign"]);
         assert_eq!(top_gpgsign, "false");
-        let made = commit_change(&lead, &base, &change, "Change lib").unwrap();
+        let made = commit_change(&lead, &base, &change, "Change lib", &Via::Here).unwrap();
         let [(_, inside)] = made.inside.as_slice() else {
             panic!("{made:?}")
         };
@@ -546,7 +634,7 @@ fn test_commit_change_refuses_without_the_submodule_and_leaves_no_worktree() {
     let change = crate::job::change(&wt, &base).unwrap();
     let lead = lead_clone(tmp.path(), &top);
 
-    let why = commit_change(&lead, &base, &change, "Change lib").unwrap_err();
+    let why = commit_change(&lead, &base, &change, "Change lib", &Via::Here).unwrap_err();
     assert!(why.contains("submodule lib: not checked out"), "{why}");
 
     let mut broken = change.clone();
@@ -554,7 +642,7 @@ fn test_commit_change_refuses_without_the_submodule_and_leaves_no_worktree() {
     broken.patch =
         "diff --git a/top.txt b/top.txt\n--- a/top.txt\n+++ b/top.txt\n@@ -1 +1 @@\n-gone\n+two\n"
             .into();
-    let why = commit_change(&lead, &base, &broken, "Change top").unwrap_err();
+    let why = commit_change(&lead, &base, &broken, "Change top", &Via::Here).unwrap_err();
     assert!(why.contains("git apply"), "{why}");
     assert_eq!(git_in(&lead, &["worktree", "list"]).lines().count(), 1);
     assert_eq!(
